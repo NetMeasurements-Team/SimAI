@@ -134,6 +134,92 @@ enum class EventType {
   CommProcessingFinished,
   NotInitialized
 };
+constexpr const char* to_cstr(const EventType type) noexcept {
+  switch (type) {
+  case EventType::NONE:
+    return "NONE";
+  case EventType::RendezvousSend:
+    return "RendezvousSend";
+  case EventType::RendezvousRecv:
+    return "RendezvousRecv";
+  case EventType::CallEvents:
+    return "CallEvents";
+  case EventType::PacketReceived:
+    return "PacketReceived";
+  case EventType::PacketSent:
+    return "PacketSent";
+  case EventType::PacketSentFinshed:
+    return "PacketSentFinshed";
+  case EventType::WaitForVnetTurn:
+    return "WaitForVnetTurn";
+  case EventType::NCCL_General:
+    return "NCCL_General";
+  case EventType::General:
+    return "General";
+  case EventType::TX_DMA:
+    return "TX_DMA";
+  case EventType::RX_DMA:
+    return "RX_DMA";
+  case EventType::Wight_Grad_Comm_Finished:
+    return "Wight_Grad_Comm_Finished";
+  case EventType::Input_Grad_Comm_Finished:
+    return "Input_Grad_Comm_Finished";
+  case EventType::Fwd_Comm_Finished:
+    return "Fwd_Comm_Finished";
+  case EventType::Wight_Grad_Comm_Finished_After_Delay:
+    return "Wight_Grad_Comm_Finished_After_Delay";
+  case EventType::Input_Grad_Comm_Finished_After_Delay:
+    return "Input_Grad_Comm_Finished_After_Delay";
+  case EventType::Fwd_Comm_Finished_After_Delay:
+    return "Fwd_Comm_Finished_After_Delay";
+  case EventType::Workload_Wait:
+    return "Workload_Wait";
+  case EventType::Reduction_Ready:
+    return "Reduction_Ready";
+  case EventType::Rec_Finished:
+    return "Rec_Finished";
+  case EventType::Send_Finished:
+    return "Send_Finished";
+  case EventType::Processing_Finished:
+    return "Processing_Finished";
+  case EventType::Delivered:
+    return "Delivered";
+  case EventType::NPU_to_MA:
+    return "NPU_to_MA";
+  case EventType::MA_to_NPU:
+    return "MA_to_NPU";
+  case EventType::Read_Port_Free:
+    return "Read_Port_Free";
+  case EventType::Write_Port_Free:
+    return "Write_Port_Free";
+  case EventType::Apply_Boost:
+    return "Apply_Boost";
+  case EventType::Stream_Transfer_Started:
+    return "Stream_Transfer_Started";
+  case EventType::Stream_Ready:
+    return "Stream_Ready";
+  case EventType::Consider_Process:
+    return "Consider_Process";
+  case EventType::Consider_Retire:
+    return "Consider_Retire";
+  case EventType::Consider_Send_Back:
+    return "Consider_Send_Back";
+  case EventType::StreamInit:
+    return "StreamInit";
+  case EventType::StreamsFinishedIncrease:
+    return "StreamsFinishedIncrease";
+  case EventType::CommProcessingFinished:
+    return "CommProcessingFinished";
+  case EventType::NotInitialized:
+    return "NotInitialized";
+  default:
+    return "unknown";
+  }
+}
+inline std::ostream& operator<<(std::ostream& os, const EventType type) {
+  return os << to_cstr(type);
+}
+
 class CloneInterface {
  public:
   virtual CloneInterface* clone() const = 0;
