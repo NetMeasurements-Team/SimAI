@@ -61,6 +61,17 @@ Workload::Workload(
   this->total_rows = total_rows;
   this->run_name = run_name;
   this->registered_for_finished_streams = false;
+
+  // Create path if it does not exists
+  try {
+      if (!path.empty() && !std::filesystem::exists(path)) {
+        std::filesystem::create_directories(path);
+        std::cout << "Created stat path: " << path << std::endl;
+      }
+    } catch (const std::filesystem::filesystem_error& e) {
+      std::cerr << "Error creating directory: " << e.what() << std::endl;
+  }
+
   #ifndef PHY_MTP
   if (generator->id == 0 && seprate_log) {
     std::cout << "stat path: " << path << " ,total rows: " << total_rows
