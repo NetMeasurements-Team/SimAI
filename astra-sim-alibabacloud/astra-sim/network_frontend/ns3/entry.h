@@ -371,16 +371,16 @@ void send_finish(FILE *fout, Ptr<RdmaQueuePair> q) {
   notify_sender_sending_finished(sid, did, all_sent_chunksize, flowTag);
 }
 
-int main1(string network_topo,string network_conf) {
+int main1(const string &network_topo, const string &network_conf, const string &run_name) {
   clock_t begint, endt;
   begint = clock();
 
-  if (!ReadConf(network_topo,network_conf))
+  if (!ReadConf(network_topo, network_conf, run_name))
     return -1;
   SetConfig();
-  SetupNetwork(qp_finish,send_finish);
+  SetupNetwork(qp_finish, send_finish);
 
-std::cout << "Running Simulation.\n";
+  std::cout << "Running Simulation.\n";
   fflush(stdout);
   NS_LOG_INFO("Run Simulation.");
 

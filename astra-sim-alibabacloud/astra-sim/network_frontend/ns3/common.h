@@ -42,6 +42,8 @@
 #include <ns3/switch-node.h>
 #include <ns3/nvswitch-node.h>
 #include <atomic>
+#include <utility>
+
 
 using namespace ns3;
 using namespace std;
@@ -52,8 +54,7 @@ uint32_t cc_mode = 1;
 bool enable_qcn = true, use_dynamic_pfc_threshold = true;
 uint32_t packet_payload_size = 1000, l2_chunk_size = 0, l2_ack_interval = 0;
 double pause_time = 5, simulator_stop_time = 3.01;
-std::string data_rate, link_delay, topology_file, flow_file, trace_file,
-    trace_output_file;
+std::string data_rate, link_delay, topology_file, flow_file, trace_file, trace_output_file;
 std::string fct_output_file = "fct.txt";
 std::string pfc_output_file = "pfc.txt";
 std::string send_output_file = "send.txt";
@@ -77,8 +78,7 @@ double pint_prob = 1.0;
 double u_target = 0.95;
 uint32_t int_multi = 1;
 bool rate_bound = true;
-int nic_total_pause_time =
-    0; 
+int nic_total_pause_time = 0;
 
 uint32_t ack_high_prio = 0;
 uint64_t link_down_time = 0;
@@ -92,9 +92,9 @@ uint32_t node_num, switch_num, link_num, trace_num, nvswitch_num, gpus_per_serve
 GPUType gpu_type;
 std::vector<int>NVswitchs;
 
-uint32_t qp_mon_interval = 100; 
-uint32_t bw_mon_interval = 10000; 
-uint32_t qlen_mon_interval = 10000; 
+uint32_t qp_mon_interval = 100;
+uint32_t bw_mon_interval = 10000;
+uint32_t qlen_mon_interval = 10000;
 uint64_t mon_start = 0, mon_end = 2100000000;
 
 string qlen_mon_file;
@@ -266,7 +266,6 @@ void CalculateRoute(Ptr<Node> host) {
         if (next->GetNodeType() == 1 || next->GetNodeType() == 2) {
           q.push_back(next);
         }
-          
       }
       bool via_nvswitch = false;
       if (d + 1 == dis[next]) {
@@ -275,8 +274,8 @@ void CalculateRoute(Ptr<Node> host) {
         }
         if(via_nvswitch == false) {
           if(now->GetNodeType() == 2) {
-            while(nextHop[next][host].size() != 0) 
-            nextHop[next][host].pop_back();
+            while(nextHop[next][host].size() != 0)
+              nextHop[next][host].pop_back();
           }
           nextHop[next][host].push_back(now);
         } else if(via_nvswitch == true && now->GetNodeType() == 2) {
@@ -449,6 +448,15 @@ string get_output_file_name(string config_file, string output_file){
 	return ans;
 }
 
+string extend_output_file_name(const string &instance_name, string output_file) {
+  if (instance_name.empty()) {
+    return output_file;
+  }
+  auto idx = output_file.find_last_of('/');
+  idx = idx == string::npos ? 0 : idx + 1;
+  return output_file.substr(0, idx) + instance_name + "." + output_file.substr(idx);
+}
+
 uint64_t get_nic_rate(NodeContainer &n) {
   for (uint32_t i = 0; i < n.GetN(); i++)
     if (n.Get(i)->GetNodeType() == 0)
@@ -457,8 +465,7 @@ uint64_t get_nic_rate(NodeContainer &n) {
           .GetBitRate();
 }
 
-bool ReadConf(string network_topo,string network_conf) {
-
+bool ReadConf(const string& network_topo, const string& network_conf, const string& run_name) {
     std::ifstream conf;
     conf.open(network_conf);
     topology_file = network_topo;
@@ -507,17 +514,12 @@ bool ReadConf(string network_topo,string network_conf) {
         conf >> v;
         l2_back_to_zero = v;
       } else if (key.compare("FLOW_FILE") == 0) {
-        std::string v;
-        conf >> v;
-        flow_file = v;
+        conf >> flow_file;
       } else if (key.compare("TRACE_FILE") == 0) {
-        std::string v;
-        conf >> v;
-        trace_file = v;
+        conf >> trace_file;
       } else if (key.compare("TRACE_OUTPUT_FILE") == 0) {
-        std::string v;
-        conf >> v;
-        trace_output_file = v;
+        conf >> trace_output_file;
+        trace_output_file = extend_output_file_name(run_name, trace_output_file);
       } else if (key.compare("SIMULATOR_STOP_TIME") == 0) {
         double v;
         conf >> v;
@@ -560,6 +562,7 @@ bool ReadConf(string network_topo,string network_conf) {
         conf >> min_rate;
       } else if (key.compare("FCT_OUTPUT_FILE") == 0) {
         conf >> fct_output_file;
+        fct_output_file = extend_output_file_name(run_name, fct_output_file);
       } else if (key.compare("HAS_WIN") == 0) {
         conf >> has_win;
       } else if (key.compare("GLOBAL_T") == 0) {
@@ -591,6 +594,7 @@ bool ReadConf(string network_topo,string network_conf) {
         conf >> nic_total_pause_time;
       } else if (key.compare("PFC_OUTPUT_FILE") == 0) {
         conf >> pfc_output_file;
+        pfc_output_file = extend_output_file_name(run_name, pfc_output_file);
       } else if (key.compare("LINK_DOWN") == 0) {
         conf >> link_down_time >> link_down_A >> link_down_B;
       } else if (key.compare("ENABLE_TRACE") == 0) {
@@ -625,17 +629,21 @@ bool ReadConf(string network_topo,string network_conf) {
       } else if (key.compare("BUFFER_SIZE") == 0) {
         conf >> buffer_size;
       } else if (key.compare("QLEN_MON_FILE") == 0){
-				conf >> qlen_mon_file;
-				qlen_mon_file = get_output_file_name(network_conf, qlen_mon_file);
-			}else if(key.compare("BW_MON_FILE") == 0){
-				conf >> bw_mon_file;
-				bw_mon_file = get_output_file_name(network_conf, bw_mon_file);
-			}else if(key.compare("RATE_MON_FILE") == 0){
-				conf >> rate_mon_file;
-				rate_mon_file = get_output_file_name(network_conf, rate_mon_file);
-			}else if(key.compare("CNP_MON_FILE") == 0){
-				conf >> cnp_mon_file;
-				cnp_mon_file = get_output_file_name(network_conf, cnp_mon_file);
+        conf >> qlen_mon_file;
+        qlen_mon_file = extend_output_file_name(run_name, qlen_mon_file);
+        qlen_mon_file = get_output_file_name(network_conf, qlen_mon_file);
+      }else if(key.compare("BW_MON_FILE") == 0){
+        conf >> bw_mon_file;
+        bw_mon_file = extend_output_file_name(run_name, bw_mon_file);
+        bw_mon_file = get_output_file_name(network_conf, bw_mon_file);
+      }else if(key.compare("RATE_MON_FILE") == 0){
+        conf >> rate_mon_file;
+        rate_mon_file = extend_output_file_name(run_name, rate_mon_file);
+        rate_mon_file = get_output_file_name(network_conf, rate_mon_file);
+      }else if(key.compare("CNP_MON_FILE") == 0){
+        conf >> cnp_mon_file;
+        cnp_mon_file = extend_output_file_name(run_name, cnp_mon_file);
+        cnp_mon_file = get_output_file_name(network_conf, cnp_mon_file);
 			}else if (key.compare("MON_START") == 0){
 				conf >> mon_start;
 			}else if (key.compare("MON_END") == 0){
@@ -935,9 +943,8 @@ void SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),void (*send_fini
 
       node->AggregateObject(rdma);
       rdma->Init();
-      rdma->TraceConnectWithoutContext(
-          "QpComplete", MakeBoundCallback(qp_finish, fct_output));
-      rdma->TraceConnectWithoutContext("SendComplete",MakeBoundCallback(send_finish,send_output));
+      rdma->TraceConnectWithoutContext("QpComplete", MakeBoundCallback(qp_finish, fct_output));
+      rdma->TraceConnectWithoutContext("SendComplete", MakeBoundCallback(send_finish,send_output));
     }
   }
 #endif
@@ -991,6 +998,10 @@ void SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),void (*send_fini
   }
 
   FILE *trace_output = fopen(trace_output_file.c_str(), "w");
+  if (trace_output == nullptr) {
+    cout << "open trace_output_file failed: " << trace_output_file << endl;
+    exit(1);
+  }
   if (enable_trace)
     qbb.EnableTracing(trace_output, trace_nodes);
 
