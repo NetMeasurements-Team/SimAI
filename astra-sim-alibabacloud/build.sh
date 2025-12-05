@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Absolue path to this script
 SCRIPT_DIR=$(dirname "$(realpath $0)")
 NS3_BUILD_DIR="${SCRIPT_DIR:?}"/build/astra_ns3
@@ -43,12 +45,13 @@ function compile {
     mkdir -p "${SIM_LOG_DIR}"/config/
     mkdir -p "${SIM_LOG_DIR}"/topo/
     mkdir -p "${SIM_LOG_DIR}"/results/
-    local option="$1" 
+    local option="$1"
+    shift
     cd "${BUILD_DIR}" || exit
     case "$option" in
     "ns3")
         cd "${NS3_BUILD_DIR}"
-        ./build.sh -c;;
+        ./build.sh -c "$@";;
     "phy")
         cd "${SIMAI_PHY_BUILD_DIR}"
         ./build.sh -c RDMA;;
@@ -65,7 +68,8 @@ case "$1" in
 -lr|--clean-result)
     cleanup_result "$2";;
 -c|--compile)
-    compile "$2";;
+    shift
+    compile "$@";;
 -h|--help|*)
     printf -- "help message\n"
     printf -- "-c|--compile mode supported ns3/phy/analytical  (example:./build.sh -c ns3)\n"
