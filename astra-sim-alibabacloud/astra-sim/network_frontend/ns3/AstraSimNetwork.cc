@@ -203,7 +203,7 @@ public:
     cs.ExitSection();
     #endif
 
-sim_recv_end_section:    
+sim_recv_end_section:
     return 0;
   }
   void handleEvent(int dst, int cnt) {
@@ -215,26 +215,28 @@ struct user_param {
   string workload;
   string network_topo;
   string network_conf;
+  string run_name;
   user_param() {
     thread = 1;
     workload = "";
     network_topo = "";
     network_conf = "";
+    run_name = "";
   };
   ~user_param(){};
 };
 
 static int user_param_prase(int argc,char * argv[],struct user_param* user_param){
   int opt;
-  while ((opt = getopt(argc,argv,"ht:w:g:s:n:c:"))!=-1){
-    switch (opt)
-    {
+  while ((opt = getopt(argc,argv,"ht:w:g:s:n:r:c:"))!=-1) {
+    switch (opt) {
     case 'h':
       /* code */
       std::cout<<"-t    number of threads,default 1"<<std::endl;
       std::cout<<"-w    workloads default none "<<std::endl;
       std::cout<<"-n    network topo"<<std::endl;
-      std::cout<<"-c    network_conf"<<std::endl;
+      std::cout<<"-c    network conf"<<std::endl;
+      std::cout<<"-r    run name"<<std::endl;
       return 1;
       break;
     case 't':
@@ -248,6 +250,9 @@ static int user_param_prase(int argc,char * argv[],struct user_param* user_param
       break;
     case 'c':
       user_param->network_conf = optarg;
+      break;
+    case 'r':
+      user_param->run_name = optarg;
       break;
     default:
       std::cerr<<"-h    help message"<<std::endl;
@@ -269,15 +274,15 @@ int main(int argc, char *argv[]) {
   MtpInterface::Enable(user_param.thread);
   #endif
   
-  main1(user_param.network_topo,user_param.network_conf);
+  main1(user_param.network_topo, user_param.network_conf, user_param.run_name);
   int nodes_num = node_num - switch_num;
   int gpu_num = node_num - nvswitch_num - switch_num;
 
   std::map<int, int> node2nvswitch; 
-  for(int i = 0; i < gpu_num; ++ i) {
+  for (int i = 0; i < gpu_num; ++ i) {
     node2nvswitch[i] = gpu_num + i / gpus_per_server;
   }
-  for(int i = gpu_num; i < gpu_num + nvswitch_num; ++ i){
+  for (int i = gpu_num; i < gpu_num + (int) nvswitch_num; ++ i) {
     node2nvswitch[i] = i;
     NVswitchs.push_back(i);
   } 
@@ -290,34 +295,33 @@ int main(int argc, char *argv[]) {
   std::vector<AstraSim::Sys *> systems(nodes_num, nullptr);
 
   for (int j = 0; j < nodes_num; j++) {
-    networks[j] =
-        new ASTRASimNetwork(j ,0);
-    systems[j ] = new AstraSim::Sys(
-        networks[j], 
-        nullptr,                  
-        j,                        
-        0,               
-        1,                        
-        {nodes_num},        
-        {1},          
-        "", 
-        user_param.workload, 
-        1, 
-        1,          
-        1,          
+    networks[j] = new ASTRASimNetwork(j ,0);
+    systems[j] = new AstraSim::Sys(
+        networks[j],
+        nullptr,
+        j,
+        0,
         1,
-        0,                 
-        RESULT_PATH, 
-        "test1",            
-        true,               
-        false,               
+        {nodes_num},
+        {1},
+        "",
+        user_param.workload,
+        1,
+        1,
+        1,
+        1,
+        0,
+        RESULT_PATH,
+        user_param.run_name,
+        true,
+        false,
         gpu_type,
         {gpu_num},
         NVswitchs,
         gpus_per_server
     );
-    systems[j ]->nvswitch_id = node2nvswitch[j];
-    systems[j ]->num_gpus = nodes_num - nvswitch_num;
+    systems[j]->nvswitch_id = node2nvswitch[j];
+    systems[j]->num_gpus = nodes_num - nvswitch_num;
   }
   for (int i = 0; i < nodes_num; i++) {
     systems[i]->workload->fire();
