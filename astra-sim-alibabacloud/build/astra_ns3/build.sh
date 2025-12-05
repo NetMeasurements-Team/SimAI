@@ -27,7 +27,7 @@ function cleanup {
     rm -rf "${BUILD_DIR}"
     rm -rf "${NS3_DIR}"/simulation/build
     rm -rf "${NS3_DIR}"/simulation/cmake-cache
-    rm -rf "${NS3_APPLICATION}"/astra-sim 
+    rm -rf "${NS3_APPLICATION}"/astra-sim
     cd "${SCRIPT_DIR:?}"
 }
 
@@ -47,15 +47,29 @@ function compile {
     #     echo ""${INPUT_DIR}"/config/SimAI.conf is not exist"
     #     cp "${INPUT_DIR}"/config/SimAI.conf "${SIM_LOG_DIR}"/config/SimAI.conf
     # fi
+    local profile="${1:-debug}"
     cp "${ASTRA_SIM_DIR}"/network_frontend/ns3/AstraSimNetwork.cc "${NS3_DIR}"/simulation/scratch/
     cp "${ASTRA_SIM_DIR}"/network_frontend/ns3/*.h "${NS3_DIR}"/simulation/scratch/
-    rm -rf "${NS3_APPLICATION}"/astra-sim 
+    rm -rf "${NS3_APPLICATION}"/astra-sim
     cp -r "${ASTRA_SIM_DIR}" "${NS3_APPLICATION}"/
     cd "${NS3_DIR}/simulation"
-    CC='gcc' CXX='g++' 
-    ./ns3 configure -d debug --enable-mtp
+    CC='gcc' CXX='g++'
+    max_threads=$(($(lscpu | grep '^CPU(s):' | awk '{print $2}') - 1))
+
+    # Configure ns-3 with the selected build profile
+    ./ns3 configure -d "${profile}" --enable-mtp
     ./ns3 build
 
+    # Create a symbolic link to a known filename: ns3.36.1-AstraSimNetwork -> actual built binary
+    target_dir="${NS3_DIR}/simulation/build/scratch"
+    base_name="ns3.36.1-AstraSimNetwork"
+    candidate="${target_dir}/${base_name}-${profile}"
+    if [[ -e "${candidate}" ]]; then
+        ln -sf "${candidate}" "${target_dir}/${base_name}"
+        echo "Linked ${candidate} -> ${target_dir}/${base_name}"
+    else
+        echo "Warning: expected build output not found for profile '${profile}' at ${candidate}"
+    fi
     cd "${SCRIPT_DIR:?}"
 }
 
@@ -63,13 +77,31 @@ function debug {
     cp "${ASTRA_SIM_DIR}"/network_frontend/ns3/AstraSimNetwork.cc "${NS3_DIR}"/simulation/scratch/
     cp "${ASTRA_SIM_DIR}"/network_frontend/ns3/*.h "${NS3_DIR}"/simulation/scratch/
     cd "${NS3_DIR}/simulation"
-    CC='gcc-4.9' CXX='g++-4.9' 
+    CC='gcc' CXX='g++'
     ./waf configure
     ./waf --run 'scratch/AstraSimNetwork' --command-template="gdb --args %s mix/config.txt"
 
     ./waf --run 'scratch/AstraSimNetwork mix/config.txt'
 
     cd "${SCRIPT_DIR:?}"
+}
+
+function parse_profile() {
+    profile=
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            ns3) ;;
+            -d|--build-profile)
+                profile="$2"; shift ;;
+            --build-profile=*)
+                profile="${1#*=}" ;;
+            debug|default|release|optimized)
+                profile="$1" ;;
+            *) ;;     # ignore unknown here
+        esac
+        shift
+    done
+    echo $profile
 }
 
 # Main Script
@@ -84,8 +116,10 @@ case "$1" in
     debug;;
 -c|--compile)
     setup
+    shift
+    profile=$(parse_profile "$@")
     compile_astrasim
-    compile;;
+    compile "${profile}";;
 -r|--run)
     setup
     compile;;
