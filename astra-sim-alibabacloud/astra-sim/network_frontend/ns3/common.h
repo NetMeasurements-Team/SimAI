@@ -455,6 +455,7 @@ uint64_t get_nic_rate(NodeContainer &n) {
       return DynamicCast<QbbNetDevice>(n.Get(i)->GetDevice(1))
           ->GetDataRate()
           .GetBitRate();
+  return 0;
 }
 
 bool ReadConf(string network_topo,string network_conf) {
