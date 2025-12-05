@@ -4,9 +4,9 @@
 	branch = master
 [submodule "aicb"]
 	path = aicb
-	url = https://github.com/NetMeasurements-Team/aicb
+	url = ../aicb.git
 	branch = master
 [submodule "ns-3-alibabacloud"]
 	path = ns-3-alibabacloud
-	url = https://github.com/NetMeasurements-Team/ns-3-alibabacloud
+	url = ../ns-3-alibabacloud.git
 	branch = master
