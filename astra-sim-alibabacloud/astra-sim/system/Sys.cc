@@ -1414,6 +1414,10 @@ std::shared_ptr<void> Sys::generate_flow_model(ParallelStrategy comm_ps, uint64_
       case Workload::LoopState::Weight_Gradient:
         current_state = MockNccl::State::Weight_Gradient;
         break;
+      default:
+        std::cerr << "Unexpected workload state: " << static_cast<int>(this->workload->current_state) << std::endl;
+        std::cerr << "This error is fatal. " << std::endl;
+        exit(1);
     }
     return  pComm->get_flow_model(data_size,collective_type,this->workload->index,current_state);
 }

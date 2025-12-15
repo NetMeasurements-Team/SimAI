@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
 #include "CSVWriter.hh"
 #include "Layer.hh"
 #include "astra-sim/system/MockNcclLog.h"
+#include <filesystem>
 
 namespace AstraSim {
 Workload::~Workload() {
@@ -74,12 +75,20 @@ Workload::Workload(
 
   #ifndef PHY_MTP
   if (generator->id == 0 && seprate_log) {
-    std::cout << "stat path: " << path << " ,total rows: " << total_rows
-              << " ,stat row: " << stat_row << std::endl;
-    detailed = new CSVWriter(path, "detailed_"+std::to_string(generator->total_nodes)+".csv");
-    end_to_end = new CSVWriter(path, "EndToEnd.csv");
-    dimension_utilization =
-        new CSVWriter(path, run_name + "_dimension_utilization_"+std::to_string(generator->npu_offset)+".csv");
+    std::cout << "stat path: " << path
+              << ", run name: " << run_name
+              << ", total rows: " << total_rows
+              << ", stat row: " << stat_row
+              << std::endl;
+    detailed = new CSVWriter(
+        path,
+        run_name + "_detailed_" + std::to_string(generator->total_nodes) + ".csv");
+    end_to_end = new CSVWriter(
+        path,
+        run_name + "_EndToEnd.csv");
+    dimension_utilization = new CSVWriter(
+        path,
+        run_name + "_dimension_utilization_" + std::to_string(generator->npu_offset) + ".csv");
     if (stat_row == 0) {
       initialize_stat_files();
     }
@@ -203,7 +212,9 @@ void Workload::report() {
       dims.push_back(
           generator->scheduler_unit->usage[i].report_percentage(10000));
     }
-    dimension_utilization->finalize_csv(dims);
+    if (this->generator->id == 0) {
+      dimension_utilization->finalize_csv(dims);
+    }
   }
   #endif
   #ifdef NS3_MPI 
