@@ -679,8 +679,7 @@ void SetConfig() {
 
   Config::SetDefault("ns3::QbbNetDevice::PauseTime", UintegerValue(pause_time));
   Config::SetDefault("ns3::QbbNetDevice::QcnEnabled", BooleanValue(enable_qcn));
-  Config::SetDefault("ns3::QbbNetDevice::DynamicThreshold",
-                     BooleanValue(dynamicth));
+  Config::SetDefault("ns3::QbbNetDevice::DynamicThreshold", BooleanValue(dynamicth));
 
   IntHop::multi = int_multi;
   if (cc_mode == 7) 
@@ -995,6 +994,7 @@ void SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),void (*send_fini
     if (nid >= n.GetN()) {
       continue;
     }
+    cout << "Add trace node " << nid << endl;
     trace_nodes = NodeContainer(trace_nodes, n.Get(nid));
   }
 
@@ -1003,8 +1003,10 @@ void SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),void (*send_fini
     cout << "open trace_output_file failed: " << trace_output_file << endl;
     exit(1);
   }
-  if (enable_trace)
+  if (enable_trace) {
+    cout << "Enabled tracing for " << trace_nodes.GetN() << " nodes (output: " << trace_output_file << ")" << endl;
     qbb.EnableTracing(trace_output, trace_nodes);
+  }
 
   {
     SimSetting sim_setting;

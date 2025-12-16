@@ -84,7 +84,7 @@ public:
              << "\n";
       }
     }
-    exit(0);
+    Simulator::Stop();
     return 0;
   }
   double sim_time_resolution() { return 0; }
@@ -327,9 +327,8 @@ int main(int argc, char *argv[]) {
     systems[i]->workload->fire();
   }
   std::cout << "simulator run " << std::endl;
-
-  Simulator::Run();
   Simulator::Stop(Seconds(2000000000));
+  Simulator::Run();
   Simulator::Destroy();
   
   #ifdef NS3_MPI
