@@ -67,7 +67,7 @@ struct task1 {
 map<std::pair<int, std::pair<int, int>>, struct task1> expeRecvHash;
 map<std::pair<int, std::pair<int, int>>, uint64_t> recvHash;
 map<std::pair<int, std::pair<int, int>>, struct task1> sentHash;
-map<std::pair<int, int>, int64_t> nodeHash;
+map<std::pair<int, int>, uint64_t> nodeHash;
 map<std::pair<int,std::pair<int,int>>,int> waiting_to_sent_callback;
 map<std::pair<int,std::pair<int,int>>,int>waiting_to_notify_receiver;
 map<std::pair<int,std::pair<int,int>>,uint64_t>received_chunksize;
@@ -311,7 +311,7 @@ void notify_sender_packet_arrived_receiver(
 void qp_finish(FILE *fout, Ptr<RdmaQueuePair> q) {
   uint32_t sid = ip_to_node_id(q->sip), did = ip_to_node_id(q->dip);
   uint64_t base_rtt = pairRtt[sid][did], b = pairBw[sid][did];
-  uint32_t total_bytes =
+  uint64_t total_bytes =
       q->m_size +
       ((q->m_size - 1) / packet_payload_size + 1) *
           (CustomHeader::GetStaticWholeHeaderSize() -
