@@ -1272,8 +1272,15 @@ bool Workload::initialize_workload(std::string name) {
           parallelismPolicy = ParallelismPolicy::TransformerFwdInBckwd;
           #endif
   }
+  // FIXME: this patch avoids EP collectives to be ignored in case TP = 1; we just pass the max of TP and EP.
+  //  The patch works because this dimension splitting was part of astra-sim but SimAI does not seem to really use it;
+  //  in particular, MockNccl does not use the resulting topology to determine the communication flows (it uses
+  //  MockNcclGroup::getFlowModel instead); however NcclTreeFlowModel uses it to get the number of nodes in the ring.
+  //  To properly fix this there are two options: (i) remove this whole process and uniform the simulator to only use
+  //  the output of getFlowModel; (ii) generalize this to also work for the case of overlapped splits (EP and TP) and
+  //  uniform the SimAI code to use this output instead of generating a new one from getFlowModel.
   std::map<std::string, std::vector<bool>> general_involved_dimensions =
-      decode_involved_dimensions(parallelismPolicy, model_parallel_npu_group);
+      decode_involved_dimensions(parallelismPolicy, max(model_parallel_npu_group, expert_parallel_npu_group));
   pp_commsize = 0;
   for (size_t i = 1; i < tokens.size(); i = i+1){
     if(tokens[i]=="pp_comm"||tokens[i]=="pp_comm:"){
@@ -1524,8 +1531,9 @@ bool Workload::initialize_workload(std::string name) {
       specific_policy = ParallelismPolicy::All;
     }
     if (specific_policy != ParallelismPolicy::None) {
+      // FIXME: passing the max of TP and EP (see patch notes above)
       selected_involved_dimensions =
-          decode_involved_dimensions(specific_policy, model_parallel_npu_group);
+          decode_involved_dimensions(specific_policy, max(model_parallel_npu_group, expert_parallel_npu_group));
     } else {
       selected_involved_dimensions = general_involved_dimensions;
     }
