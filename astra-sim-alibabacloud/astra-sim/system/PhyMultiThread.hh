@@ -15,17 +15,8 @@
 
 #ifndef __PHYMULTITHREAD_HH__
 #define __PHYMULTITHREAD_HH__
-#include <mutex>
-#include <thread>
-#include<condition_variable>
-#include<atomic>
 
-#include"MockNcclLog.h"
 #include"AstraNetworkAPI.hh"
-#include"SimAiPhyCommon.hh"
-#ifdef PHY_RDMA
-#include"SimAiFlowModelRdma.hh"
-#endif 
 
 enum WORK_TYPE{SENDFINISHED,RECEIVEFINISHED};
 
@@ -36,29 +27,5 @@ void set_receive_finished_callback(void (*msg_handler)(AstraSim::ncclFlowTag flo
 bool create_polling_cqe_thread(void * cq_ptr,int lcore_id = 0);
 
 void notify_all_thread_finished();
-
-class PhyMtpInterface{
-public:
-     class explicitCriticalSection
-  {
-  public:
-    inline explicitCriticalSection ()
-    {
-      while (g_e_inCriticalSection.exchange (true, std::memory_order_acquire))
-        ;
-    }
-
-    inline void ExitSection() 
-    {
-      g_e_inCriticalSection.store (false, std::memory_order_release);
-    }
-
-    inline ~explicitCriticalSection ()
-    {
-      g_e_inCriticalSection.store (false, std::memory_order_release);
-    }
-  };
-  static std::atomic<bool> g_e_inCriticalSection;
-};
 
 #endif

@@ -73,30 +73,7 @@ class Ring : public Algorithm {
   virtual int get_non_zero_latency_packets();
   void insert_packet(Callable* sender);
   bool ready();
-
   void exit();
-
-  class ringCriticalSection
-  {
-  public:
-    inline ringCriticalSection ()
-    {
-      while (g_ring_inCriticalSection.exchange (true, std::memory_order_acquire))
-        ;
-    }
-
-    inline void ExitSection() 
-    {
-      g_ring_inCriticalSection.store (false, std::memory_order_release);
-    }
-
-    inline ~ringCriticalSection ()
-    {
-      // g_ring_inCriticalSection.store (false, std::memory_order_release);
-    }
-  };
-
-  static std::atomic<bool> g_ring_inCriticalSection;
 };
 } // namespace AstraSim
 #endif

@@ -11,13 +11,9 @@ Algorithm::Algorithm(int layer_num) {
 }
 void Algorithm::init(BaseStream* stream) {
   this->stream = stream;
-  return;
 }
-void Algorithm::call(EventType event, CallData* data) {
-  return;
-}
+void Algorithm::call(EventType event, CallData* data) {}
 void Algorithm::exit() {
   stream->owner->proceed_to_next_vnet_baseline((StreamBaseline*)stream);
-  return;
 }
 } // namespace AstraSim

@@ -102,7 +102,6 @@ public:
     t.msg_handler = fun_ptr;
     t.schTime = delta.time_val;
     Simulator::Schedule(NanoSeconds(t.schTime), t.msg_handler, t.fun_arg);
-    return;
   }
   virtual int sim_send(void *buffer,   
                        uint64_t count, 
@@ -121,12 +120,9 @@ public:
     t.msg_handler = msg_handler;
     {
       #ifdef NS3_MTP
-      MtpInterface::explicitCriticalSection cs;
+      MtpInterface::CriticalSection cs;
       #endif
       sentHash[make_pair(tag, make_pair(t.src, t.dest))] = t;
-      #ifdef NS3_MTP
-      cs.ExitSection();
-      #endif
     }
     SendFlow(rank, dst, count, msg_handler, fun_arg, tag, request);
     return 0;
@@ -135,7 +131,7 @@ public:
                        AstraSim::sim_request *request,
                        void (*msg_handler)(void *fun_arg), void *fun_arg) {
     #ifdef NS3_MTP
-    MtpInterface::explicitCriticalSection cs;
+    MtpInterface::ExplicitCriticalSection ecs;
     #endif
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
     AstraSim::ncclFlowTag flowTag = request->flowTag;
@@ -164,7 +160,7 @@ public:
           ehd->flowTag = pending_tag;
         } 
         #ifdef NS3_MTP
-        cs.ExitSection();
+        ecs.ExitSection();
         #endif
         t.msg_handler(t.fun_arg);
         goto sim_recv_end_section;
@@ -177,7 +173,7 @@ public:
           ehd->flowTag = pending_tag;
         } 
         #ifdef NS3_MTP
-        cs.ExitSection();
+        ecs.ExitSection();
         #endif
         t.msg_handler(t.fun_arg);
         goto sim_recv_end_section;
@@ -200,7 +196,7 @@ public:
       }
     }
     #ifdef NS3_MTP
-    cs.ExitSection();
+    ecs.ExitSection();
     #endif
 
 sim_recv_end_section:
@@ -332,7 +328,7 @@ int main(int argc, char *argv[]) {
   Simulator::Destroy();
   
   #ifdef NS3_MPI
-  MpiInterface::Disable ();
+  MpiInterface::Disable();
   #endif
   return 0;
 }

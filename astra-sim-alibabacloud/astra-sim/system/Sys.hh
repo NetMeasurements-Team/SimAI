@@ -6,16 +6,10 @@ LICENSE file in the root directory of this source tree.
 #ifndef __SYSTEM_HH__
 #define __SYSTEM_HH__
 
-#include <assert.h>
-#include <math.h>
-#include <algorithm>
 #include <chrono>
-#include <cstdint>
-#include <ctime>
 #include <fstream>
 #include <list>
 #include <map>
-#include <sstream>
 #include <tuple>
 #include <vector>
 #include "AstraMemoryAPI.hh"
@@ -375,27 +369,44 @@ class Sys : public Callable {
   static void handleEvent(void* arg);
   timespec_t generate_time(int cycles);
 
-  class sysCriticalSection
-  {
+  class SysCriticalSection {
   public:
-    inline sysCriticalSection ()
-    {
+    SysCriticalSection() {
       while (g_sys_inCriticalSection.exchange (true, std::memory_order_acquire))
         ;
     }
 
-    inline void ExitSection() 
-    {
-        g_sys_inCriticalSection.store (false, std::memory_order_release);
+    ~SysCriticalSection() {
+      ExitSection();
     }
 
-    inline ~sysCriticalSection ()
-    {
+    SysCriticalSection(const SysCriticalSection&) = delete;
+    SysCriticalSection& operator=(const SysCriticalSection&) = delete;
+    SysCriticalSection(SysCriticalSection&&) = delete;
+    SysCriticalSection& operator=(SysCriticalSection&&) = delete;
+
+  private:
+    static void ExitSection() {
+        g_sys_inCriticalSection.store (false, std::memory_order_release);
+    }
+  };
+
+  class SysExplicitCriticalSection {
+  public:
+    SysExplicitCriticalSection() {
+      while (g_sys_inCriticalSection.exchange (true, std::memory_order_acquire))
+        ;
+    }
+
+    ~SysExplicitCriticalSection() = default;
+
+    static void ExitSection() {
+      g_sys_inCriticalSection.store (false, std::memory_order_release);
     }
   };
 
   static std::atomic<bool> g_sys_inCriticalSection;
-  
+
   std::map<ParallelStrategy,MockNccl::MockNcclComm*> mock_nccl_comms;
   std::map<std::pair<int,int>, MockNccl::SingleFlow> generate_net_test_flow_model(uint64_t data_size, int nums);
   std::map<std::pair<int,int>, MockNccl::SingleFlow> generate_nvl_test_flow_model(uint64_t data_size, int nums);

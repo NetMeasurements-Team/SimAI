@@ -13,12 +13,14 @@
 *limitations under the License.
 */
 
-#include<chrono>
+#include <chrono>
+#include <atomic>
+
 #include "PhyMultiThread.hh"
+#include "MockNcclLog.h"
+#include "SimAiFlowModelRdma.hh"
 
 extern FlowPhyRdma flow_rdma; 
-
-std::atomic<bool> PhyMtpInterface::g_e_inCriticalSection (false);
 
 std::map<int,std::atomic<int>> all_recv_size;
 std::map<int,std::atomic<int>> all_send_size;

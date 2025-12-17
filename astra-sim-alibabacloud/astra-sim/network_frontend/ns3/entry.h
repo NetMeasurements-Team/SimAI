@@ -113,15 +113,12 @@ void SendFlow(int src, int dst, uint64_t maxPacketCount,
   uint64_t real_PacketCount = min(PacketCount,leftPacketCount);
   leftPacketCount-=real_PacketCount;
   uint32_t port = portNumber[src][dst]++;
-    {
-      #ifdef NS3_MTP
-      MtpInterface::explicitCriticalSection cs;
-      #endif
-      sender_src_port_map[make_pair(port, make_pair(src, dst))] = request->flowTag;
-      #ifdef NS3_MTP
-      cs.ExitSection();
-      #endif
-    }
+  {
+    #ifdef NS3_MTP
+    MtpInterface::CriticalSection cs;
+    #endif
+    sender_src_port_map[make_pair(port, make_pair(src, dst))] = request->flowTag;
+  }
   int flow_id = request->flowTag.current_flow_id;
   bool nvls_on = request->flowTag.nvls_on;
   int pg = 3, dport = 100;
@@ -146,18 +143,17 @@ void SendFlow(int src, int dst, uint64_t maxPacketCount,
       has_win ? (global_t == 1 ? maxBdp : pairBdp[n.Get(src)][n.Get(dst)]) : 0,
       global_t == 1 ? maxRtt : pairRtt[src][dst], msg_handler, fun_arg, tag,
       src, dst);
-  if(nvls_on) clientHelper.SetAttribute("NVLS_enable", UintegerValue (1));
+  if (nvls_on) {
+    clientHelper.SetAttribute("NVLS_enable", UintegerValue (1));
+  }
   {
     #ifdef NS3_MTP
-    MtpInterface::explicitCriticalSection cs;
+    MtpInterface::CriticalSection cs;
     #endif
     ApplicationContainer appCon = clientHelper.Install(n.Get(src));
     appCon.Start(Time(send_lat));
     waiting_to_sent_callback[std::make_pair(request->flowTag.current_flow_id,std::make_pair(src,dst))]++;
     waiting_to_notify_receiver[std::make_pair(request->flowTag.current_flow_id,std::make_pair(src,dst))]++;
-    #ifdef NS3_MTP
-    cs.ExitSection();
-    #endif
   }
   NcclLog->writeLog(NcclLogLevel::DEBUG,"waiting_to_notify_receiver  current_flow_id  %d src  %d dst  %d count  %d",request->flowTag.current_flow_id,src,dst,waiting_to_notify_receiver[std::make_pair(request->flowTag.tag_id,std::make_pair(src,dst))]);
   }
@@ -167,23 +163,20 @@ void notify_receiver_receive_data(int sender_node, int receiver_node,
                                   uint64_t message_size, AstraSim::ncclFlowTag flowTag) {
   {
     #ifdef NS3_MTP
-    MtpInterface::explicitCriticalSection cs;
+    MtpInterface::ExplicitCriticalSection ecs;
     #endif
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
     NcclLog->writeLog(NcclLogLevel::DEBUG," %d notify recevier:  %d message size:  %llu",sender_node,receiver_node,message_size);
     int tag = flowTag.tag_id;
-    if (expeRecvHash.find(make_pair(
-            tag, make_pair(sender_node, receiver_node))) != expeRecvHash.end()) {
-      task1 t2 =
-          expeRecvHash[make_pair(tag, make_pair(sender_node, receiver_node))];
-    MockNcclLog* NcclLog = MockNcclLog::getInstance();
-    NcclLog->writeLog(NcclLogLevel::DEBUG," %d notify recevier:  %d message size:  %llu t2.count:  %llu channle id:  %d",sender_node,receiver_node,message_size,t2.count,flowTag.channel_id);
+    if (expeRecvHash.find(make_pair(tag, make_pair(sender_node, receiver_node))) != expeRecvHash.end()) {
+      task1 t2 = expeRecvHash[make_pair(tag, make_pair(sender_node, receiver_node))];
+      NcclLog->writeLog(NcclLogLevel::DEBUG," %d notify recevier:  %d message size:  %llu t2.count:  %llu channle id:  %d",sender_node,receiver_node,message_size,t2.count,flowTag.channel_id);
       AstraSim::RecvPacketEventHadndlerData* ehd = (AstraSim::RecvPacketEventHadndlerData*) t2.fun_arg;
       if (message_size == t2.count) {
         NcclLog->writeLog(NcclLogLevel::DEBUG," message_size = t2.count expeRecvHash.erase  %d notify recevier:  %d message size:  %llu channel_id  %d",sender_node,receiver_node,message_size,tag);
         expeRecvHash.erase(make_pair(tag, make_pair(sender_node, receiver_node)));
         #ifdef NS3_MTP
-        cs.ExitSection();
+        ecs.ExitSection();
         #endif
         assert(ehd->flowTag.current_flow_id == -1 && ehd->flowTag.child_flow_id == -1);
         ehd->flowTag = flowTag;
@@ -195,7 +188,7 @@ void notify_receiver_receive_data(int sender_node, int receiver_node,
         NcclLog->writeLog(NcclLogLevel::DEBUG,"message_size > t2.count expeRecvHash.erase %d notify recevier:  %d message size:  %llu channel_id  %d",sender_node,receiver_node,message_size,tag);
         expeRecvHash.erase(make_pair(tag, make_pair(sender_node, receiver_node)));
         #ifdef NS3_MTP
-        cs.ExitSection();
+        ecs.ExitSection();
         #endif
         assert(ehd->flowTag.current_flow_id == -1 && ehd->flowTag.child_flow_id == -1);
         ehd->flowTag = flowTag;
@@ -217,21 +210,18 @@ void notify_receiver_receive_data(int sender_node, int receiver_node,
       }
     }
     #ifdef NS3_MTP
-    cs.ExitSection();
+    ecs.ExitSection();
     #endif
-  receiver_end_1st_section:
+receiver_end_1st_section:
     {
-    #ifdef NS3_MTP
-    MtpInterface::explicitCriticalSection cs2;
-    #endif
-    if (nodeHash.find(make_pair(receiver_node, 1)) == nodeHash.end()) {
-      nodeHash[make_pair(receiver_node, 1)] = message_size;
-    } else {
-      nodeHash[make_pair(receiver_node, 1)] += message_size;
-    }
-    #ifdef NS3_MTP
-    cs2.ExitSection();
-    #endif
+      #ifdef NS3_MTP
+      MtpInterface::CriticalSection cs;
+      #endif
+      if (nodeHash.find(make_pair(receiver_node, 1)) == nodeHash.end()) {
+        nodeHash[make_pair(receiver_node, 1)] = message_size;
+      } else {
+        nodeHash[make_pair(receiver_node, 1)] += message_size;
+      }
     }
   }
 }
@@ -239,9 +229,9 @@ void notify_receiver_receive_data(int sender_node, int receiver_node,
 void notify_sender_sending_finished(int sender_node, int receiver_node,
                                     uint64_t message_size, AstraSim::ncclFlowTag flowTag) {
   {
-    MockNcclLog * NcclLog = MockNcclLog::getInstance();
+    MockNcclLog* NcclLog = MockNcclLog::getInstance();
     #ifdef NS3_MTP
-    MtpInterface::explicitCriticalSection cs;
+    MtpInterface::ExplicitCriticalSection ecs;
     #endif
     int tag = flowTag.tag_id;
     if (sentHash.find(make_pair(tag, make_pair(sender_node, receiver_node))) !=
@@ -257,24 +247,21 @@ void notify_sender_sending_finished(int sender_node, int receiver_node,
           nodeHash[make_pair(sender_node, 0)] += message_size;
         }
         #ifdef NS3_MTP
-        cs.ExitSection();
+        ecs.ExitSection();
         #endif
         t2.msg_handler(t2.fun_arg);
-        goto sender_end_1st_section;
-      }else{
+        return;
+      } else {
         NcclLog->writeLog(NcclLogLevel::ERROR,"sentHash msg size != sender_node %d receiver_node %d message_size %lu flow_id ",sender_node,receiver_node,message_size);
       }
-    }else{
+    } else {
       NcclLog->writeLog(NcclLogLevel::ERROR,"sentHash cann't find sender_node %d receiver_node %d message_size %lu",sender_node,receiver_node,message_size);
     }
     #ifdef NS3_MTP
-    cs.ExitSection();
+    ecs.ExitSection();
     #endif
   }
-sender_end_1st_section:
-  return;
 }
-
 
 void notify_sender_packet_arrived_receiver(
     int sender_node,
@@ -282,7 +269,7 @@ void notify_sender_packet_arrived_receiver(
     uint64_t message_size,
     AstraSim::ncclFlowTag flowTag) {
   #ifdef NS3_MTP
-  MtpInterface::explicitCriticalSection cs;
+  MtpInterface::ExplicitCriticalSection ecs;
   #endif
   int tag = flowTag.channel_id;
   if (sentHash.find(make_pair(tag, make_pair(sender_node, receiver_node))) != sentHash.end()) {
@@ -297,14 +284,14 @@ void notify_sender_packet_arrived_receiver(
         nodeHash[make_pair(sender_node, 0)] += message_size;
       }
       #ifdef NS3_MTP
-      cs.ExitSection();
+      ecs.ExitSection();
       #endif
       t2.msg_handler(t2.fun_arg);
       return;
     }
   }
   #ifdef NS3_MTP
-  cs.ExitSection();
+  ecs.ExitSection();
   #endif
 }
 
@@ -326,7 +313,7 @@ void qp_finish(FILE *fout, Ptr<RdmaQueuePair> q) {
   uint64_t notify_size;
   {
     #ifdef NS3_MTP
-    MtpInterface::explicitCriticalSection cs;
+    MtpInterface::CriticalSection cs;
     #endif
     Ptr<Node> dstNode = n.Get(did);
     Ptr<RdmaDriver> rdma = dstNode->GetObject<RdmaDriver>();
@@ -342,16 +329,10 @@ void qp_finish(FILE *fout, Ptr<RdmaQueuePair> q) {
     sender_src_port_map.erase(make_pair(q->sport, make_pair(sid, did)));
     received_chunksize[std::make_pair(flowTag.current_flow_id,std::make_pair(sid,did))]+=q->m_size;
     if(!is_receive_finished(sid,did,flowTag)) {
-      #ifdef NS3_MTP
-      cs.ExitSection();
-      #endif
       return;
     }
     notify_size = received_chunksize[std::make_pair(flowTag.current_flow_id,std::make_pair(sid,did))];
     received_chunksize.erase(std::make_pair(flowTag.current_flow_id,std::make_pair(sid,did)));
-    #ifdef NS3_MTP
-    cs.ExitSection();
-    #endif
   }
   notify_receiver_receive_data(sid, did, notify_size, flowTag);
 }
@@ -364,21 +345,15 @@ void send_finish(FILE *fout, Ptr<RdmaQueuePair> q) {
   uint64_t all_sent_chunksize;
   {
     #ifdef NS3_MTP
-    MtpInterface::explicitCriticalSection cs;
+    MtpInterface::CriticalSection cs;
     #endif
     flowTag = sender_src_port_map[make_pair(q->sport, make_pair(sid, did))];
     sent_chunksize[std::make_pair(flowTag.current_flow_id,std::make_pair(sid,did))]+=q->m_size;
     if(!is_sending_finished(sid,did,flowTag)) {
-      #ifdef NS3_MTP
-      cs.ExitSection();
-      #endif
       return;
     }
     all_sent_chunksize = sent_chunksize[std::make_pair(flowTag.current_flow_id,std::make_pair(sid,did))];
     sent_chunksize.erase(std::make_pair(flowTag.current_flow_id,std::make_pair(sid,did)));
-    #ifdef NS3_MTP
-    cs.ExitSection();
-    #endif
   }
   notify_sender_sending_finished(sid, did, all_sent_chunksize, flowTag);
 }

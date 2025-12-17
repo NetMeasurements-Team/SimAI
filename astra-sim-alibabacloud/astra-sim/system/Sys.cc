@@ -481,7 +481,7 @@ int Sys::sim_send(
     void (*msg_handler)(void* fun_arg),
     void* fun_arg) {
   if (delay == 0 && fun_arg == nullptr) {
-    Sys::sysCriticalSection cs;
+    SysCriticalSection cs;
       
     SendPacketEventHandlerData* fun_arg_tmp =
         new SendPacketEventHandlerData(this, id+npu_offset, dst, tag);
@@ -489,7 +489,6 @@ int Sys::sim_send(
     if (is_there_pending_sends.find(std::make_pair(dst, tag)) == is_there_pending_sends.end() ||
     is_there_pending_sends[std::make_pair(dst, tag)] == false) {
       is_there_pending_sends[std::make_pair(dst, tag)] = true;
-      cs.ExitSection();
     } else {
       if (pending_sends.find(std::make_pair(dst, tag)) ==
           pending_sends.end()) {
@@ -507,8 +506,6 @@ int Sys::sim_send(
               *request,
               msg_handler,
               fun_arg));
-      
-      cs.ExitSection();
       return 1;
     }
   }
@@ -1182,19 +1179,17 @@ CollectivePhase Sys::generate_collective_phase(
               MockNccl::ncclInfo *nccl_info;
               std::shared_ptr<void> ptr_FlowModels;
               {
-                Sys::sysCriticalSection cs;
-                nccl_info = get_nccl_Info(comm_ps,data_size,collective_type);
+                SysCriticalSection cs;
+                nccl_info = get_nccl_Info(comm_ps, data_size, collective_type);
                 ptr_FlowModels = generate_flow_model(comm_ps, data_size, collective_type); 
-                cs.ExitSection();
               }
               
               if(nccl_info->algorithm == NCCL_ALGO_RING) {
                 std::shared_ptr<MockNccl::FlowModels> RingFlowModels = std::static_pointer_cast<MockNccl::FlowModels>(ptr_FlowModels);
                 std::map<int,std::map<int,std::vector<int>>> channels;
                 {
-                  Sys::sysCriticalSection cs;
+                  SysCriticalSection cs;
                   channels = mock_nccl_comms[comm_ps]->get_rings();
-                  cs.ExitSection();
                 }
                 NcclLog->writeLog(NcclLogLevel::DEBUG,"rank %d generate FlowModels",id);
                 if(RingFlowModels != nullptr){
@@ -1240,10 +1235,9 @@ CollectivePhase Sys::generate_collective_phase(
                 std::shared_ptr<MockNccl::FlowModels> TreeFlowModels;
                 MockNccl::TreeChannels treechannels;
                 {
-                  Sys::sysCriticalSection cs;
+                  SysCriticalSection cs;
                   TreeFlowModels = std::static_pointer_cast<MockNccl::FlowModels>(ptr_FlowModels);
                   treechannels = mock_nccl_comms[comm_ps]->get_treechannels();
-                  cs.ExitSection();
                 }
                 CollectivePhase vn(
                     this,
@@ -1266,9 +1260,8 @@ CollectivePhase Sys::generate_collective_phase(
                 std::shared_ptr<MockNccl::FlowModels> RingFlowModels = std::static_pointer_cast<MockNccl::FlowModels>(ptr_FlowModels);
                 MockNccl::TreeChannels treechannels;
                 {
-                  Sys::sysCriticalSection cs;
+                  SysCriticalSection cs;
                   treechannels = mock_nccl_comms[comm_ps]->get_treechannels();
-                  cs.ExitSection();
                 }
                 NcclLog->writeLog(NcclLogLevel::DEBUG,"rank %d generate FlowModels",id);
                 if(RingFlowModels != nullptr){
@@ -1684,12 +1677,9 @@ void Sys::call_events() {
     }
   }
   {
-  Sys::sysCriticalSection cs;
-  if (event_queue[Sys::boostedTick()].size() > 0) {
-    event_queue[Sys::boostedTick()].clear();
-  }
-  event_queue.erase(Sys::boostedTick());
-  cs.ExitSection();
+    // Clean up the event queue for the processed tick.
+    SysCriticalSection cs;
+    event_queue.erase(boostedTick());
   }
   FINISH_CHECK: if ((finished_workloads == 1 && event_queue.size() == 0 && pending_sends.size() == 0) ||
       initialized == false) {
@@ -1906,11 +1896,8 @@ void Sys::zero_latecy_register_event(
   Tick mycycles = 0;
   bool should_schedule = false;
   {
-    #ifdef NS3_MTP
-    Sys::sysCriticalSection cs;
-    #endif
-    #ifdef PHY_MTP
-    Sys::sysCriticalSection cs;
+    #if defined(NS3_MTP) || defined(PHY_MTP)
+    SysCriticalSection cs;
     #endif
     if (event_queue.find(Sys::boostedTick() + mycycles) == event_queue.end()) {
       std::list<std::tuple<Callable*, EventType, CallData*>> tmp;
@@ -1919,12 +1906,6 @@ void Sys::zero_latecy_register_event(
     }
     event_queue[Sys::boostedTick() + mycycles].push_back(
         std::make_tuple(callable, event, callData));
-    #ifdef NS3_MTP
-    cs.ExitSection();
-    #endif
-    #ifdef PHY_MTP
-    cs.ExitSection();
-    #endif
   }
   pending_events++;
   if (should_schedule) {
@@ -1956,22 +1937,18 @@ void Sys::try_register_event(
     Tick& cycles) {
   bool should_schedule = false;
   {
-    MockNcclLog* NcclLog = MockNcclLog::getInstance();
-    NcclLog->writeLog(
-        NcclLogLevel::DEBUG, "try_register_event EventType %d ", event);
     #ifdef NS3_MTP
-        Sys::sysCriticalSection cs;
+    SysCriticalSection cs;
     #endif
+    MockNcclLog* NcclLog = MockNcclLog::getInstance();
+    NcclLog->writeLog(NcclLogLevel::DEBUG, "try_register_event EventType %d ", event);
+
     if (event_queue.find(Sys::boostedTick() + cycles) == event_queue.end()) {
       std::list<std::tuple<Callable*, EventType, CallData*>> tmp;
       event_queue[Sys::boostedTick() + cycles] = tmp;
       should_schedule = true;
     }
-    event_queue[Sys::boostedTick() + cycles].push_back(
-        std::make_tuple(callable, event, callData));
-    #ifdef NS3_MTP
-    cs.ExitSection();
-    #endif
+    event_queue[Sys::boostedTick() + cycles].push_back(std::make_tuple(callable, event, callData));
   }
   if (should_schedule) {
     timespec_t tmp = generate_time(cycles);
@@ -1981,7 +1958,6 @@ void Sys::try_register_event(
   }
   cycles = 0;
   pending_events++;
-  return;
 }
 #ifdef PHY_MTP
 void Sys::insert_into_running_list(StreamBaseline* stream) {
@@ -2049,28 +2025,21 @@ void Sys::handleEvent(void* arg) {
   } else if (event == EventType::PacketSent) {
     SendPacketEventHandlerData* sendhd = (SendPacketEventHandlerData*)ehd;
     NcclLog->writeLog(NcclLogLevel::DEBUG,"packet sent, sender id:  %d, node id:  %d",sendhd->senderNodeId,node->id);
-    #ifdef NS3_MTP
-    Sys::sysCriticalSection cs;
-    #endif
-    #ifdef PHY_MTP
-    Sys::sysCriticalSection cs;
+    #if defined(NS3_MTP) || defined(PHY_MTP)
+    SysExplicitCriticalSection ecs;
     #endif
     if(all_generators[sendhd->senderNodeId]== nullptr){
-      #ifdef NS3_MTP
-      cs.ExitSection();
-      #endif
-      #ifdef PHY_MTP
-      cs.ExitSection();
+      #if defined(NS3_MTP) || defined(PHY_MTP)
+      ecs.ExitSection();
       #endif
       goto SEND_HANDLER_END;
     }
-    
+
     if (node->pending_sends.find(
             std::make_pair(sendhd->receiverNodeId, sendhd->tag)) ==
             node->pending_sends.end() ||
             node->pending_sends[std::make_pair(sendhd->receiverNodeId, sendhd->tag)]
                 .size() == 0) {
-
       node->is_there_pending_sends[std::make_pair(
           sendhd->receiverNodeId, sendhd->tag)] = false;
       
@@ -2079,14 +2048,10 @@ void Sys::handleEvent(void* arg) {
       node->initialized == false) {
         delete node;
       }
-      #ifdef NS3_MTP  
-      cs.ExitSection();
-      #endif
-      #ifdef PHY_MTP
-      cs.ExitSection();
+      #if defined(NS3_MTP) || defined(PHY_MTP)
+      ecs.ExitSection();
       #endif
     } else {
-
       SimSendCaller* simSendCaller =
           node->pending_sends[std::make_pair(sendhd->receiverNodeId, sendhd->tag)]
                            .front();
@@ -2095,15 +2060,13 @@ void Sys::handleEvent(void* arg) {
       if(node->pending_sends[std::make_pair(sendhd->receiverNodeId, sendhd->tag)].size() == 0)
         node->pending_sends.erase(std::make_pair(sendhd->receiverNodeId, sendhd->tag));
 
-      #ifdef NS3_MTP  
-      cs.ExitSection();
-      #endif
-      #ifdef PHY_MTP  
-      cs.ExitSection();
+      #if defined(NS3_MTP) || defined(PHY_MTP)
+      ecs.ExitSection();
       #endif
       simSendCaller->call(EventType::General, nullptr);
     }
-    SEND_HANDLER_END: delete sendhd;
+SEND_HANDLER_END:
+    delete sendhd;
   }else if(event==EventType::PacketSentFinshed){
     AstraSim::SendPacketEventHandlerData* ehd = (AstraSim::SendPacketEventHandlerData*) arg;
     if(ehd->owner!=nullptr)
