@@ -40,8 +40,9 @@ namespace MockNccl {
     int EP_nums = _ngpus/_EP_size;
     int DP_EP_nums = _ngpus/_DP_EP_size;
     if (TP_nums <= 0 || DP_nums <= 0 || PP_nums <= 0 || EP_nums <= 0 || DP_EP_nums <= 0 || (_TP_size * _DP_size * _PP_size != _ngpus) || (_EP_size * _DP_EP_size != _DP_size)){
-      NcclLog->writeLog(NcclLogLevel::ERROR,"The group division method is incorrect.");
-      return;
+      NcclLog->writeLog(NcclLogLevel::ERROR,"The combination of parallelism groups is incorrect.");
+      std::cerr << "The combination of parallelism groups is incorrect." << std::endl;
+      exit(1);
     }
     int nNodesPerTPGroup = _TP_size / nlocalranks + (_TP_size % nlocalranks > 0 ? 1 : 0);
     std::vector<int>ranks;
