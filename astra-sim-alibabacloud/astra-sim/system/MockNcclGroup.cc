@@ -1456,7 +1456,7 @@ namespace MockNccl {
     data_size = data_size / nranks / ringchannels.size();
     bool PXN_ENABLE = false;
     const char* PXN_ENV = std::getenv("AS_PXN_ENABLE");
-    if (PXN_ENV == "1") {
+    if (PXN_ENV && strcmp(PXN_ENV, "1") == 0) {
       PXN_ENABLE = true;
     } else {
       PXN_ENABLE = false;
