@@ -168,24 +168,34 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
       }
     }
     assert(flow_exist == true);
-
-    bool tag = true;
+    bool all_channel_finished = true;
+    bool all_packets_freed = true;
     {
       FlowCriticalSection cs;
       free_packets[std::make_pair(channel_id, flowTag.sender_node)]--;
-
-      for (int i = 0; i < m_channels; i++) {
-        if (_stream_count[i] != 0) {
-          tag = false;
+      for (int i = 0; i < m_channels; ++i) {
+        if (_stream_count.count(i) != 0 && _stream_count[i] != 0) {
+          all_channel_finished = false;
           break;
         }
       }
+      if (all_channel_finished) {
+        for (auto it = free_packets.begin(); it != free_packets.end(); ++it) {
+          if (it->second != 0) {
+            all_packets_freed = false;
+            break;
+          }
+        }
+      }
     }
-    if(tag) {
+
+    if (all_channel_finished) {
       ready(channel_id, -1);
-      iteratable(channel_id);
+      if (all_packets_freed) {
+        exit();
+      }
       return;
-    } 
+    }
     #endif
     NcclLog->writeLog(NcclLogLevel::DEBUG,"PacketReceived sender_node:  %d recevier  %d current_flow id:  %d channel_id:  %d tag_id  %d free_packets  %d next_flow_list.size %d",flowTag.sender_node,flowTag.receiver_node,flowTag.current_flow_id,flowTag.channel_id,flowTag.tag_id,free_packets[std::make_pair(channel_id,flowTag.sender_node)],next_flow_list.size());
     #ifdef PHY_MTP
@@ -209,6 +219,7 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
       FlowExplicitCriticalSection ecs;
       if (indegree_mapping.count(next_flow_id) == 0) {
         flow_exist = false;
+        ecs.ExitSection();
         break;
       }
       if (--indegree_mapping[next_flow_id] == 0) {
@@ -293,7 +304,28 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
       pQps->peer_qps[std::make_pair(flowTag.channel_id,std::make_pair(flowTag.sender_node,flowTag.receiver_node))]=0;
       insert_packets(channel_id,cur_flow_id);
     }
-    iteratable(channel_id); 
+    bool all_channel_finished = true;
+    bool all_packets_freed = true;
+    {
+      FlowCriticalSection cs;
+      for (int i = 0; i < m_channels; ++i) {
+        if (_stream_count.count(i) != 0 && _stream_count[i] != 0) {
+          all_channel_finished = false;
+          break;
+        }
+      }
+      if (all_channel_finished) {
+        for (auto it = free_packets.begin(); it != free_packets.end(); ++it) {
+          if (it->second != 0) {
+            all_packets_freed = false;
+            break;
+          }
+        }
+      }
+    }
+    if (all_channel_finished && all_packets_freed) {
+      exit();
+    }
     #else
     phy_iteratable(channel_id);
     #endif
@@ -423,29 +455,6 @@ void NcclTreeFlowModel::reduce(int channel_id, int flow_id) {
     packets[std::make_pair(channel_id, flow_id)].pop_front();
   }
   #endif
-}
-
-bool NcclTreeFlowModel::iteratable(int channel_id) {
-  MockNcclLog* NcclLog = MockNcclLog::getInstance();
-  bool all_channel_finished = true, all_packets_freed = true;
-  {
-    FlowCriticalSection cs;
-    for(int i = 0; i < m_channels; ++ i) {
-      if(_stream_count.count(i) != 0 && _stream_count[i] != 0) all_channel_finished = false;
-    }
-    for (auto it = free_packets.begin(); it != free_packets.end(); ++it) {
-      if (it->second != 0) {
-        all_packets_freed = false;
-        break;
-      }
-    }
-  }
-  if (all_channel_finished == true &&
-      all_packets_freed == true) {
-    exit();
-    return false;
-  }
-  return true;
 }
 
 void NcclTreeFlowModel::insert_packets(int channel_id, int flow_id) {

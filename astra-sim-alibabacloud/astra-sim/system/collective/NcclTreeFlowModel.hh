@@ -89,7 +89,6 @@ class NcclTreeFlowModel : public Algorithm {
   void process_stream_count(int channel_id);
   void release_packets(int channel_id, int flow_id, uint64_t message_size);
   void reduce(int channel_id, int flow_id);
-  bool iteratable(int channel_id);
   virtual int get_non_zero_latency_packets();
   void insert_packets(int channel_id, int flow_id);
   void init_indegree_mapping();
