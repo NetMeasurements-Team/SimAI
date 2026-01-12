@@ -114,8 +114,7 @@ inline std::vector<Ptr<RdmaClient>> get_clients(
     int sendLat,
     bool nvls_on) {
   std::vector<Ptr<RdmaClient>> clients;
-  // in same server; not enable multi-qp
-  const bool reuse = src/gpus_per_server != dst/gpus_per_server;
+  constexpr bool reuse = true; //src/gpus_per_server != dst/gpus_per_server;
   std::string hashKey = get_hash_key(src, dst, pg, dport);
   #ifdef NS3_MTP
   MtpInterface::CriticalSection cs;
@@ -157,11 +156,9 @@ inline std::vector<Ptr<RdmaClient>> get_clients(
 
 inline void push_msg_to_client(Ptr<RdmaClient> client, uint64_t size, uint64_t flow_id) {
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
-  std::cout << "PushMessagetoClient " << "flow_id: " << flow_id << " at " << Simulator::Now().GetNanoSeconds() << std::endl;
-  std::cout << "                    " << client->m_qp->m_src << " -> " << client->m_qp->m_dest << std::endl;
   NcclLog->writeLog(
       NcclLogLevel::DEBUG,
-      " PushMessagetoQp %u -> %u flow_id %u",
+      " PushMessageToQp %u -> %u flow_id %u",
       client->m_qp->m_src, client->m_qp->m_dest, flow_id);
   client->PushMessageToQp(size, flow_id);
 }
