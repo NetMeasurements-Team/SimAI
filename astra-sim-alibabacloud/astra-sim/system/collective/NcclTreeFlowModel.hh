@@ -35,7 +35,6 @@
 #include "astra-sim/system/MemBus.hh"
 #include "astra-sim/system/MyPacket.hh"
 #include "astra-sim/system/topology/RingTopology.hh"
-#include  "astra-sim/system/MockNcclQps.h"
 
 namespace AstraSim {
 class NcclTreeFlowModel : public Algorithm {
@@ -63,7 +62,6 @@ class NcclTreeFlowModel : public Algorithm {
   MockNccl::FlowModels _flow_models;
   uint32_t m_channels;
   uint32_t len_channel;
-  MockNccl::NcclQps* pQps;
   #if PHY_RDMA
   //std::condition_variable judge_exit_cv;
   //std::mutex judge_exit_mutex;
@@ -87,7 +85,7 @@ class NcclTreeFlowModel : public Algorithm {
       int treechannels);
   void run(EventType event, CallData* data) override;
   void process_stream_count(int channel_id);
-  void release_packets(int channel_id, int flow_id, uint64_t message_size);
+  void release_packets(int channel_id, int flow_id, uint64_t message_size) const;
   void reduce(int channel_id, int flow_id);
   virtual int get_non_zero_latency_packets();
   void insert_packets(int channel_id, int flow_id);

@@ -62,7 +62,6 @@ NcclTreeFlowModel::NcclTreeFlowModel(
   //this->judge_mutex.unlock();
   this->send_packets = 0;
   this->recv_packets = 0;
-  pQps = new MockNccl::NcclQps();
   zero_latency_packets = new std::map<int, int>();
   non_zero_latency_packets = new std::map<int, int>();
   if (boost_mode) {
@@ -74,27 +73,20 @@ NcclTreeFlowModel::NcclTreeFlowModel(
     transmition = MemBus::Transmition::Usual;
   }
   if(ptr_flow_models){
-    if(id == 0) 
-    {
-      MockNcclLog* NcclLog = MockNcclLog::getInstance();
-    }
     for(auto f : *ptr_flow_models) {
       if(f.second.dest == id) {
           this->free_packets[std::make_pair(f.second.channel_id,f.second.src)]++;
           this->_flow_models[f.first] = f.second;
-          recv_packets++;
+          ++recv_packets;
         }
       if(f.second.src == id) {
-        if(pQps->peer_qps.count(std::make_pair(f.second.channel_id,std::make_pair(f.second.src,f.second.dest)))==0){
-          pQps->peer_qps[std::make_pair(f.second.channel_id,std::make_pair(f.second.src,f.second.dest))]=1;
-        }
         {
           FlowCriticalSection cs;
           this->_stream_count[f.second.channel_id] += 1;
         }
         assert(this->_flow_models.count(f.first) == 0);
         this->_flow_models[f.first] = f.second;
-        send_packets++;
+        ++send_packets;
       }
     }
   }
@@ -122,9 +114,8 @@ NcclTreeFlowModel::NcclTreeFlowModel(
   }
 }
 
-void NcclTreeFlowModel::init_indegree_mapping(){
-  MockNccl::FlowModels::iterator tree_it;
-  for(tree_it = _flow_models.begin();tree_it != _flow_models.end();tree_it++) {
+void NcclTreeFlowModel::init_indegree_mapping() {
+  for (auto tree_it = _flow_models.begin(); tree_it != _flow_models.end(); ++tree_it) {
     if(tree_it->second.src!=id) continue;
     indegree_mapping[tree_it->first.second] = tree_it->second.parent_flow_id.size();
   }
@@ -159,10 +150,11 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
     }
     #else 
     bool flow_exist = next_flow_list.size() == 0 ? true : false;
-    for(int i = 0; i < next_flow_list.size(); ++ i) {
+    for (int i = 0; i < next_flow_list.size(); ++ i) {
       int next_flow_id = next_flow_list[i];
-      if(next_flow_id == -1 || _flow_models.count(std::make_pair(channel_id, next_flow_id)) != 0) flow_exist = true;
-      else {
+      if (next_flow_id == -1 || _flow_models.count(std::make_pair(channel_id, next_flow_id)) != 0) {
+        flow_exist = true;
+      } else {
         flow_exist = false;
         break;
       }
@@ -206,7 +198,6 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
     }
     #else
     flow_exist = true;
-    bool flow_send = false;
     bool recv_finished_tag = true;
     for (auto it = free_packets.begin(); it != free_packets.end(); it++) {
       if (it->second != 0) {
@@ -214,7 +205,9 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
         break;
       }
     }
-    NcclLog->writeLog(NcclLogLevel::DEBUG,"next_flow_list.size %d",next_flow_list.size());
+    NcclLog->writeLog(NcclLogLevel::DEBUG, "recv_finished_tag: %s", recv_finished_tag ? "true" : "false");
+    NcclLog->writeLog(NcclLogLevel::DEBUG, "next_flow_list.size %d", next_flow_list.size());
+
     for (int next_flow_id : next_flow_list) {
       FlowExplicitCriticalSection ecs;
       if (indegree_mapping.count(next_flow_id) == 0) {
@@ -230,7 +223,7 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
         ecs.ExitSection();
       }
     }
-    assert(flow_exist = true);
+    assert(flow_exist == true);
     #endif
   } else if (event == EventType::StreamInit) {
     #ifdef PHY_MTP
@@ -248,6 +241,7 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
     NcclLog->writeLog(NcclLogLevel::DEBUG,"streamInit time %lld",now_us);
     start_time = std::chrono::high_resolution_clock::now();
     #endif
+
     for (int i = 0; i < parallel_reduce; i++) {
       #ifndef PHY_MTP
       init_recv_ready();
@@ -256,25 +250,13 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
         for(const auto flow_model : _flow_models) {
           if(flow_model.second.src!=id)continue;
           std::vector<int> parent_list = flow_model.second.parent_flow_id;
-          if((parent_list.size() == 0 ) && flow_model.second.channel_id == j ) {
+          if(parent_list.empty() && flow_model.second.channel_id == j ) {
             #ifdef PHY_MTP
             if(flow_model.second.chunk_id == 0){
               phy_ready(j, flow_model.second.flow_id);
             }
             #else
-            if (flow_model.second.chunk_id == 0) {
-              pQps->peer_qps[std::make_pair(
-                  flow_model.second.channel_id,
-                  std::make_pair(
-                      flow_model.second.src, flow_model.second.dest))] = 0;
-              insert_packets(j,flow_model.second.flow_id);
-            } else {
-              pQps->peer_wating_tasks[std::make_pair(
-                      flow_model.second.channel_id,
-                      std::make_pair(
-                          flow_model.second.src, flow_model.second.dest))]
-                  .push(flow_model.second.flow_id);
-            }
+            insert_packets(j,flow_model.second.flow_id);
             #endif
           }
         }
@@ -289,21 +271,16 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
     AstraSim::ncclFlowTag flowTag = rcehd->flowTag;
     int sent_flow_id = flowTag.current_flow_id;
     int channel_id = flowTag.channel_id;
-    std::vector<int> next_flow_list = flowTag.tree_flow_list;   
-    NcclLog->writeLog(NcclLogLevel::DEBUG,"PacketSentFinshed src %d dst %d channel_id %d flow_id %d",flowTag.sender_node,flowTag.receiver_node,flowTag.channel_id,flowTag.current_flow_id);
+    std::vector<int> next_flow_list = flowTag.tree_flow_list;
+    NcclLog->writeLog(
+        NcclLogLevel::DEBUG,
+        "PacketSentFinshed src %d dst %d channel_id %d flow_id %d",
+        flowTag.sender_node,
+        flowTag.receiver_node,
+        flowTag.channel_id,
+        flowTag.current_flow_id);
     reduce(channel_id,sent_flow_id);
-    bool flow_exist = next_flow_list.size() == 0 ? true : false;
     #ifndef PHY_MTP
-    {
-      FlowCriticalSection cs;
-      pQps->peer_qps[std::make_pair(flowTag.channel_id,std::make_pair(flowTag.sender_node,flowTag.receiver_node))]=1;
-    }
-    if(pQps->peer_wating_tasks[std::make_pair(flowTag.channel_id,std::make_pair(flowTag.sender_node,flowTag.receiver_node))].size()>0){
-      int cur_flow_id = pQps->peer_wating_tasks[std::make_pair(flowTag.channel_id,std::make_pair(flowTag.sender_node,flowTag.receiver_node))].front();
-      pQps->peer_wating_tasks[std::make_pair(flowTag.channel_id,std::make_pair(flowTag.sender_node,flowTag.receiver_node))].pop();
-      pQps->peer_qps[std::make_pair(flowTag.channel_id,std::make_pair(flowTag.sender_node,flowTag.receiver_node))]=0;
-      insert_packets(channel_id,cur_flow_id);
-    }
     bool all_channel_finished = true;
     bool all_packets_freed = true;
     {
@@ -369,12 +346,11 @@ bool NcclTreeFlowModel::init_recv_ready() {
 }
 
 bool NcclTreeFlowModel::recv_ready(int channel_id, int flow_id) {
-  std::vector<int>recv_prevs;
   auto flow_model = _flow_models[std::make_pair(channel_id,flow_id)];
-  recv_prevs = flow_model.prev;
+  const std::vector<int> recv_prevs = flow_model.prev;
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
 
-  for (int recv_prev : recv_prevs) {
+  for (const int recv_prev : recv_prevs) {
     sim_request rcv_req;
     rcv_req.vnet = this->stream->current_queue_id;
     rcv_req.layerNum = layer_num;
@@ -403,7 +379,7 @@ bool NcclTreeFlowModel::recv_ready(int channel_id, int flow_id) {
   return true;
 }
 
-void NcclTreeFlowModel::release_packets(int channel_id, int flow_id, uint64_t message_size) {
+void NcclTreeFlowModel::release_packets(int channel_id, int flow_id, uint64_t message_size) const {
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
   if (NPU_to_MA == true) {
     (new PacketBundle(
@@ -415,8 +391,7 @@ void NcclTreeFlowModel::release_packets(int channel_id, int flow_id, uint64_t me
          message_size,
          transmition,
          channel_id,
-         flow_id))
-        ->send_to_MA();
+         flow_id))->send_to_MA();
   } else {
     (new PacketBundle(
          stream->owner,
@@ -427,8 +402,7 @@ void NcclTreeFlowModel::release_packets(int channel_id, int flow_id, uint64_t me
          message_size,
          transmition,
          channel_id,
-         flow_id))
-        ->send_to_NPU();
+         flow_id))->send_to_NPU();
   }
   NcclLog->writeLog(NcclLogLevel::DEBUG,"id:  %d finish release_packets",id);
 }
@@ -596,7 +570,6 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
       this->_flow_models[std::make_pair(channel_id, flow_id)].child_flow_id;
   snd_req.flowTag.sender_node = id;
   snd_req.flowTag.receiver_node = packet.preferred_dest;
-  snd_req.flowTag.pQps = this->pQps;
   if (this->comType == ComType::All_Reduce_NVLS)
     snd_req.flowTag.nvls_on = true;
   else
@@ -727,7 +700,6 @@ bool NcclTreeFlowModel::phy_ready(int channel_id,int flow_id) {
       this->_flow_models[std::make_pair(channel_id, flow_id)].child_flow_id;
   snd_req.flowTag.sender_node = id;
   snd_req.flowTag.receiver_node = flow.dest;
-  snd_req.flowTag.pQps = this->pQps;
   if (this->comType == ComType::All_Reduce_NVLS)
     snd_req.flowTag.nvls_on = true;
   else
