@@ -53,6 +53,12 @@ NS_LOG_COMPONENT_DEFINE("GENERIC_SIMULATION");
 uint32_t cc_mode = 1;
 bool enable_qcn = true, use_dynamic_pfc_threshold = true;
 uint32_t packet_payload_size = 1000, l2_chunk_size = 0, l2_ack_interval = 0;
+bool enable_pfc = false;
+double switch_fw_delay = 0.0;
+EventId monitor_qlen_event;
+EventId monitor_bw_event;
+EventId monitor_qp_rate_event;
+EventId monitor_qp_cnp_num_event;
 double pause_time = 5, simulator_stop_time = 3.01;
 std::string data_rate, link_delay, topology_file, flow_file, trace_file, trace_output_file;
 std::string fct_output_file = "fct.txt";
@@ -79,6 +85,12 @@ double u_target = 0.95;
 uint32_t int_multi = 1;
 bool rate_bound = true;
 int nic_total_pause_time = 0;
+std::string nic_coalesce_method = "PER_QP";
+double nack_gen_interval = 0.01;
+bool r_dcqcn_ewma_gain, r_dcqcn_clamp = false;
+uint32_t r_dcqcn_f = 1, r_dcqcn_bytes_threshold = 524240;
+std::string r_dcqcn_rate_u_delay = "300us";
+std::string r_dcqcn_alpha_u_delay = "2.56us";
 
 uint32_t ack_high_prio = 0;
 uint64_t link_down_time = 0;
@@ -107,7 +119,7 @@ FILE* total_flow_output = nullptr;
 unordered_map<uint64_t, uint32_t> rate2kmax, rate2kmin;
 unordered_map<uint64_t, double> rate2pmax;
 
-std::ifstream topof, flowf, tracef;
+std::ifstream topo_ifs, flowf, tracef;
 
 NodeContainer n;
 
@@ -182,18 +194,20 @@ void monitor_qlen(FILE* qlen_output, NodeContainer *n){
 }
 void monitor_bw(FILE* bw_output, NodeContainer *n){
 	for (uint32_t i = 0; i < n->GetN(); i++){
-		if(n->Get(i)->GetNodeType() == 1){ 
+		if (n->Get(i)->GetNodeType() == 1) { // is switch
 			Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(n->Get(i));
 			sw->PrintSwitchBw(bw_output, bw_mon_interval);
-		}else if(n->Get(i)->GetNodeType() == 2){ 
+		} else if (n->Get(i)->GetNodeType() == 2) { // is nvswitch
 			Ptr<NVSwitchNode> sw = DynamicCast<NVSwitchNode>(n->Get(i));
 			sw->PrintSwitchBw(bw_output, bw_mon_interval);
-		}else{ 
+		} else { // is host
 			Ptr<Node> host = n->Get(i);
 			host->GetObject<RdmaDriver>()->m_rdma->PrintHostBW(bw_output, bw_mon_interval);
 		}
 	}
-	Simulator::Schedule(MicroSeconds(bw_mon_interval), &monitor_bw, bw_output, n);
+  if (bw_mon_interval + Simulator::Now().GetMicroSeconds() < mon_end) {
+    monitor_bw_event = Simulator::Schedule(MicroSeconds(bw_mon_interval), &monitor_bw, bw_output, n);
+  }
 }
 void monitor_qp_rate(FILE* rate_output, NodeContainer *n){
 	for(uint32_t i = 0; i < n->GetN(); i++){
@@ -260,8 +274,7 @@ void CalculateRoute(Ptr<Node> host) {
       if (dis.find(next) == dis.end()) {
         dis[next] = d + 1;
         delay[next] = delay[now] + it->second.delay;
-        txDelay[next] = txDelay[now] +
-                        packet_payload_size * 1000000000lu * 8 / it->second.bw;
+        txDelay[next] = txDelay[now] + packet_payload_size * 1000000000lu * 8 / it->second.bw;
         bw[next] = std::min(bw[now], it->second.bw);
         if (next->GetNodeType() == 1 || next->GetNodeType() == 2) {
           q.push_back(next);
@@ -593,6 +606,14 @@ bool ReadConf(const string& network_topo, const string& network_conf, const stri
         conf >> dctcp_rate_ai;
       } else if (key.compare("NIC_TOTAL_PAUSE_TIME") == 0) {
         conf >> nic_total_pause_time;
+      } else if (key.compare("NIC_COALESCE_METHOD") == 0) {
+        conf >> nic_coalesce_method;
+      } else if (key.compare("NACK_GEN_INTERVAL") == 0) {
+        conf >> nack_gen_interval;
+      } else if (key.compare("ENABLE_PFC") == 0) {
+        uint32_t v;
+        conf >> v;
+        enable_pfc = v;
       } else if (key.compare("PFC_OUTPUT_FILE") == 0) {
         conf >> pfc_output_file;
         pfc_output_file = extend_output_file_name(run_name, pfc_output_file);
@@ -629,6 +650,8 @@ bool ReadConf(const string& network_topo, const string& network_conf, const stri
         }
       } else if (key.compare("BUFFER_SIZE") == 0) {
         conf >> buffer_size;
+      } else if (key.compare("SWITCH_FORWARD_DELAY") == 0) {
+        conf >> switch_fw_delay;
       } else if (key.compare("QLEN_MON_FILE") == 0){
         conf >> qlen_mon_file;
         qlen_mon_file = extend_output_file_name(run_name, qlen_mon_file);
@@ -667,6 +690,22 @@ bool ReadConf(const string& network_topo, const string& network_conf, const stri
         conf >> pint_log_base;
       } else if (key.compare("PINT_PROB") == 0) {
         conf >> pint_prob;
+      } else if (key.compare("RDCQCN_EWMAGAIN") == 0) {
+        conf >> r_dcqcn_ewma_gain;
+      } else if (key.compare("RDCQCN_F") == 0) {
+        uint32_t v;
+        conf >> v;
+        r_dcqcn_f = v;
+      } else if (key.compare("RDCQCN_RATE_UPDATE_DELAY") == 0) {
+        conf >> r_dcqcn_rate_u_delay;
+      } else if (key.compare("RDCQCN_ALPHA_UPDATE_DELAY") == 0) {
+        conf >> r_dcqcn_alpha_u_delay;
+      } else if (key.compare("RDCQCN_BYTES_THRESHOLD") == 0) {
+        conf >> r_dcqcn_bytes_threshold;
+      } else if (key.compare("RDCQCN_CLAMP") == 0) {
+        uint32_t v;
+        conf >> v;
+        r_dcqcn_clamp = v;
       }
       fflush(stdout);
     }
@@ -675,11 +714,9 @@ bool ReadConf(const string& network_topo, const string& network_conf, const stri
 }
 
 void SetConfig() {
-  bool dynamicth = use_dynamic_pfc_threshold;
-
   Config::SetDefault("ns3::QbbNetDevice::PauseTime", UintegerValue(pause_time));
   Config::SetDefault("ns3::QbbNetDevice::QcnEnabled", BooleanValue(enable_qcn));
-  Config::SetDefault("ns3::QbbNetDevice::DynamicThreshold", BooleanValue(dynamicth));
+  Config::SetDefault("ns3::QbbNetDevice::DynamicThreshold", BooleanValue(use_dynamic_pfc_threshold));
 
   IntHop::multi = int_multi;
   if (cc_mode == 7) 
@@ -699,15 +736,17 @@ void SetConfig() {
   }
 }
 
-void SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),void (*send_finish)(FILE *, Ptr<RdmaQueuePair>)) {
+void SetupNetwork(
+    void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),
+    void (*message_finish)(FILE*, Ptr<RdmaQueuePair>, uint64_t, uint64_t),
+    void (*send_finish)(FILE *, Ptr<RdmaQueuePair>, uint64_t, uint64_t)) {
 
-  topof.open(topology_file.c_str());
+  topo_ifs.open(topology_file.c_str());
   flowf.open(flow_file.c_str());
   tracef.open(trace_file.c_str());
   string gpu_type_str;
 
-  topof >> node_num >> gpus_per_server >> nvswitch_num >> switch_num >>
-      link_num >> gpu_type_str;
+  topo_ifs >> node_num >> gpus_per_server >> nvswitch_num >> switch_num >> link_num >> gpu_type_str;
   flowf >> flow_num;
   tracef >> trace_num;
   if(gpu_type_str == "A100"){
@@ -725,23 +764,24 @@ void SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),void (*send_fini
   std::vector<uint32_t> node_type(node_num, 0);
   for (uint32_t i = 0; i < nvswitch_num; i++) {
     uint32_t sid;
-    topof >> sid;
+    topo_ifs >> sid;
     node_type[sid] = 2;
 	}
-	for (uint32_t i = 0; i < switch_num; i++)
-	{
+	for (uint32_t i = 0; i < switch_num; i++) {
 		uint32_t sid;
-		topof >> sid;
+		topo_ifs >> sid;
 		node_type[sid] = 1;
 	}
-	for (uint32_t i = 0; i < node_num; i++){
-		if (node_type[i] == 0)
-			n.Add(CreateObject<Node>());
-		else if(node_type[i] == 1){
+	for (uint32_t i = 0; i < node_num; i++) {
+		if (node_type[i] == 0) {
+		  n.Add(CreateObject<Node>());
+		} else if (node_type[i] == 1) {
 			Ptr<SwitchNode> sw = CreateObject<SwitchNode>();
 			n.Add(sw);
-			sw->SetAttribute("EcnEnabled", BooleanValue(enable_qcn));
-		}else if(node_type[i] == 2){
+		  sw->SetAttribute("EcnEnabled", BooleanValue(enable_qcn));
+		  sw->SetAttribute("PfcEnabled", BooleanValue(enable_pfc));
+		  sw->SetAttribute("ForwardDelay", DoubleValue(switch_fw_delay));
+		} else if (node_type[i] == 2) {
 			Ptr<NVSwitchNode> sw = CreateObject<NVSwitchNode>();
 			n.Add(sw);
 		}
@@ -778,7 +818,7 @@ void SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),void (*send_fini
     uint32_t src, dst;
     std::string data_rate, link_delay;
     double error_rate;
-    topof >> src >> dst >> data_rate >> link_delay >> error_rate;
+    topo_ifs >> src >> dst >> data_rate >> link_delay >> error_rate;
     Ptr<Node> snode = n.Get(src), dnode = n.Get(dst);
     
     qbb.SetDeviceAttribute("DataRate", StringValue(data_rate));
@@ -802,14 +842,12 @@ void SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),void (*send_fini
     if (snode->GetNodeType() == 0 || snode->GetNodeType() == 2) {
       Ptr<Ipv4> ipv4 = snode->GetObject<Ipv4>();
       ipv4->AddInterface(d.Get(0));
-      ipv4->AddAddress(
-          1, Ipv4InterfaceAddress(serverAddress[src], Ipv4Mask(0xff000000)));
+      ipv4->AddAddress(1, Ipv4InterfaceAddress(serverAddress[src], Ipv4Mask(0xff000000)));
     }
     if (dnode->GetNodeType() == 0 || dnode->GetNodeType() == 2) {
       Ptr<Ipv4> ipv4 = dnode->GetObject<Ipv4>();
       ipv4->AddInterface(d.Get(1));
-      ipv4->AddAddress(
-          1, Ipv4InterfaceAddress(serverAddress[dst], Ipv4Mask(0xff000000)));
+      ipv4->AddAddress(1, Ipv4InterfaceAddress(serverAddress[dst], Ipv4Mask(0xff000000)));
     }
 
     nbr2if[snode][dnode].idx =
@@ -866,7 +904,7 @@ void SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),void (*send_fini
         uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())
                              ->GetDelay()
                              .GetTimeStep();
-        uint32_t headroom = rate * delay / 8 / 1000000000 * 3;
+        uint32_t headroom = rate * delay / 8 / 1000000000 * 3 + packet_payload_size * 2;  // BDP + 2 packet;
         sw->m_mmu->ConfigHdrm(j, headroom);
         sw->m_mmu->pfc_a_shift[j] = shift;
         while (rate > nic_rate && sw->m_mmu->pfc_a_shift[j] > 0) {
@@ -879,7 +917,7 @@ void SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),void (*send_fini
       sw->m_mmu->node_id = sw->GetId();
     } else if(n.Get(i)->GetNodeType() == 2){ 
 			Ptr<NVSwitchNode> sw = DynamicCast<NVSwitchNode>(n.Get(i));
-      uint32_t shift = 3; 
+      uint32_t shift = 3;  //by default 1/
       for (uint32_t j = 1; j < sw->GetNDevices(); j++) {
         Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(sw->GetDevice(j));
         uint64_t rate = dev->GetDataRate().GetBitRate();
@@ -895,7 +933,7 @@ void SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),void (*send_fini
         }
       }
 			sw->m_mmu->ConfigNPort(sw->GetNDevices()-1);
-			sw->m_mmu->ConfigBufferSize(buffer_size* 1024 * 1024);
+			sw->m_mmu->ConfigBufferSize(buffer_size * 1024 * 1024);
 			sw->m_mmu->node_id = sw->GetId();
 		}
   }
@@ -905,37 +943,59 @@ void SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),void (*send_fini
   FILE *send_output = fopen(send_output_file.c_str(), "w");
   for (uint32_t i = 0; i < node_num; i++) {
     if (n.Get(i)->GetNodeType() == 0 || n.Get(i)->GetNodeType() == 2) { 
+      // create RdmaHw
       Ptr<RdmaHw> rdmaHw = CreateObject<RdmaHw>();
-      rdmaHw->SetAttribute("ClampTargetRate", BooleanValue(clamp_target_rate));
-      rdmaHw->SetAttribute("AlphaResumInterval",
-                           DoubleValue(alpha_resume_interval));
-      rdmaHw->SetAttribute("RPTimer", DoubleValue(rp_timer));
-      rdmaHw->SetAttribute("FastRecoveryTimes",
-                           UintegerValue(fast_recovery_times));
-      rdmaHw->SetAttribute("EwmaGain", DoubleValue(ewma_gain));
+      rdmaHw->SetAttribute("Mtu", UintegerValue(packet_payload_size));
+      rdmaHw->SetAttribute("CcMode", UintegerValue(cc_mode));
       rdmaHw->SetAttribute("RateAI", DataRateValue(DataRate(rate_ai)));
       rdmaHw->SetAttribute("RateHAI", DataRateValue(DataRate(rate_hai)));
-      rdmaHw->SetAttribute("L2BackToZero", BooleanValue(l2_back_to_zero));
+      rdmaHw->SetAttribute("MinRate", DataRateValue(DataRate(min_rate)));
       rdmaHw->SetAttribute("L2ChunkSize", UintegerValue(l2_chunk_size));
       rdmaHw->SetAttribute("L2AckInterval", UintegerValue(l2_ack_interval));
-      rdmaHw->SetAttribute("CcMode", UintegerValue(cc_mode));
-      rdmaHw->SetAttribute("RateDecreaseInterval",
-                           DoubleValue(rate_decrease_interval));
-      rdmaHw->SetAttribute("MinRate", DataRateValue(DataRate(min_rate)));
-      rdmaHw->SetAttribute("Mtu", UintegerValue(packet_payload_size));
-      rdmaHw->SetAttribute("MiThresh", UintegerValue(mi_thresh));
+      rdmaHw->SetAttribute("L2BackToZero", BooleanValue(l2_back_to_zero));
       rdmaHw->SetAttribute("VarWin", BooleanValue(var_win));
-      rdmaHw->SetAttribute("FastReact", BooleanValue(fast_react));
-      rdmaHw->SetAttribute("MultiRate", BooleanValue(multi_rate));
-      rdmaHw->SetAttribute("SampleFeedback", BooleanValue(sample_feedback));
-      rdmaHw->SetAttribute("TargetUtil", DoubleValue(u_target));
       rdmaHw->SetAttribute("RateBound", BooleanValue(rate_bound));
-      rdmaHw->SetAttribute("DctcpRateAI",
-                           DataRateValue(DataRate(dctcp_rate_ai)));
-      rdmaHw->SetAttribute("GPUsPerServer", UintegerValue(gpus_per_server));
-      rdmaHw->SetPintSmplThresh(pint_prob);
-      rdmaHw->SetAttribute("TotalPauseTimes",
-                           UintegerValue(nic_total_pause_time));
+      rdmaHw->SetAttribute("NicCoalesceMethod", StringValue(nic_coalesce_method));
+      rdmaHw->SetAttribute("NACKGenerationInterval", DoubleValue(nack_gen_interval));
+
+      switch (cc_mode) {
+      case 1:
+        // MellanoxDcqcn
+        rdmaHw->m_cc_configs.push_back(std::make_pair("AlphaResumInterval", DoubleValue(alpha_resume_interval).Copy()));
+        rdmaHw->m_cc_configs.push_back(std::make_pair("RateDecreaseInterval", DoubleValue(rate_decrease_interval).Copy()));
+        rdmaHw->m_cc_configs.push_back(std::make_pair("ClampTargetRate", BooleanValue(clamp_target_rate).Copy()));
+        rdmaHw->m_cc_configs.push_back(std::make_pair("RPTimer", DoubleValue(rp_timer).Copy()));
+        rdmaHw->m_cc_configs.push_back(std::make_pair("EwmaGain", DoubleValue(ewma_gain).Copy()));
+        rdmaHw->m_cc_configs.push_back(std::make_pair("FastRecoveryTimes", UintegerValue(fast_recovery_times).Copy()));
+        break;
+      case 3:
+        // Hpcc
+        rdmaHw->m_cc_configs.push_back(std::make_pair("FastReact", BooleanValue(fast_react).Copy()));
+        rdmaHw->m_cc_configs.push_back(std::make_pair("TargetUtil", DoubleValue(u_target).Copy()));
+        rdmaHw->m_cc_configs.push_back(std::make_pair("MiThresh", DoubleValue(mi_thresh).Copy()));
+        rdmaHw->m_cc_configs.push_back(std::make_pair("MultiRate", BooleanValue(multi_rate).Copy()));
+        rdmaHw->m_cc_configs.push_back(std::make_pair("SampleFeedback ", BooleanValue(sample_feedback).Copy()));
+        break;
+      case 8:
+        // Dctcp
+        rdmaHw->m_cc_configs.push_back(std::make_pair("DctcpRateAI", DataRateValue(DataRate(dctcp_rate_ai)).Copy()));
+        break;
+      case 10:
+        // HpccPint
+        rdmaHw->m_cc_configs.push_back(std::make_pair("PintProb", DoubleValue(pint_prob).Copy()));
+        break;
+      case 12:
+        // RealDcqcn
+        rdmaHw->m_cc_configs.push_back(std::make_pair("EwmaGain", DoubleValue(r_dcqcn_ewma_gain).Copy()));
+        rdmaHw->m_cc_configs.push_back(std::make_pair("F", UintegerValue(r_dcqcn_f).Copy()));
+        rdmaHw->m_cc_configs.push_back(std::make_pair("RateUpdateDelay", StringValue(r_dcqcn_rate_u_delay).Copy()));
+        rdmaHw->m_cc_configs.push_back(std::make_pair("AlphaUpdateDelay", StringValue(r_dcqcn_alpha_u_delay).Copy()));
+        rdmaHw->m_cc_configs.push_back(std::make_pair("BytesThreshold", UintegerValue(r_dcqcn_bytes_threshold).Copy()));
+        rdmaHw->m_cc_configs.push_back(std::make_pair("Clamp", BooleanValue(r_dcqcn_clamp).Copy()));
+        break;
+      default:;
+      }
+
       Ptr<RdmaDriver> rdma = CreateObject<RdmaDriver>();
       Ptr<Node> node = n.Get(i);
       rdma->SetNode(node);
@@ -944,7 +1004,8 @@ void SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),void (*send_fini
       node->AggregateObject(rdma);
       rdma->Init();
       rdma->TraceConnectWithoutContext("QpComplete", MakeBoundCallback(qp_finish, fct_output));
-      rdma->TraceConnectWithoutContext("SendComplete", MakeBoundCallback(send_finish,send_output));
+      rdma->TraceConnectWithoutContext("MessageComplete", MakeBoundCallback(message_finish, fct_output));
+      rdma->TraceConnectWithoutContext("SendComplete", MakeBoundCallback(send_finish, send_output));
     }
   }
 #endif
@@ -1037,7 +1098,7 @@ void SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),void (*send_fini
   }
   flow_input.idx = -1;
 
-  topof.close();
+  topo_ifs.close();
   tracef.close();
 
   if (link_down_time > 0) {

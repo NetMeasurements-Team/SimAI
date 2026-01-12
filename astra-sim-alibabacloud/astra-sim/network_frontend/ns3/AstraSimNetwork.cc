@@ -73,6 +73,7 @@ public:
   int sim_comm_size(AstraSim::sim_comm comm, int *size) { return 0; }
   int sim_finish() {
     for (auto it = nodeHash.begin(); it != nodeHash.end(); it++) {
+      Finish();
       pair<int, int> p = it->first;
       if (p.second == 0) {
         std::cout << "sim_finish on sent, " << " Thread id: " << pthread_self() << std::endl;
@@ -124,7 +125,7 @@ public:
       #endif
       sentHash[make_pair(tag, make_pair(t.src, t.dest))] = t;
     }
-    SendFlow(rank, dst, count, msg_handler, fun_arg, tag, request);
+    send_flow(rank, dst, count, msg_handler, fun_arg, tag, request);
     return 0;
   }
   virtual int sim_recv(void *buffer, uint64_t count, int type, int src, int tag,
@@ -270,7 +271,7 @@ int main(int argc, char *argv[]) {
   MtpInterface::Enable(user_param.thread);
   #endif
   
-  main1(user_param.network_topo, user_param.network_conf, user_param.run_name);
+  setup_ns3_simulation(user_param.network_topo, user_param.network_conf, user_param.run_name);
   int nodes_num = node_num - switch_num;
   int gpu_num = node_num - nvswitch_num - switch_num;
 
