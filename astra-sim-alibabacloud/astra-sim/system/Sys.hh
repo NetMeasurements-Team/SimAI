@@ -23,7 +23,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/topology/RingTopology.hh"
 #include "astra-sim/workload/Workload.hh"
 #ifdef NS3_MTP
-#include "ns3/mtp-interface.h"
+  #include "ns3/mtp-interface.h"
 #endif
 #include <atomic>
 #include "astra-sim/system/MockNcclGroup.h"
@@ -40,18 +40,11 @@ class Workload;
 class LogicalTopology;
 class BasicLogicalTopology;
 class OfflineGreedy;
-enum ParallelStrategy {
-    TP,
-    DP,
-    PP,
-    EP,
-    DP_EP,
-    NONE
-};
+enum ParallelStrategy { TP, DP, PP, EP, DP_EP, NONE };
 class Sys : public Callable {
- public:
+public:
   class SchedulerUnit {
-   public:
+  public:
     Sys* sys;
     int ready_list_threshold;
     int queue_threshold;
@@ -73,8 +66,8 @@ class Sys : public Callable {
         int queue_threshold);
     void notify_stream_removed(int vnet, Tick running_time);
     void notify_stream_added(int vnet);
-    void notify_stream_added_into_ready_list();
-    std::vector<double> get_average_latency_per_dimension();
+    void notify_stream_added_into_ready_list() const;
+    std::vector<double> get_average_latency_per_dimension() const;
   };
   SchedulerUnit* scheduler_unit;
   ~Sys();
@@ -83,20 +76,16 @@ class Sys : public Callable {
   int finished_workloads;
   int id;
   int npu_offset;
-  int nvswitch_id; 
+  int nvswitch_id;
   int num_gpus;
-  std::vector<int>NVSwitchs; 
+  std::vector<int> NVSwitchs;
   int ngpus_per_node;
   GPUType gpu_type;
 
-  std::vector<CollectiveImplementation*>
-      all_reduce_implementation_per_dimension;
-  std::vector<CollectiveImplementation*>
-      reduce_scatter_implementation_per_dimension;
-  std::vector<CollectiveImplementation*>
-      all_gather_implementation_per_dimension;
-  std::vector<CollectiveImplementation*>
-      all_to_all_implementation_per_dimension;
+  std::vector<CollectiveImplementation*> all_reduce_implementation_per_dimension;
+  std::vector<CollectiveImplementation*> reduce_scatter_implementation_per_dimension;
+  std::vector<CollectiveImplementation*> all_gather_implementation_per_dimension;
+  std::vector<CollectiveImplementation*> all_to_all_implementation_per_dimension;
   CollectiveOptimization collectiveOptimization;
 
   std::chrono::high_resolution_clock::time_point start_sim_time;
@@ -134,9 +123,9 @@ class Sys : public Callable {
   MemBus* memBus;
   int all_queues;
   std::list<BaseStream*> ready_list;
-  #ifdef PHY_MTP
+#ifdef PHY_MTP
   std::list<StreamBaseline*> running_list;
-  #endif
+#endif
   SchedulingPolicy scheduling_policy;
   int first_phase_streams;
   int total_running_streams;
@@ -147,8 +136,7 @@ class Sys : public Callable {
   std::vector<std::vector<std::string>> ata_ratio_data;
   QueueLevels* vLevels;
   std::map<std::string, LogicalTopology*> logical_topologies;
-  std::map<Tick, std::list<std::tuple<Callable*, EventType, CallData*>>>
-      event_queue;
+  std::map<Tick, std::list<std::tuple<Callable*, EventType, CallData*>>> event_queue;
   int total_nodes;
   static Tick offset;
   static std::vector<Sys*> all_generators;
@@ -180,40 +168,24 @@ class Sys : public Callable {
 
   void register_for_finished_stream(Callable* callable);
   void increase_finished_streams(int amount);
-  void zero_latecy_register_event(
-      Callable* callable,
-      EventType event,
-      CallData* callData,
-      int cycles);
-  void register_event(
-      Callable* callable,
-      EventType event,
-      CallData* callData,
-      int cycles);
+  void zero_latency_register_event(Callable* callable, EventType event, CallData* callData, int cycles);
+  void register_event(Callable* callable, EventType event, CallData* callData, int cycles);
   void insert_into_ready_list(BaseStream* stream);
-  #ifdef PHY_MTP
+#ifdef PHY_MTP
   void insert_into_running_list(StreamBaseline* stream);
-  #endif
+#endif
   void schedule(int num);
 
-  void register_phases(
-      BaseStream* stream,
-      std::list<CollectivePhase> phases_to_go);
+  void register_phases(const BaseStream* stream, const std::list<CollectivePhase>& phases_to_go);
   void call(EventType type, CallData* data);
-  void try_register_event(
-      Callable* callable,
-      EventType event,
-      CallData* callData,
-      Tick& cycles);
+  void try_register_event(Callable* callable, EventType event, CallData* callData, Tick& cycles);
   void call_events();
-  void workload_finished() {
-    finished_workloads++;
-  };
+  void workload_finished() { finished_workloads++; };
   static Tick boostedTick();
   static void exiting();
-  int nextPowerOf2(int n);
-  static void sys_panic(std::string msg);
-  void exitSimLoop(std::string msg);
+  static int nextPowerOf2(int n);
+  static void sys_panic(const std::string& msg);
+  void exitSimLoop(const std::string& msg) const;
   bool seprate_log;
 
   std::map<std::pair<int, int>, std::list<SimSendCaller*>> pending_sends;
@@ -247,8 +219,7 @@ class Sys : public Callable {
   std::string trim(const std::string& str, const std::string& whitespace);
   bool parse_var(std::string var, std::string value);
   bool post_process_inputs();
-  std::vector<CollectiveImplementation*>
-  generate_collective_implementation_from_input(std::string input);
+  std::vector<CollectiveImplementation*> generate_collective_implementation_from_input(std::string input);
   int break_dimension(int model_parallel_npu_group);
   int front_end_sim_send(
       Tick delay,
@@ -310,10 +281,10 @@ class Sys : public Callable {
       sim_request* request,
       void (*msg_handler)(void* fun_arg),
       void* fun_arg);
-  Tick mem_read(uint64_t bytes);
-  Tick mem_write(uint64_t bytes);
+  Tick mem_read(uint64_t bytes) const;
+  Tick mem_write(uint64_t bytes) const;
   static int get_layer_numbers(std::string workload_input);
-  std::vector<std::string> split_string(std::string str, std::string sep);
+  static std::vector<std::string> split_string(std::string str, std::string sep);
   DataSet* generate_all_reduce(
       uint64_t size,
       std::vector<bool> involved_dimensions,
@@ -362,23 +333,21 @@ class Sys : public Callable {
       InjectionPolicy injection_policy,
       CollectiveImplementation* collective_implementation,
       bool boost_mode);
-  void insert_stream(std::list<BaseStream*>* queue, BaseStream* baseStream);
+  void insert_stream(std::list<BaseStream*>* queue, BaseStream* baseStream) const;
   void proceed_to_next_vnet_baseline(StreamBaseline* stream);
-  uint64_t determine_chunk_size(uint64_t size, ComType type);
+  uint64_t determine_chunk_size(uint64_t size, ComType type) const;
   int get_priority(SchedulingPolicy pref_scheduling);
   static void handleEvent(void* arg);
-  timespec_t generate_time(int cycles);
+  timespec_t generate_time(int cycles) const;
 
   class SysCriticalSection {
   public:
     SysCriticalSection() {
-      while (g_sys_inCriticalSection.exchange (true, std::memory_order_acquire))
+      while (g_sys_inCriticalSection.exchange(true, std::memory_order_acquire))
         ;
     }
 
-    ~SysCriticalSection() {
-      ExitSection();
-    }
+    ~SysCriticalSection() { ExitSection(); }
 
     SysCriticalSection(const SysCriticalSection&) = delete;
     SysCriticalSection& operator=(const SysCriticalSection&) = delete;
@@ -386,34 +355,30 @@ class Sys : public Callable {
     SysCriticalSection& operator=(SysCriticalSection&&) = delete;
 
   private:
-    static void ExitSection() {
-        g_sys_inCriticalSection.store (false, std::memory_order_release);
-    }
+    static void ExitSection() { g_sys_inCriticalSection.store(false, std::memory_order_release); }
   };
 
   class SysExplicitCriticalSection {
   public:
     SysExplicitCriticalSection() {
-      while (g_sys_inCriticalSection.exchange (true, std::memory_order_acquire))
+      while (g_sys_inCriticalSection.exchange(true, std::memory_order_acquire))
         ;
     }
 
     ~SysExplicitCriticalSection() = default;
 
-    static void ExitSection() {
-      g_sys_inCriticalSection.store (false, std::memory_order_release);
-    }
+    static void ExitSection() { g_sys_inCriticalSection.store(false, std::memory_order_release); }
   };
 
   static std::atomic<bool> g_sys_inCriticalSection;
 
-  std::map<ParallelStrategy,MockNccl::MockNcclComm*> mock_nccl_comms;
-  std::map<std::pair<int,int>, MockNccl::SingleFlow> generate_net_test_flow_model(uint64_t data_size, int nums);
-  std::map<std::pair<int,int>, MockNccl::SingleFlow> generate_nvl_test_flow_model(uint64_t data_size, int nums);
-  std::shared_ptr<void> generate_flow_model(ParallelStrategy comm_ps,uint64_t data_size, ComType collective_type);
-  struct MockNccl::ncclInfo* get_nccl_Info(ParallelStrategy comm_ps, uint64_t data_size, ComType collective_type);
+  std::map<ParallelStrategy, MockNccl::MockNcclComm*> mock_nccl_comms;
+  static std::map<std::pair<int, int>, MockNccl::SingleFlow> generate_net_test_flow_model(uint64_t data_size, int nums);
+  static std::map<std::pair<int, int>, MockNccl::SingleFlow> generate_nvl_test_flow_model(uint64_t data_size, int nums);
+  std::shared_ptr<void> generate_flow_model(ParallelStrategy comm_ps, uint64_t data_size, ComType collective_type);
+  MockNccl::ncclInfo* get_nccl_Info(ParallelStrategy comm_ps, uint64_t data_size, ComType collective_type);
   bool mock_nccl_comms_init();
-  bool mock_nccl_grobal_group_init();
+  bool mock_nccl_grobal_group_init() const;
 };
 } // namespace AstraSim
 #endif

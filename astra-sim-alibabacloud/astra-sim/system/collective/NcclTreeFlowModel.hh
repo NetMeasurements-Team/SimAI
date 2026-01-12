@@ -1,4 +1,4 @@
-/* 
+/*
 *Copyright (c) 2024, Alibaba Group;
 *Licensed under the Apache License, Version 2.0 (the "License");
 *you may not use this file except in compliance with the License.
@@ -16,20 +16,12 @@
 #ifndef __NCCL_TREE_FLOW_MODEL_HH__
 #define __NCCL_TREE_FLOW_MODEL_HH__
 
-#include <assert.h>
-#include <math.h>
-#include<set>
 #include <algorithm>
+#include <assert.h>
 #include <chrono>
-#include <cstdint>
 #include <ctime>
-#include <fstream>
 #include <list>
 #include <map>
-#include <sstream>
-#include <tuple>
-#include <vector>
-#include<condition_variable>
 #include "Algorithm.hh"
 #include "astra-sim/system/Common.hh"
 #include "astra-sim/system/MemBus.hh"
@@ -38,7 +30,7 @@
 
 namespace AstraSim {
 class NcclTreeFlowModel : public Algorithm {
- public:
+public:
   std::chrono::time_point<std::chrono::high_resolution_clock> start_time;
   std::chrono::time_point<std::chrono::high_resolution_clock> end_time;
   MemBus::Transmition transmition;
@@ -50,27 +42,27 @@ class NcclTreeFlowModel : public Algorithm {
   int parallel_reduce;
   std::map<std::pair<int, int>, std::list<MyPacket>> packets;
   bool toggle;
-  std::map<std::pair<int,int>, int> free_packets;
+  std::map<std::pair<int, int>, int> free_packets;
   bool processed;
   bool send_back;
   bool NPU_to_MA;
 
   std::map<int, int> indegree_mapping;
   std::map<int, int> inprocessing_indegree;
-  std::map<int, int> *zero_latency_packets;
-  std::map<int, int> *non_zero_latency_packets;
+  std::map<int, int>* zero_latency_packets;
+  std::map<int, int>* non_zero_latency_packets;
   MockNccl::FlowModels _flow_models;
   uint32_t m_channels;
   uint32_t len_channel;
-  #if PHY_RDMA
-  //std::condition_variable judge_exit_cv;
-  //std::mutex judge_exit_mutex;
-  //std::mutex judge_mutex;
+#if PHY_RDMA
+  // std::condition_variable judge_exit_cv;
+  // std::mutex judge_exit_mutex;
+  // std::mutex judge_mutex;
   std::atomic<bool> judge_exit_flag;
-  #endif
+#endif
 
-  NcclTreeFlowModel(){};
-  ~NcclTreeFlowModel() override {};
+  NcclTreeFlowModel() {}
+  ~NcclTreeFlowModel() override {}
 
   NcclTreeFlowModel(
       ComType type,
@@ -94,11 +86,11 @@ class NcclTreeFlowModel : public Algorithm {
   bool recv_ready(int channel_id, int flow_id);
   bool init_recv_ready();
   void exit() override;
-  #ifdef PHY_MTP
+#ifdef PHY_MTP
   bool phy_iteratable(int channel_id);
-  bool phy_ready(int channel_id,int flow_id);
+  bool phy_ready(int channel_id, int flow_id);
   void waiting_to_exit();
-  #endif
+#endif
   class FlowCriticalSection {
   public:
     /**
@@ -110,7 +102,7 @@ class NcclTreeFlowModel : public Algorithm {
      * not moved before this point.
      */
     FlowCriticalSection() {
-      while (g_flow_inCriticalSection.exchange (true, std::memory_order_acquire))
+      while (g_flow_inCriticalSection.exchange(true, std::memory_order_acquire))
         ;
     }
 
@@ -121,9 +113,7 @@ class NcclTreeFlowModel : public Algorithm {
      * scope (RAII). The 'release' memory order ensures that preceding memory
      * operations are not moved after this point.
      */
-    ~FlowCriticalSection() {
-      this->ExitSection();
-    }
+    ~FlowCriticalSection() { this->ExitSection(); }
 
     FlowCriticalSection(const FlowCriticalSection&) = delete;
     FlowCriticalSection& operator=(const FlowCriticalSection&) = delete;
@@ -138,9 +128,7 @@ class NcclTreeFlowModel : public Algorithm {
      * to prevent a thread from releasing the lock twice (possibly releasing it while
      * someone else was holding it).
      */
-    static void ExitSection() {
-      g_flow_inCriticalSection.store(false, std::memory_order_release);
-    }
+    static void ExitSection() { g_flow_inCriticalSection.store(false, std::memory_order_release); }
   };
 
   /**
@@ -159,7 +147,7 @@ class NcclTreeFlowModel : public Algorithm {
      * not moved before this point.
      */
     FlowExplicitCriticalSection() {
-      while (g_flow_inCriticalSection.exchange (true, std::memory_order_acquire))
+      while (g_flow_inCriticalSection.exchange(true, std::memory_order_acquire))
         ;
     }
 
@@ -183,9 +171,7 @@ class NcclTreeFlowModel : public Algorithm {
      * results in undefined behavior, as it would release a lock that the caller
      * does not hold.
      */
-    static void ExitSection() {
-      g_flow_inCriticalSection.store (false, std::memory_order_release);
-    }
+    static void ExitSection() { g_flow_inCriticalSection.store(false, std::memory_order_release); }
   };
 
   static std::atomic<bool> g_flow_inCriticalSection;

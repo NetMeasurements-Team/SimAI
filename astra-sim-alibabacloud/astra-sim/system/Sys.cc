@@ -5,30 +5,26 @@ LICENSE file in the root directory of this source tree.
 
 #include "Sys.hh"
 #include "BaseStream.hh"
+#include "Common.hh"
 #include "DataSet.hh"
 #include "MemBus.hh"
 #include "QueueLevels.hh"
+#include "RendezvousRecvData.hh"
+#include "RendezvousSendData.hh"
 #include "SimRecvCaller.hh"
 #include "SimSendCaller.hh"
 #include "StreamBaseline.hh"
-#include "Common.hh"
-#include "RendezvousRecvData.hh"
-#include "RendezvousSendData.hh"
-#include "calbusbw.h"
+#include "astra-sim/system/MockNcclLog.h"
 #include "astra-sim/system/collective/AllToAll.hh"
 #include "astra-sim/system/collective/DoubleBinaryTreeAllReduce.hh"
 #include "astra-sim/system/collective/HalvingDoubling.hh"
-#include "astra-sim/system/collective/Ring.hh"
 #include "astra-sim/system/collective/NcclTreeFlowModel.hh"
+#include "astra-sim/system/collective/Ring.hh"
 #include "astra-sim/system/scheduling/OfflineGreedy.hh"
-#include "astra-sim/system/topology/BasicLogicalTopology.hh"
-#include "astra-sim/system/topology/DoubleBinaryTreeTopology.hh"
 #include "astra-sim/system/topology/GeneralComplexTopology.hh"
 #include "astra-sim/system/topology/LocalRingGlobalBinaryTree.hh"
-#include "astra-sim/system/topology/LocalRingNodeA2AGlobalDBT.hh"
-#include "astra-sim/system/topology/Torus3D.hh"
-#include "astra-sim/system/MockNcclLog.h"
 #include "astra-sim/workload/Layer.hh"
+#include "calbusbw.h"
 
 #include <algorithm>
 #include <cmath>
@@ -44,33 +40,25 @@ std::vector<Sys*> Sys::all_generators;
 
 Sys::~Sys() {
   end_sim_time = std::chrono::high_resolution_clock::now();
-  auto duration = std::chrono::duration_cast<std::chrono::minutes>(
-      end_sim_time - start_sim_time);
+  const auto duration = std::chrono::duration_cast<std::chrono::minutes>(end_sim_time - start_sim_time);
   if (id == 0) {
-    auto timenow =
-        std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    auto time_now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::cout << "*****" << std::endl
-              << "Time to exit: " << ctime(&timenow)
-              << "all-reduce Collective implementation: "
-              << inp_all_reduce_implementation << std::endl
-              << "reduce-scatter Collective implementation: "
-              << inp_reduce_scatter_implementation << std::endl
-              << "all-gather Collective implementation: "
-              << inp_all_gather_implementation << std::endl
-              << "all-to-all Collective implementation: "
-              << inp_all_to_all_implementation << std::endl
-              << "Collective optimization: " << inp_collective_optimization
+              << "Time to exit: " << ctime(&time_now)
+              << "all-reduce Collective implementation: " << inp_all_reduce_implementation << std::endl
+              << "reduce-scatter Collective implementation: " << inp_reduce_scatter_implementation << std::endl
+              << "all-gather Collective implementation: " << inp_all_gather_implementation << std::endl
+              << "all-to-all Collective implementation: " << inp_all_to_all_implementation << std::endl
+              << "Collective optimization: " << inp_collective_optimization << std::endl
+              << "Total sim duration: " << duration.count() / 60 << ":" << duration.count() % 60 << " hours"
               << std::endl
-              << "Total sim duration: " << duration.count() / 60 << ":"
-              << duration.count() % 60 << " hours" << std::endl
               << "Total streams injected: " << streams_injected << std::endl
               << "Total streams finished: " << streams_finished << std::endl
-              << "Percentage of finished streams: "
-              << (((double)streams_finished) / streams_injected) * 100 << " %"
+              << "(" << (static_cast<double>(streams_finished) / streams_injected) * 100 << " %)"
               << std::endl
               << "*****" << std::endl;
   }
-  #ifndef PHY_MTP
+#ifndef PHY_MTP
   all_generators[id + npu_offset] = nullptr;
   for (auto lt : logical_topologies) {
     delete lt.second;
@@ -99,10 +87,9 @@ Sys::~Sys() {
   if (offline_greedy != nullptr)
     delete offline_greedy;
   bool shouldExit = true;
-  
-  for(int i = 0; i < num_gpus; ++ i) {
-    auto& a = all_generators[i];
-    if (a != nullptr) {
+
+  for (int i = 0; i < num_gpus; ++i) {
+    if (const auto& a = all_generators[i]; a != nullptr) {
       shouldExit = false;
       break;
     }
@@ -111,9 +98,9 @@ Sys::~Sys() {
   if (shouldExit) {
     exitSimLoop("Exiting");
   }
-  #else
-    exitSimLoop("Exiting");
-  #endif
+#else
+  exitSimLoop("Exiting");
+#endif
 }
 
 Sys::Sys(
@@ -136,8 +123,8 @@ Sys::Sys(
     bool seprate_log,
     bool rendezvous_enabled,
     GPUType _gpu_type,
-    std::vector<int>_all_gpus,
-    std::vector<int>_NVSwitchs,
+    std::vector<int> _all_gpus,
+    std::vector<int> _NVSwitchs,
     int _ngpus_per_node) {
   scheduler_unit = nullptr;
   vLevels = nullptr;
@@ -155,7 +142,7 @@ Sys::Sys(
   this->NI = NI;
   this->MEM = MEM;
   this->id = id;
-  this->npu_offset=npu_offset;
+  this->npu_offset = npu_offset;
   this->method = "baseline";
   this->finished_workloads = 0;
   this->streams_finished = 0;
@@ -182,7 +169,7 @@ Sys::Sys(
   if ((id + npu_offset + 1) > all_generators.size()) {
     all_generators.resize(id + npu_offset + 1);
   }
-  all_generators[id+npu_offset] = this;
+  all_generators[id + npu_offset] = this;
 
   inp_scheduling_policy = "LIFO";
   communication_delay = 10 * injection_scale;
@@ -197,8 +184,7 @@ Sys::Sys(
   bool result = post_process_inputs();
 
   if (result == false) {
-    sys_panic(
-        "Unable to initialize the system layer because the file can not be openned");
+    sys_panic("Unable to initialize the system layer because the file can not be opened");
   }
 
   this->pending_events = 0;
@@ -209,12 +195,10 @@ Sys::Sys(
   int element = 0;
   all_queues = 0;
   total_nodes = 1;
-  for (int current_dim = 0; current_dim < queues_per_dim.size();
-       current_dim++) {
+  for (int current_dim = 0; current_dim < queues_per_dim.size(); current_dim++) {
     all_queues += queues_per_dim[current_dim];
     bool enabled = !boost_mode;
-    if (id % total_nodes == 0 &&
-        id < total_nodes * physical_dims[current_dim]) {
+    if (id % total_nodes == 0 && id < total_nodes * physical_dims[current_dim]) {
       enabled = true;
     }
     if (!enabled) {
@@ -235,82 +219,53 @@ Sys::Sys(
     NI->enabled = false;
     std::cout << "Node " << id << " has been totally disabled" << std::endl;
   }
-  concurrent_streams =
-      (int)std::ceil(((double)active_chunks_per_dimension) / queues_per_dim[0]);
+  concurrent_streams = (int)std::ceil(((double)active_chunks_per_dimension) / queues_per_dim[0]);
   active_first_phase = 100000000;
   if (id == 0) {
-    std::cout
-        << "The final active chunks per dimension 1 after allocating to queues is: "
-        << concurrent_streams * queues_per_dim[0] << std::endl;
+    std::cout << "The final active chunks per dimension 1 after allocating to queues is: "
+              << concurrent_streams * queues_per_dim[0] << std::endl;
   }
   max_running = 100000000;
-  scheduler_unit = new SchedulerUnit(
-      this,
-      queues_per_dim,
-      max_running,
-      active_first_phase,
-      concurrent_streams);
+  scheduler_unit = new SchedulerUnit(this, queues_per_dim, max_running, active_first_phase, concurrent_streams);
   vLevels = new QueueLevels(queues_per_dim, 0, NI->get_backend_type());
 
-  logical_topologies["AllReduce"] = new GeneralComplexTopology(
-      id, physical_dims, all_reduce_implementation_per_dimension);
-  logical_topologies["ReduceScatter"] = new GeneralComplexTopology(
-      id, physical_dims, reduce_scatter_implementation_per_dimension);
-  logical_topologies["AllGather"] = new GeneralComplexTopology(
-      id, physical_dims, all_gather_implementation_per_dimension);
-  logical_topologies["AllToAll"] = new GeneralComplexTopology(
-      id, physical_dims, all_to_all_implementation_per_dimension);
+  logical_topologies["AllReduce"] =
+      new GeneralComplexTopology(id, physical_dims, all_reduce_implementation_per_dimension);
+  logical_topologies["ReduceScatter"] =
+      new GeneralComplexTopology(id, physical_dims, reduce_scatter_implementation_per_dimension);
+  logical_topologies["AllGather"] =
+      new GeneralComplexTopology(id, physical_dims, all_gather_implementation_per_dimension);
+  logical_topologies["AllToAll"] =
+      new GeneralComplexTopology(id, physical_dims, all_to_all_implementation_per_dimension);
   stream_counter = 0;
   if (id == 0) {
     std::atexit(exiting);
     std::cout << "total nodes: " << total_nodes << std::endl;
   }
-  #ifdef ANALYTI
+#ifdef ANALYTI
   nic_ratio_data = readCSV(NIC_RATIO_PATH);
   nvlink_ratio_data = readCSV(NVLINK_RATIO_PATH);
   ata_ratio_data = readCSV(ATA_RATIO_PATH);
-  #endif
+#endif
   NI->sim_init(MEM);
-  memBus = new MemBus(
-      "NPU",
-      "MA",
-      this,
-      inp_L,
-      inp_o,
-      inp_g,
-      inp_G,
-      model_shared_bus,
-      communication_delay,
-      true);
-  workload = new Workload(
-      run_name,
-      this,
-      my_workload,
-      num_passes,
-      total_stat_rows,
-      stat_row,
-      path,
-      this->seprate_log);
+  memBus = new MemBus("NPU", "MA", this, inp_L, inp_o, inp_g, inp_G, model_shared_bus, communication_delay, true);
+  workload = new Workload(run_name, this, my_workload, num_passes, total_stat_rows, stat_row, path, this->seprate_log);
   if (workload->initialized == false) {
-    sys_panic(
-        "Unable to initialize the workload layer because it can not open the workload file");
+    sys_panic("Unable to initialize the workload layer because it can not open the workload file");
     return;
   }
-  #if defined(NS3_MTP) || defined(NS3_MPI) || defined(PHY_MTP)
+#if defined(NS3_MTP) || defined(NS3_MPI) || defined(PHY_MTP)
   result = mock_nccl_grobal_group_init();
-  if(result == false) {
-    sys_panic(
-        "Unable to initialize the system grobal group because the file can not be openned");
+  if (result == false) {
+    sys_panic("Unable to initialize the system global group because the file can not be opened");
   }
   result = mock_nccl_comms_init();
   if (result == false) {
-    sys_panic(
-        "Unable to initialize the system mockncclComm because the file can not be openned");
+    sys_panic("Unable to initialize the system mock_nccl_comms because the file can not be opened");
   }
-  #endif
+#endif
   if (inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedy ||
-      inter_dimension_scheduling ==
-          InterDimensionScheduling::OfflineGreedyFlex) {
+      inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedyFlex) {
     offline_greedy = new OfflineGreedy(this);
   }
   this->initialized = true;
@@ -323,12 +278,9 @@ int Sys::break_dimension(int model_parallel_npu_group) {
   int dimension_to_break = 0;
   int all_npus = 1;
   for (; dimension_to_break < physical_dims.size(); dimension_to_break++) {
-    if (all_npus * physical_dims[dimension_to_break] <
-        model_parallel_npu_group) {
+    if (all_npus * physical_dims[dimension_to_break] < model_parallel_npu_group) {
       all_npus *= physical_dims[dimension_to_break];
-    } else if (
-        all_npus * physical_dims[dimension_to_break] >
-        model_parallel_npu_group) {
+    } else if (all_npus * physical_dims[dimension_to_break] > model_parallel_npu_group) {
       for (auto lt : logical_topologies) {
         delete lt.second;
       }
@@ -339,12 +291,7 @@ int Sys::break_dimension(int model_parallel_npu_group) {
       std::vector<int>::iterator levelIterator = queues_per_dim.begin();
       std::advance(levelIterator, dimension_to_break);
       queues_per_dim.insert(levelIterator, queues_per_dim[dimension_to_break]);
-      scheduler_unit = new SchedulerUnit(
-          this,
-          queues_per_dim,
-          max_running,
-          active_first_phase,
-          concurrent_streams);
+      scheduler_unit = new SchedulerUnit(this, queues_per_dim, max_running, active_first_phase, concurrent_streams);
       vLevels = new QueueLevels(queues_per_dim, 0, NI->get_backend_type());
 
       int first_subdim = model_parallel_npu_group / all_npus;
@@ -360,25 +307,22 @@ int Sys::break_dimension(int model_parallel_npu_group) {
         }
       }
 
-      std::vector<CollectiveImplementation*>::iterator it =
-          all_reduce_implementation_per_dimension.begin();
+      std::vector<CollectiveImplementation*>::iterator it = all_reduce_implementation_per_dimension.begin();
       if (all_reduce_implementation_per_dimension.size() > dimension_to_break) {
         std::advance(it, dimension_to_break);
       } else {
         std::advance(it, all_reduce_implementation_per_dimension.size());
       }
-      CollectiveImplementation* replicate =
-          (CollectiveImplementation*)(*it)->clone();
+      auto replicate = static_cast<CollectiveImplementation*>((*it)->clone());
       all_reduce_implementation_per_dimension.insert(it, replicate);
 
       it = reduce_scatter_implementation_per_dimension.begin();
-      if (reduce_scatter_implementation_per_dimension.size() >
-          dimension_to_break) {
+      if (reduce_scatter_implementation_per_dimension.size() > dimension_to_break) {
         std::advance(it, dimension_to_break);
       } else {
         std::advance(it, reduce_scatter_implementation_per_dimension.size());
       }
-      replicate = (CollectiveImplementation*)(*it)->clone();
+      replicate = static_cast<CollectiveImplementation*>((*it)->clone());
       reduce_scatter_implementation_per_dimension.insert(it, replicate);
 
       it = all_gather_implementation_per_dimension.begin();
@@ -387,7 +331,7 @@ int Sys::break_dimension(int model_parallel_npu_group) {
       } else {
         std::advance(it, all_gather_implementation_per_dimension.size());
       }
-      replicate = (CollectiveImplementation*)(*it)->clone();
+      replicate = static_cast<CollectiveImplementation*>((*it)->clone());
       all_gather_implementation_per_dimension.insert(it, replicate);
 
       it = all_to_all_implementation_per_dimension.begin();
@@ -396,32 +340,31 @@ int Sys::break_dimension(int model_parallel_npu_group) {
       } else {
         std::advance(it, all_to_all_implementation_per_dimension.size());
       }
-      replicate = (CollectiveImplementation*)(*it)->clone();
+      replicate = static_cast<CollectiveImplementation*>((*it)->clone());
       all_to_all_implementation_per_dimension.insert(it, replicate);
-      logical_topologies["AllReduce"] = new GeneralComplexTopology(
-          id, logical_dims, all_reduce_implementation_per_dimension);
-      logical_topologies["ReduceScatter"] = new GeneralComplexTopology(
-          id, logical_dims, reduce_scatter_implementation_per_dimension);
-      logical_topologies["AllGather"] = new GeneralComplexTopology(
-          id, logical_dims, all_gather_implementation_per_dimension);
-      logical_topologies["AllToAll"] = new GeneralComplexTopology(
-          id, logical_dims, all_to_all_implementation_per_dimension);
+      logical_topologies["AllReduce"] =
+          new GeneralComplexTopology(id, logical_dims, all_reduce_implementation_per_dimension);
+      logical_topologies["ReduceScatter"] =
+          new GeneralComplexTopology(id, logical_dims, reduce_scatter_implementation_per_dimension);
+      logical_topologies["AllGather"] =
+          new GeneralComplexTopology(id, logical_dims, all_gather_implementation_per_dimension);
+      logical_topologies["AllToAll"] =
+          new GeneralComplexTopology(id, logical_dims, all_to_all_implementation_per_dimension);
       this->logical_broken_dims = logical_dims;
       this->dim_to_break = dimension_to_break;
-      
 
       return dimension_to_break;
-    } else if (
-        all_npus * physical_dims[dimension_to_break] ==
-        model_parallel_npu_group) {
+    } else if (all_npus * physical_dims[dimension_to_break] == model_parallel_npu_group) {
       return dimension_to_break;
     }
   }
   return -1;
 }
+
 int Sys::get_layer_numbers(std::string workload_input) {
   return Workload::get_layer_numbers(workload_input);
 }
+
 int Sys::get_priority(SchedulingPolicy pref_scheduling) {
   if (pref_scheduling == SchedulingPolicy::None) {
     if (scheduling_policy == SchedulingPolicy::LIFO) {
@@ -439,6 +382,7 @@ int Sys::get_priority(SchedulingPolicy pref_scheduling) {
     }
   }
 }
+
 int Sys::rendezvous_sim_send(
     Tick delay,
     void* buffer,
@@ -449,27 +393,18 @@ int Sys::rendezvous_sim_send(
     sim_request* request,
     void (*msg_handler)(void* fun_arg),
     void* fun_arg) {
-  RendezvousSendData* rsd = new RendezvousSendData(
-      id, this, buffer, count, type, dst, tag, *request, msg_handler, fun_arg);
+  const auto rsd = new RendezvousSendData(id, this, buffer, count, type, dst, tag, *request, msg_handler, fun_arg);
   sim_request newReq = *request;
-  uint64_t rendevouz_size = 8192;
+  constexpr uint64_t rendezvous_size = 8192;
   newReq.dstRank = request->srcRank;
   newReq.srcRank = request->dstRank;
-  newReq.reqCount = rendevouz_size;
-  int newTag = tag + 500000000;
+  newReq.reqCount = rendezvous_size;
+  const int newTag = tag + 500000000;
   newReq.tag = newTag;
-  sim_recv(
-      delay,
-      buffer,
-      rendevouz_size,
-      type,
-      dst,
-      newTag,
-      &newReq,
-      &Sys::handleEvent,
-      rsd);
+  sim_recv(delay, buffer, rendezvous_size, type, dst, newTag, &newReq, &Sys::handleEvent, rsd);
   return 1;
 }
+
 int Sys::sim_send(
     Tick delay,
     void* buffer,
@@ -482,30 +417,19 @@ int Sys::sim_send(
     void* fun_arg) {
   if (delay == 0 && fun_arg == nullptr) {
     SysCriticalSection cs;
-      
-    SendPacketEventHandlerData* fun_arg_tmp =
-        new SendPacketEventHandlerData(this, id+npu_offset, dst, tag);
-    fun_arg = (void*)fun_arg_tmp;
+
+    const auto fun_arg_tmp = new SendPacketEventHandlerData(this, id + npu_offset, dst, tag);
+    fun_arg = static_cast<void*>(fun_arg_tmp);
     if (is_there_pending_sends.find(std::make_pair(dst, tag)) == is_there_pending_sends.end() ||
-    is_there_pending_sends[std::make_pair(dst, tag)] == false) {
+        is_there_pending_sends[std::make_pair(dst, tag)] == false) {
       is_there_pending_sends[std::make_pair(dst, tag)] = true;
     } else {
-      if (pending_sends.find(std::make_pair(dst, tag)) ==
-          pending_sends.end()) {
+      if (pending_sends.find(std::make_pair(dst, tag)) == pending_sends.end()) {
         std::list<SimSendCaller*> tmp;
         pending_sends[std::make_pair(dst, tag)] = tmp;
       }
       pending_sends[std::make_pair(dst, tag)].push_back(
-          new SimSendCaller(
-              this,
-              buffer,
-              count,
-              type,
-              dst,
-              tag,
-              *request,
-              msg_handler,
-              fun_arg));
+          new SimSendCaller(this, buffer, count, type, dst, tag, *request, msg_handler, fun_arg));
       return 1;
     }
   }
@@ -514,22 +438,14 @@ int Sys::sim_send(
     NI->sim_send(buffer, count, type, dst, tag, request, msg_handler, fun_arg);
   } else {
     try_register_event(
-        new SimSendCaller(
-            this,
-            buffer,
-            count,
-            type,
-            dst,
-            tag,
-            *request,
-            msg_handler,
-            fun_arg),
+        new SimSendCaller(this, buffer, count, type, dst, tag, *request, msg_handler, fun_arg),
         EventType::General,
         nullptr,
         delay);
   }
   return 1;
 }
+
 int Sys::front_end_sim_send(
     Tick delay,
     void* buffer,
@@ -541,13 +457,12 @@ int Sys::front_end_sim_send(
     void (*msg_handler)(void* fun_arg),
     void* fun_arg) {
   if (rendezvous_enabled) {
-    return rendezvous_sim_send(
-        delay, buffer, count, type, dst, tag, request, msg_handler, fun_arg);
+    return rendezvous_sim_send(delay, buffer, count, type, dst, tag, request, msg_handler, fun_arg);
   } else {
-    return sim_send(
-        delay, buffer, count, type, dst, tag, request, msg_handler, fun_arg);
+    return sim_send(delay, buffer, count, type, dst, tag, request, msg_handler, fun_arg);
   }
 }
+
 int Sys::rendezvous_sim_recv(
     Tick delay,
     void* buffer,
@@ -558,27 +473,18 @@ int Sys::rendezvous_sim_recv(
     sim_request* request,
     void (*msg_handler)(void* fun_arg),
     void* fun_arg) {
-  RendezvousRecvData* rrd = new RendezvousRecvData(
-      id, this, buffer, count, type, src, tag, *request, msg_handler, fun_arg);
+  const auto rrd = new RendezvousRecvData(id, this, buffer, count, type, src, tag, *request, msg_handler, fun_arg);
   sim_request newReq = *request;
-  uint64_t rendevouz_size = 8192;
+  constexpr uint64_t rendezvous_size = 8192;
   newReq.dstRank = request->srcRank;
   newReq.srcRank = request->dstRank;
-  newReq.reqCount = rendevouz_size;
-  int newTag = tag + 500000000;
+  newReq.reqCount = rendezvous_size;
+  const int newTag = tag + 500000000;
   newReq.tag = newTag;
-  sim_send(
-      delay,
-      buffer,
-      rendevouz_size,
-      type,
-      src,
-      newTag,
-      &newReq,
-      &Sys::handleEvent,
-      rrd);
+  sim_send(delay, buffer, rendezvous_size, type, src, newTag, &newReq, &Sys::handleEvent, rrd);
   return 1;
 }
+
 int Sys::sim_recv(
     Tick delay,
     void* buffer,
@@ -593,22 +499,14 @@ int Sys::sim_recv(
     NI->sim_recv(buffer, count, type, src, tag, request, msg_handler, fun_arg);
   } else {
     try_register_event(
-        new SimRecvCaller(
-            this,
-            buffer,
-            count,
-            type,
-            src,
-            tag,
-            *request,
-            msg_handler,
-            fun_arg),
+        new SimRecvCaller(this, buffer, count, type, src, tag, *request, msg_handler, fun_arg),
         EventType::General,
         nullptr,
         delay);
   }
   return 1;
 }
+
 int Sys::front_end_sim_recv(
     Tick delay,
     void* buffer,
@@ -620,14 +518,13 @@ int Sys::front_end_sim_recv(
     void (*msg_handler)(void* fun_arg),
     void* fun_arg) {
   if (rendezvous_enabled) {
-    return rendezvous_sim_recv(
-        delay, buffer, count, type, src, tag, request, msg_handler, fun_arg);
+    return rendezvous_sim_recv(delay, buffer, count, type, src, tag, request, msg_handler, fun_arg);
   } else {
-    return sim_recv(
-        delay, buffer, count, type, src, tag, request, msg_handler, fun_arg);
+    return sim_recv(delay, buffer, count, type, src, tag, request, msg_handler, fun_arg);
   }
 }
-Tick Sys::mem_read(uint64_t bytes) {
+
+Tick Sys::mem_read(const uint64_t bytes) const {
   if (MEM == nullptr) {
     return 10;
   }
@@ -635,66 +532,58 @@ Tick Sys::mem_read(uint64_t bytes) {
   Tick delay_cycles = delay_ns / CLOCK_PERIOD;
   return delay_cycles;
 }
-Tick Sys::mem_write(uint64_t bytes) {
+
+Tick Sys::mem_write(const uint64_t bytes) const {
   if (MEM == nullptr) {
     return 10;
   }
-  uint64_t delay_ns = MEM->npu_mem_write(bytes);
-  Tick delay_cycles = delay_ns / CLOCK_PERIOD;
+  const uint64_t delay_ns = MEM->npu_mem_write(bytes);
+  const Tick delay_cycles = delay_ns / CLOCK_PERIOD;
   return delay_cycles;
 }
-std::string Sys::trim(
-    const std::string& str,
-    const std::string& whitespace = " \t") {
+
+std::string Sys::trim(const std::string& str, const std::string& whitespace = " \t") {
   const auto strBegin = str.find_first_not_of(whitespace);
-  if (strBegin == std::string::npos)
-    return ""; 
+  if (strBegin == std::string::npos) {
+    return "";
+  }
 
   const auto strEnd = str.find_last_not_of(whitespace);
   const auto strRange = strEnd - strBegin + 1;
 
   return str.substr(strBegin, strRange);
 }
-std::vector<CollectiveImplementation*> Sys::
-    generate_collective_implementation_from_input(std::string input) {
+
+std::vector<CollectiveImplementation*> Sys::generate_collective_implementation_from_input(const std::string input) {
   std::vector<std::string> inputs_per_dimension = split_string(input, "_");
   std::vector<CollectiveImplementation*> result;
   for (std::string dimension_input : inputs_per_dimension) {
     if (dimension_input == "ring") {
-      result.push_back(
-          new CollectiveImplementation(CollectiveImplementationType::Ring));
+      result.push_back(new CollectiveImplementation(CollectiveImplementationType::Ring));
     } else if (dimension_input == "oneRing") {
-      result.push_back(
-          new CollectiveImplementation(CollectiveImplementationType::OneRing));
+      result.push_back(new CollectiveImplementation(CollectiveImplementationType::OneRing));
     } else if (dimension_input == "doubleBinaryTree") {
-      result.push_back(new CollectiveImplementation(
-          CollectiveImplementationType::DoubleBinaryTree));
+      result.push_back(new CollectiveImplementation(CollectiveImplementationType::DoubleBinaryTree));
     } else if (dimension_input.rfind("direct", 0) == 0) {
       int window = -1;
       if (dimension_input != "direct") {
         window = std::stoi(dimension_input.substr(6, 5));
       }
-      result.push_back(new DirectCollectiveImplementation(
-          CollectiveImplementationType::Direct, window));
+      result.push_back(new DirectCollectiveImplementation(CollectiveImplementationType::Direct, window));
     } else if (dimension_input.rfind("oneDirect", 0) == 0) {
       int window = -1;
       if (dimension_input != "oneDirect") {
         window = std::stoi(dimension_input.substr(9, 5));
       }
-      result.push_back(new DirectCollectiveImplementation(
-          CollectiveImplementationType::OneDirect, window));
+      result.push_back(new DirectCollectiveImplementation(CollectiveImplementationType::OneDirect, window));
     } else if (dimension_input == "halvingDoubling") {
-      result.push_back(new CollectiveImplementation(
-          CollectiveImplementationType::HalvingDoubling));
+      result.push_back(new CollectiveImplementation(CollectiveImplementationType::HalvingDoubling));
     } else if (dimension_input == "oneHalvingDoubling") {
-      result.push_back(new CollectiveImplementation(
-          CollectiveImplementationType::OneHalvingDoubling));
-    } else if(dimension_input == "NcclFlowModel") {
-      result.push_back(new CollectiveImplementation(
-          CollectiveImplementationType::NcclFlowModel));
-    } else if(dimension_input == "ncclRingTreeModel") {
-      result.push_back(new CollectiveImplementation(
-          CollectiveImplementationType::NcclTreeFlowModel));
+      result.push_back(new CollectiveImplementation(CollectiveImplementationType::OneHalvingDoubling));
+    } else if (dimension_input == "NcclFlowModel") {
+      result.push_back(new CollectiveImplementation(CollectiveImplementationType::NcclFlowModel));
+    } else if (dimension_input == "ncclRingTreeModel") {
+      result.push_back(new CollectiveImplementation(CollectiveImplementationType::NcclTreeFlowModel));
     } else {
       sys_panic(
           "Cannot interpret collective implementations. Please check the collective implementations in the sys"
@@ -703,6 +592,7 @@ std::vector<CollectiveImplementation*> Sys::
   }
   return result;
 }
+
 bool Sys::parse_var(std::string var, std::string value) {
   var = trim(var);
   value = trim(value);
@@ -768,11 +658,9 @@ bool Sys::parse_var(std::string var, std::string value) {
     } else if (tmp == "smallestFirst") {
       intra_dimension_scheduling = IntraDimensionScheduling::SmallestFirst;
     } else if (tmp == "lessRemainingPhaseFirst") {
-      intra_dimension_scheduling =
-          IntraDimensionScheduling::LessRemainingPhaseFirst;
+      intra_dimension_scheduling = IntraDimensionScheduling::LessRemainingPhaseFirst;
     } else {
-      sys_panic(
-          "unknown value for intra-dimension-scheduling  in sys input file");
+      sys_panic("unknown value for intra-dimension-scheduling  in sys input file");
     }
   } else if (var == "inter-dimension-scheduling:") {
     std::stringstream mval(value);
@@ -787,8 +675,7 @@ bool Sys::parse_var(std::string var, std::string value) {
     } else if (tmp == "roundRobin") {
       inter_dimension_scheduling = InterDimensionScheduling::RoundRobin;
     } else {
-      sys_panic(
-          "unknown value for inter-dimension-scheduling  in sys input file");
+      sys_panic("unknown value for inter-dimension-scheduling  in sys input file");
     }
   } else if (var == "seprate-log:") {
     std::stringstream mval(value);
@@ -800,37 +687,31 @@ bool Sys::parse_var(std::string var, std::string value) {
       this->seprate_log = true;
     }
   } else if (var != "") {
-    std::cerr
-        << "######### Exiting because " << var
-        << " is an unknown variable. Check your system input file. #########"
-        << std::endl;
+    std::cerr << "######### Exiting because " << var
+              << " is an unknown variable. Check your system input file. #########" << std::endl;
     exit(1);
   }
   return true;
 }
+
 bool Sys::post_process_inputs() {
   all_reduce_implementation_per_dimension =
-      generate_collective_implementation_from_input(
-          inp_all_reduce_implementation);
+      generate_collective_implementation_from_input(inp_all_reduce_implementation);
   if (all_reduce_implementation_per_dimension.size() == 0) {
     sys_panic("unknown value for all-reduce-implementation in sys input file");
   }
   reduce_scatter_implementation_per_dimension =
-      generate_collective_implementation_from_input(
-          inp_reduce_scatter_implementation);
+      generate_collective_implementation_from_input(inp_reduce_scatter_implementation);
   if (reduce_scatter_implementation_per_dimension.size() == 0) {
-    sys_panic(
-        "unknown value for reduce-scatter-implementation in sys input file");
+    sys_panic("unknown value for reduce-scatter-implementation in sys input file");
   }
   all_gather_implementation_per_dimension =
-      generate_collective_implementation_from_input(
-          inp_all_gather_implementation);
+      generate_collective_implementation_from_input(inp_all_gather_implementation);
   if (all_gather_implementation_per_dimension.size() == 0) {
     sys_panic("unknown value for all-gather-implementation in sys input file");
   }
   all_to_all_implementation_per_dimension =
-      generate_collective_implementation_from_input(
-          inp_all_to_all_implementation);
+      generate_collective_implementation_from_input(inp_all_to_all_implementation);
   if (all_to_all_implementation_per_dimension.size() == 0) {
     sys_panic("unknown value for all-to-all-implementation in sys input file");
   }
@@ -861,17 +742,16 @@ bool Sys::post_process_inputs() {
   }
   return true;
 }
+
 bool Sys::initialize_sys(std::string name) {
   std::ifstream inFile;
   inFile.open(name);
   if (!inFile) {
     if (id == 0) {
       std::cerr << "Unable to open file: " << name << std::endl;
-      std::cerr << "############ Exiting because unable to open the system "
-                   "input file ############"
+      std::cerr << "############ Exiting because unable to open the system input file ############"
                 << std::endl;
-      std::cerr << "This error is fatal. Please check your path and filename."
-                << std::endl;
+      std::cerr << "This error is fatal. Please check your path and filename." << std::endl;
     }
     exit(1);
   } else {
@@ -887,7 +767,7 @@ bool Sys::initialize_sys(std::string name) {
     if (inFile.peek() != EOF) {
       inFile >> value;
     }
-    bool result = parse_var(var, value);
+    const bool result = parse_var(var, value);
     if (result == false) {
       inFile.close();
       return result;
@@ -896,6 +776,7 @@ bool Sys::initialize_sys(std::string name) {
   inFile.close();
   return post_process_inputs();
 }
+
 Sys::SchedulerUnit::SchedulerUnit(
     Sys* sys,
     std::vector<int> queues,
@@ -926,46 +807,43 @@ Sys::SchedulerUnit::SchedulerUnit(
     usage.push_back(u);
   }
 }
-void Sys::SchedulerUnit::notify_stream_added_into_ready_list() {
-  if (this->sys->first_phase_streams < ready_list_threshold &&
-      this->sys->total_running_streams < max_running_streams) {
+
+void Sys::SchedulerUnit::notify_stream_added_into_ready_list() const {
+  if (this->sys->first_phase_streams < ready_list_threshold && this->sys->total_running_streams < max_running_streams) {
     int max = ready_list_threshold - sys->first_phase_streams;
     if (max > max_running_streams - this->sys->total_running_streams) {
       max = max_running_streams - this->sys->total_running_streams;
     }
     sys->schedule(max);
   }
-  return;
 }
-void Sys::SchedulerUnit::notify_stream_added(int vnet) {
-  if (sys->id == 0 &&
-      ++total_active_chunks_per_dimension[queue_id_to_dimension[vnet]] == 1) {
+
+void Sys::SchedulerUnit::notify_stream_added(const int vnet) {
+  if (sys->id == 0 && ++total_active_chunks_per_dimension[queue_id_to_dimension[vnet]] == 1) {
     usage[queue_id_to_dimension[vnet]].increase_usage();
   }
   stream_pointer[vnet] = sys->active_Streams[vnet].begin();
   std::advance(stream_pointer[vnet], running_streams[vnet]);
-  while (stream_pointer[vnet] != sys->active_Streams[vnet].end() &&
-         running_streams[vnet] < queue_threshold) {
+  while (stream_pointer[vnet] != sys->active_Streams[vnet].end() && running_streams[vnet] < queue_threshold) {
     (*stream_pointer[vnet])->init();
     running_streams[vnet]++;
     std::advance(stream_pointer[vnet], 1);
   }
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
-  NcclLog->writeLog(NcclLogLevel::DEBUG,"Sys::SchedulerUnit::notify_stream_added finished");
+  NcclLog->writeLog(NcclLogLevel::DEBUG, "Sys::SchedulerUnit::notify_stream_added finished");
 }
-void Sys::SchedulerUnit::notify_stream_removed(int vnet, Tick running_time) {
-  if (sys->id == 0 &&
-      --total_active_chunks_per_dimension[queue_id_to_dimension[vnet]] == 0) {
+
+void Sys::SchedulerUnit::notify_stream_removed(const int vnet, const Tick running_time) {
+  if (sys->id == 0 && --total_active_chunks_per_dimension[queue_id_to_dimension[vnet]] == 0) {
     usage[queue_id_to_dimension[vnet]].decrease_usage();
   }
   running_streams[vnet]--;
 
-  int dimension = this->queue_id_to_dimension[vnet];
+  const int dimension = this->queue_id_to_dimension[vnet];
   latency_per_dimension[dimension] += running_time;
   total_chunks_per_dimension[dimension]++;
 
-  if (this->sys->first_phase_streams < ready_list_threshold &&
-      this->sys->total_running_streams < max_running_streams) {
+  if (this->sys->first_phase_streams < ready_list_threshold && this->sys->total_running_streams < max_running_streams) {
     int max = ready_list_threshold - sys->first_phase_streams;
     if (max > max_running_streams - this->sys->total_running_streams) {
       max = max_running_streams - this->sys->total_running_streams;
@@ -974,14 +852,14 @@ void Sys::SchedulerUnit::notify_stream_removed(int vnet, Tick running_time) {
   }
   stream_pointer[vnet] = sys->active_Streams[vnet].begin();
   std::advance(stream_pointer[vnet], running_streams[vnet]);
-  while (stream_pointer[vnet] != sys->active_Streams[vnet].end() &&
-         running_streams[vnet] < queue_threshold) {
+  while (stream_pointer[vnet] != sys->active_Streams[vnet].end() && running_streams[vnet] < queue_threshold) {
     (*stream_pointer[vnet])->init();
     running_streams[vnet]++;
     std::advance(stream_pointer[vnet], 1);
   }
 }
-std::vector<double> Sys::SchedulerUnit::get_average_latency_per_dimension() {
+
+std::vector<double> Sys::SchedulerUnit::get_average_latency_per_dimension() const {
   std::vector<double> result;
   result.resize(latency_per_dimension.size(), -1);
   for (int i = 0; i < result.size(); i++) {
@@ -989,6 +867,7 @@ std::vector<double> Sys::SchedulerUnit::get_average_latency_per_dimension() {
   }
   return result;
 }
+
 int Sys::nextPowerOf2(int n) {
   int count = 0;
   if (n && !(n & (n - 1)))
@@ -999,13 +878,16 @@ int Sys::nextPowerOf2(int n) {
   }
   return 1 << count;
 }
-void Sys::sys_panic(std::string msg) {
+
+void Sys::sys_panic(const std::string& msg) {
   std::cerr << msg << std::endl;
   exit(1);
 }
+
 void Sys::iterate() {
   call_events();
 }
+
 std::vector<std::string> Sys::split_string(std::string str, std::string sep) {
   char* cstr = const_cast<char*>(str.c_str());
   char* current;
@@ -1017,10 +899,12 @@ std::vector<std::string> Sys::split_string(std::string str, std::string sep) {
   }
   return arr;
 }
-uint64_t Sys::determine_chunk_size(uint64_t size, ComType type) {
+
+uint64_t Sys::determine_chunk_size(uint64_t size, ComType type) const {
   uint64_t chunk_size = size / preferred_dataset_splits;
   return chunk_size;
 }
+
 DataSet* Sys::generate_all_reduce(
     uint64_t size,
     std::vector<bool> involved_dimensions,
@@ -1039,6 +923,7 @@ DataSet* Sys::generate_all_reduce(
       event,
       layer_ptr);
 }
+
 DataSet* Sys::generate_all_gather(
     uint64_t size,
     std::vector<bool> involved_dimensions,
@@ -1057,6 +942,7 @@ DataSet* Sys::generate_all_gather(
       event,
       layer_ptr);
 }
+
 DataSet* Sys::generate_reduce_scatter(
     uint64_t size,
     std::vector<bool> involved_dimensions,
@@ -1075,6 +961,7 @@ DataSet* Sys::generate_reduce_scatter(
       event,
       layer_ptr);
 }
+
 DataSet* Sys::generate_all_to_all(
     uint64_t size,
     std::vector<bool> involved_dimensions,
@@ -1093,6 +980,7 @@ DataSet* Sys::generate_all_to_all(
       event,
       layer_ptr);
 }
+
 CollectivePhase Sys::generate_collective_phase(
     ComType collective_type,
     int layer_num,
@@ -1103,218 +991,236 @@ CollectivePhase Sys::generate_collective_phase(
     InjectionPolicy injection_policy,
     CollectiveImplementation* collective_implementation,
     bool boost_mode) {
-        MockNcclLog* NcclLog = MockNcclLog::getInstance();
+  MockNcclLog* NcclLog = MockNcclLog::getInstance();
 
-        if (collective_implementation->type == CollectiveImplementationType::Ring ||
-              collective_implementation->type ==
-                  CollectiveImplementationType::OneRing) {
-            CollectivePhase vn(
-                this,
-                queue_id,
-                new Ring(
-                    collective_type,
-                    id,
-                    layer_num,
-                    (RingTopology*)topology,
-                    data_size,
-                    direction,
-                    injection_policy,
-                    boost_mode));
-                  return vn;
-          } else if (
-              collective_implementation->type == CollectiveImplementationType::Direct ||
-              collective_implementation->type ==
-                  CollectiveImplementationType::OneDirect) {
-            CollectivePhase vn(
-                this,
-                queue_id,
-                new AllToAll(
-                    collective_type,
-                    ((DirectCollectiveImplementation*)collective_implementation)
-                        ->direct_collective_window,
-                    id,
-                    layer_num,
-                    (RingTopology*)topology,
-                    data_size,
-                    direction,
-                    InjectionPolicy::Normal,
-                    boost_mode));
-                return vn;
-          } else if (
-              collective_implementation->type ==
-              CollectiveImplementationType::DoubleBinaryTree) {
-            CollectivePhase vn(
-                this,
-                queue_id,
-                new DoubleBinaryTreeAllReduce(
-                    id, layer_num, (BinaryTree*)topology, data_size, boost_mode));
-                return vn;
-          } else if (
-              collective_implementation->type ==
-                  CollectiveImplementationType::HalvingDoubling ||
-              collective_implementation->type ==
-                  CollectiveImplementationType::OneHalvingDoubling) {
-            CollectivePhase vn(
-                this,
-                queue_id,
-                new HalvingDoubling(
-                    collective_type,
-                    id,
-                    layer_num,
-                    (RingTopology*)topology,
-                    data_size,
-                    boost_mode));
-                    return vn;
-          } else if(collective_implementation->type == CollectiveImplementationType::NcclFlowModel) {
-              ParallelStrategy  comm_ps;
-              if (workload->current_state == Workload::LoopState::Forward_Pass){
-                comm_ps = static_cast<ParallelStrategy> (workload->layers[workload->index]->fwd_pass_group_type);
-              }
-              else if(workload->current_state == Workload::LoopState::Input_Gradient){
-                comm_ps = static_cast<ParallelStrategy> (workload->layers[workload->index]->input_grad_group_type);
-              }
-              else if(workload->current_state == Workload::LoopState::Weight_Gradient){
-                comm_ps = static_cast<ParallelStrategy> (workload->layers[workload->index]->weight_grad_group_type);
-              }
-              MockNccl::ncclInfo *nccl_info;
-              std::shared_ptr<void> ptr_FlowModels;
-              {
-                SysCriticalSection cs;
-                nccl_info = get_nccl_Info(comm_ps, data_size, collective_type);
-                ptr_FlowModels = generate_flow_model(comm_ps, data_size, collective_type); 
-              }
-              
-              if(nccl_info->algorithm == NCCL_ALGO_RING) {
-                std::shared_ptr<MockNccl::FlowModels> RingFlowModels = std::static_pointer_cast<MockNccl::FlowModels>(ptr_FlowModels);
-                std::map<int,std::map<int,std::vector<int>>> channels;
-                {
-                  SysCriticalSection cs;
-                  channels = mock_nccl_comms[comm_ps]->get_rings();
-                }
-                NcclLog->writeLog(NcclLogLevel::DEBUG,"rank %d generate FlowModels",id);
-                if(RingFlowModels != nullptr){
-                  NcclLog->writeLog(NcclLogLevel::DEBUG,"rank %d NcclMock generate  %d channel and flow model count:  %d",id,channels.size(),RingFlowModels->size());
-                  for (auto flow : *RingFlowModels) {
-                    int prev;
-                    int parent_flow_id;
-                    int child_flow_id;
-                    if (flow.second.prev.size() == 0) {
-                      prev = -1;
-                    } else {
-                      prev = flow.second.prev[0];
-                    }
-                    if (flow.second.child_flow_id.size() == 0) {
-                      child_flow_id = -1;
-                    } else {
-                      child_flow_id = flow.second.child_flow_id[0];
-                    }
-                    if (flow.second.parent_flow_id.size() == 0) {
-                      parent_flow_id = -1;
-                    } else {
-                      parent_flow_id = flow.second.parent_flow_id[0];
-                    }
-                    NcclLog->writeLog(NcclLogLevel::DEBUG," %d,  %d,  %d to  %d current_flow_id %d prev rank:  %d parent_flow_id:  %d child_flow_id:  %d chunk_id:  %d flow_size: %lu chunk_count:  %d ",flow.first.first,flow.first.second,flow.second.src,flow.second.dest,flow.second.flow_id,prev,parent_flow_id,child_flow_id,flow.second.chunk_id,flow.second.flow_size,flow.second.chunk_count);
-                  }
-                }
-                CollectivePhase vn(
-                    this,
-                    queue_id,
-                    new NcclTreeFlowModel(
-                        collective_type,
-                        id,
-                        layer_num,
-                        (RingTopology*)topology,
-                        data_size,
-                        direction,
-                        injection_policy,
-                        boost_mode,
-                        RingFlowModels,
-                        channels.size()));
-                return vn;
-              } else if(nccl_info->algorithm == NCCL_ALGO_TREE) {
-                std::shared_ptr<MockNccl::FlowModels> TreeFlowModels;
-                MockNccl::TreeChannels treechannels;
-                {
-                  SysCriticalSection cs;
-                  TreeFlowModels = std::static_pointer_cast<MockNccl::FlowModels>(ptr_FlowModels);
-                  treechannels = mock_nccl_comms[comm_ps]->get_treechannels();
-                }
-                CollectivePhase vn(
-                    this,
-                    queue_id,
-                    new NcclTreeFlowModel(
-                        collective_type,
-                        id,
-                        layer_num,
-                        (RingTopology*)topology,
-                        data_size,
-                        direction,
-                        injection_policy,
-                        boost_mode,
-                        TreeFlowModels,
-                        treechannels.size()));
-                return vn;
+  if (collective_implementation->type == CollectiveImplementationType::Ring ||
+      collective_implementation->type == CollectiveImplementationType::OneRing) {
+    CollectivePhase vn(
+        this,
+        queue_id,
+        new Ring(
+            collective_type,
+            id,
+            layer_num,
+            (RingTopology*)topology,
+            data_size,
+            direction,
+            injection_policy,
+            boost_mode));
+    return vn;
+  } else if (
+      collective_implementation->type == CollectiveImplementationType::Direct ||
+      collective_implementation->type == CollectiveImplementationType::OneDirect) {
+    CollectivePhase vn(
+        this,
+        queue_id,
+        new AllToAll(
+            collective_type,
+            ((DirectCollectiveImplementation*)collective_implementation)->direct_collective_window,
+            id,
+            layer_num,
+            (RingTopology*)topology,
+            data_size,
+            direction,
+            InjectionPolicy::Normal,
+            boost_mode));
+    return vn;
+  } else if (collective_implementation->type == CollectiveImplementationType::DoubleBinaryTree) {
+    CollectivePhase vn(
+        this, queue_id, new DoubleBinaryTreeAllReduce(id, layer_num, (BinaryTree*)topology, data_size, boost_mode));
+    return vn;
+  } else if (
+      collective_implementation->type == CollectiveImplementationType::HalvingDoubling ||
+      collective_implementation->type == CollectiveImplementationType::OneHalvingDoubling) {
+    CollectivePhase vn(
+        this,
+        queue_id,
+        new HalvingDoubling(collective_type, id, layer_num, (RingTopology*)topology, data_size, boost_mode));
+    return vn;
+  } else if (collective_implementation->type == CollectiveImplementationType::NcclFlowModel) {
+    ParallelStrategy comm_ps;
+    if (workload->current_state == Workload::LoopState::Forward_Pass) {
+      comm_ps = static_cast<ParallelStrategy>(workload->layers[workload->index]->fwd_pass_group_type);
+    } else if (workload->current_state == Workload::LoopState::Input_Gradient) {
+      comm_ps = static_cast<ParallelStrategy>(workload->layers[workload->index]->input_grad_group_type);
+    } else if (workload->current_state == Workload::LoopState::Weight_Gradient) {
+      comm_ps = static_cast<ParallelStrategy>(workload->layers[workload->index]->weight_grad_group_type);
+    }
+    MockNccl::ncclInfo* nccl_info;
+    std::shared_ptr<void> ptr_FlowModels;
+    {
+      SysCriticalSection cs;
+      nccl_info = get_nccl_Info(comm_ps, data_size, collective_type);
+      ptr_FlowModels = generate_flow_model(comm_ps, data_size, collective_type);
+    }
 
-              } else if(nccl_info->algorithm == NCCL_ALGO_NVLS) {
-                collective_type = ComType::All_Reduce_NVLS;
-                std::shared_ptr<MockNccl::FlowModels> RingFlowModels = std::static_pointer_cast<MockNccl::FlowModels>(ptr_FlowModels);
-                MockNccl::TreeChannels treechannels;
-                {
-                  SysCriticalSection cs;
-                  treechannels = mock_nccl_comms[comm_ps]->get_treechannels();
-                }
-                NcclLog->writeLog(NcclLogLevel::DEBUG,"rank %d generate FlowModels",id);
-                if(RingFlowModels != nullptr){
-                  NcclLog->writeLog(NcclLogLevel::DEBUG,"rank %d NcclMock generate  %d channel and flow model count:  %d",id,treechannels.size(),RingFlowModels->size());
-                  for (auto flow : *RingFlowModels) {
-                    int prev;
-                    int parent_flow_id;
-                    int child_flow_id;
-                    if (flow.second.prev.size() == 0) {
-                      prev = -1;
-                    } else {
-                      prev = flow.second.prev[0];
-                    }
-                    if (flow.second.child_flow_id.size() == 0) {
-                      child_flow_id = -1;
-                    } else {
-                      child_flow_id = flow.second.child_flow_id[0];
-                    }
-                    if (flow.second.parent_flow_id.size() == 0) {
-                      parent_flow_id = -1;
-                    } else {
-                      parent_flow_id = flow.second.parent_flow_id[0];
-                    }
-                    NcclLog->writeLog(NcclLogLevel::DEBUG," %d,  %d,  %d to  %d current_flow_id %d prev rank:  %d parent_flow_id:  %d child_flow_id:  %d chunk_id:  %d flow_size: %lu chunk_count:  %d ",flow.first.first,flow.first.second,flow.second.src,flow.second.dest,flow.second.flow_id,prev,parent_flow_id,child_flow_id,flow.second.chunk_id,flow.second.flow_size,flow.second.chunk_count);
-                  }
-                }
-                CollectivePhase vn(
-                    this,
-                    queue_id,
-                    new NcclTreeFlowModel(
-                        collective_type,
-                        id,
-                        layer_num,
-                        (RingTopology*)topology,
-                        data_size,
-                        direction,
-                        injection_policy,
-                        boost_mode,
-                        RingFlowModels,
-                        treechannels.size()));
-                return vn;
-              } 
-
+    if (nccl_info->algorithm == NCCL_ALGO_RING) {
+      std::shared_ptr<MockNccl::FlowModels> RingFlowModels =
+          std::static_pointer_cast<MockNccl::FlowModels>(ptr_FlowModels);
+      std::map<int, std::map<int, std::vector<int>>> channels;
+      {
+        SysCriticalSection cs;
+        channels = mock_nccl_comms[comm_ps]->get_rings();
+      }
+      NcclLog->writeLog(NcclLogLevel::DEBUG, "rank %d generate FlowModels", id);
+      if (RingFlowModels != nullptr) {
+        NcclLog->writeLog(
+            NcclLogLevel::DEBUG,
+            "rank %d NcclMock generate  %d channel and flow model count:  %d",
+            id,
+            channels.size(),
+            RingFlowModels->size());
+        for (auto flow : *RingFlowModels) {
+          int prev;
+          int parent_flow_id;
+          int child_flow_id;
+          if (flow.second.prev.size() == 0) {
+            prev = -1;
           } else {
-            std::cerr
-                << "Error: No known collective implementation for collective phase"
-                << std::endl;
-            exit(1);
+            prev = flow.second.prev[0];
           }
+          if (flow.second.child_flow_id.size() == 0) {
+            child_flow_id = -1;
+          } else {
+            child_flow_id = flow.second.child_flow_id[0];
+          }
+          if (flow.second.parent_flow_id.size() == 0) {
+            parent_flow_id = -1;
+          } else {
+            parent_flow_id = flow.second.parent_flow_id[0];
+          }
+          NcclLog->writeLog(
+              NcclLogLevel::DEBUG,
+              " %d,  %d,  %d to  %d current_flow_id %d prev rank:  %d parent_flow_id:  %d child_flow_id:  %d chunk_id: "
+              " %d flow_size: %lu chunk_count:  %d ",
+              flow.first.first,
+              flow.first.second,
+              flow.second.src,
+              flow.second.dest,
+              flow.second.flow_id,
+              prev,
+              parent_flow_id,
+              child_flow_id,
+              flow.second.chunk_id,
+              flow.second.flow_size,
+              flow.second.chunk_count);
+        }
+      }
+      CollectivePhase vn(
+          this,
+          queue_id,
+          new NcclTreeFlowModel(
+              collective_type,
+              id,
+              layer_num,
+              (RingTopology*)topology,
+              data_size,
+              direction,
+              injection_policy,
+              boost_mode,
+              RingFlowModels,
+              channels.size()));
+      return vn;
+    } else if (nccl_info->algorithm == NCCL_ALGO_TREE) {
+      std::shared_ptr<MockNccl::FlowModels> TreeFlowModels;
+      MockNccl::TreeChannels treechannels;
+      {
+        SysCriticalSection cs;
+        TreeFlowModels = std::static_pointer_cast<MockNccl::FlowModels>(ptr_FlowModels);
+        treechannels = mock_nccl_comms[comm_ps]->get_treechannels();
+      }
+      CollectivePhase vn(
+          this,
+          queue_id,
+          new NcclTreeFlowModel(
+              collective_type,
+              id,
+              layer_num,
+              (RingTopology*)topology,
+              data_size,
+              direction,
+              injection_policy,
+              boost_mode,
+              TreeFlowModels,
+              treechannels.size()));
+      return vn;
+    } else if (nccl_info->algorithm == NCCL_ALGO_NVLS) {
+      collective_type = ComType::All_Reduce_NVLS;
+      std::shared_ptr<MockNccl::FlowModels> RingFlowModels =
+          std::static_pointer_cast<MockNccl::FlowModels>(ptr_FlowModels);
+      MockNccl::TreeChannels treechannels;
+      {
+        SysCriticalSection cs;
+        treechannels = mock_nccl_comms[comm_ps]->get_treechannels();
+      }
+      NcclLog->writeLog(NcclLogLevel::DEBUG, "rank %d generate FlowModels", id);
+      if (RingFlowModels != nullptr) {
+        NcclLog->writeLog(
+            NcclLogLevel::DEBUG,
+            "rank %d NcclMock generate  %d channel and flow model count:  %d",
+            id,
+            treechannels.size(),
+            RingFlowModels->size());
+        for (auto flow : *RingFlowModels) {
+          int prev;
+          int parent_flow_id;
+          int child_flow_id;
+          if (flow.second.prev.size() == 0) {
+            prev = -1;
+          } else {
+            prev = flow.second.prev[0];
+          }
+          if (flow.second.child_flow_id.size() == 0) {
+            child_flow_id = -1;
+          } else {
+            child_flow_id = flow.second.child_flow_id[0];
+          }
+          if (flow.second.parent_flow_id.size() == 0) {
+            parent_flow_id = -1;
+          } else {
+            parent_flow_id = flow.second.parent_flow_id[0];
+          }
+          NcclLog->writeLog(
+              NcclLogLevel::DEBUG,
+              " %d,  %d,  %d to  %d current_flow_id %d prev rank:  %d parent_flow_id:  %d child_flow_id:  %d chunk_id: "
+              " %d flow_size: %lu chunk_count:  %d ",
+              flow.first.first,
+              flow.first.second,
+              flow.second.src,
+              flow.second.dest,
+              flow.second.flow_id,
+              prev,
+              parent_flow_id,
+              child_flow_id,
+              flow.second.chunk_id,
+              flow.second.flow_size,
+              flow.second.chunk_count);
+        }
+      }
+      CollectivePhase vn(
+          this,
+          queue_id,
+          new NcclTreeFlowModel(
+              collective_type,
+              id,
+              layer_num,
+              static_cast<RingTopology*>(topology),
+              data_size,
+              direction,
+              injection_policy,
+              boost_mode,
+              RingFlowModels,
+              treechannels.size()));
+      return vn;
+    }
+  } else {
+    std::cerr << "Error: No known collective implementation for collective phase" << std::endl;
+    exit(1);
+  }
 }
 
-std::map<std::pair<int,int>, MockNccl::SingleFlow> Sys:: generate_net_test_flow_model(uint64_t data_size, int nums) {
-  std::map<std::pair<int,int>, MockNccl::SingleFlow> result;
+std::map<std::pair<int, int>, MockNccl::SingleFlow> Sys::generate_net_test_flow_model(uint64_t data_size, int nums) {
+  std::map<std::pair<int, int>, MockNccl::SingleFlow> result;
   MockNccl::SingleFlow tmp;
   for (int i = 0; i < nums; i++) {
     tmp.flow_id = i;
@@ -1329,8 +1235,8 @@ std::map<std::pair<int,int>, MockNccl::SingleFlow> Sys:: generate_net_test_flow_
   return result;
 }
 
-std::map<std::pair<int,int>, MockNccl::SingleFlow> Sys::generate_nvl_test_flow_model(uint64_t data_size, int nums) {
-  std::map<std::pair<int,int>, MockNccl::SingleFlow> result;
+std::map<std::pair<int, int>, MockNccl::SingleFlow> Sys::generate_nvl_test_flow_model(uint64_t data_size, int nums) {
+  std::map<std::pair<int, int>, MockNccl::SingleFlow> result;
   MockNccl::SingleFlow tmp;
   for (int i = 0; i < nums; i++) {
     tmp.flow_id = i;
@@ -1338,81 +1244,78 @@ std::map<std::pair<int,int>, MockNccl::SingleFlow> Sys::generate_nvl_test_flow_m
     tmp.dest = 1;
     tmp.flow_size = data_size;
     tmp.parent_flow_id = {};
-    tmp.child_flow_id =  {};
+    tmp.child_flow_id = {};
     tmp.channel_id = 0;
     result[make_pair(0, i)] = tmp;
   }
   return result;
 }
 
-bool Sys::mock_nccl_grobal_group_init(){
-  if (GlobalGroup != nullptr)
+bool Sys::mock_nccl_grobal_group_init() const {
+  if (GlobalGroup != nullptr) {
     return true;
-  else {
+  } else {
     int total_nodes = this->total_nodes;
-    int TP_size = workload->model_parallel_npu_group == 0
-        ? total_nodes
-        : workload->model_parallel_npu_group;
+    int TP_size = workload->model_parallel_npu_group == 0 ? total_nodes : workload->model_parallel_npu_group;
     int PP_size = 1;
     int DP_size = all_gpus[0] / (TP_size * PP_size);
     int EP_size = workload->expert_parallel_npu_group;
     int DP_EP_size = DP_size / EP_size;
-    GlobalGroup = new MockNccl::MockNcclGroup(all_gpus[0],ngpus_per_node,TP_size,DP_size,PP_size,EP_size,DP_EP_size,NVSwitchs,gpu_type);
+    GlobalGroup = new MockNccl::MockNcclGroup(
+        all_gpus[0], ngpus_per_node, TP_size, DP_size, PP_size, EP_size, DP_EP_size, NVSwitchs, gpu_type);
     return true;
   }
 }
 
-bool Sys::mock_nccl_comms_init(){
-    int TP_size = workload->model_parallel_npu_group == 0
-       ? total_nodes
-       : workload->model_parallel_npu_group;
-    int PP_size = 1;
-    int DP_size = total_nodes / (TP_size * PP_size);
-    int EP_size = workload->expert_parallel_npu_group;
-    int DP_EP_size = DP_size / EP_size;
-    MockNccl::MockNcclComm* pComm;
-    if (TP_size > 1) {
-      pComm = new MockNccl::MockNcclComm(id,MockNccl::GroupType::TP,GlobalGroup);
-      mock_nccl_comms[TP] = pComm;
-    }
-    if(DP_size > 1) {
-      pComm = new MockNccl::MockNcclComm(id,MockNccl::GroupType::DP,GlobalGroup);
-      mock_nccl_comms[DP] = pComm;
-    }
-    if(EP_size > 1 ){
-      pComm = new MockNccl::MockNcclComm(id,MockNccl::GroupType::EP,GlobalGroup);
-      mock_nccl_comms[EP] = pComm;
-    }
-    if(DP_EP_size > 1){
-      pComm = new MockNccl::MockNcclComm(id,MockNccl::GroupType::DP_EP,GlobalGroup);
-      mock_nccl_comms[DP_EP] = pComm;
-    }
-    return true;
+bool Sys::mock_nccl_comms_init() {
+  int TP_size = workload->model_parallel_npu_group == 0 ? total_nodes : workload->model_parallel_npu_group;
+  int PP_size = 1;
+  int DP_size = total_nodes / (TP_size * PP_size);
+  int EP_size = workload->expert_parallel_npu_group;
+  int DP_EP_size = DP_size / EP_size;
+  MockNccl::MockNcclComm* pComm;
+  if (TP_size > 1) {
+    pComm = new MockNccl::MockNcclComm(id, MockNccl::GroupType::TP, GlobalGroup);
+    mock_nccl_comms[TP] = pComm;
+  }
+  if (DP_size > 1) {
+    pComm = new MockNccl::MockNcclComm(id, MockNccl::GroupType::DP, GlobalGroup);
+    mock_nccl_comms[DP] = pComm;
+  }
+  if (EP_size > 1) {
+    pComm = new MockNccl::MockNcclComm(id, MockNccl::GroupType::EP, GlobalGroup);
+    mock_nccl_comms[EP] = pComm;
+  }
+  if (DP_EP_size > 1) {
+    pComm = new MockNccl::MockNcclComm(id, MockNccl::GroupType::DP_EP, GlobalGroup);
+    mock_nccl_comms[DP_EP] = pComm;
+  }
+  return true;
 }
 
-struct MockNccl::ncclInfo* Sys::get_nccl_Info(ParallelStrategy comm_ps, uint64_t data_size, ComType collective_type) {
-    return mock_nccl_comms[comm_ps]->get_algo_proto_info(data_size, collective_type );
+MockNccl::ncclInfo* Sys::get_nccl_Info(ParallelStrategy comm_ps, uint64_t data_size, ComType collective_type) {
+  return mock_nccl_comms[comm_ps]->get_algo_proto_info(data_size, collective_type);
 }
 
 std::shared_ptr<void> Sys::generate_flow_model(ParallelStrategy comm_ps, uint64_t data_size, ComType collective_type) {
-    MockNccl::MockNcclComm* pComm = mock_nccl_comms[comm_ps];
-    MockNccl::State current_state;
-    switch (this->workload->current_state) {
-      case Workload::LoopState::Forward_Pass:
-        current_state = MockNccl::State::Forward_Pass;
-        break;
-      case Workload::LoopState::Input_Gradient:
-        current_state = MockNccl::State::Input_Gradient;
-        break;
-      case Workload::LoopState::Weight_Gradient:
-        current_state = MockNccl::State::Weight_Gradient;
-        break;
-      default:
-        std::cerr << "Unexpected workload state: " << static_cast<int>(this->workload->current_state) << std::endl;
-        std::cerr << "This error is fatal. " << std::endl;
-        exit(1);
-    }
-    return  pComm->get_flow_model(data_size,collective_type,this->workload->index,current_state);
+  MockNccl::MockNcclComm* pComm = mock_nccl_comms[comm_ps];
+  MockNccl::State current_state;
+  switch (this->workload->current_state) {
+  case Workload::LoopState::Forward_Pass:
+    current_state = MockNccl::State::Forward_Pass;
+    break;
+  case Workload::LoopState::Input_Gradient:
+    current_state = MockNccl::State::Input_Gradient;
+    break;
+  case Workload::LoopState::Weight_Gradient:
+    current_state = MockNccl::State::Weight_Gradient;
+    break;
+  default:
+    std::cerr << "Unexpected workload state: " << static_cast<int>(this->workload->current_state) << std::endl;
+    std::cerr << "This error is fatal. " << std::endl;
+    exit(1);
+  }
+  return pComm->get_flow_model(data_size, collective_type, this->workload->index, current_state);
 }
 
 DataSet* Sys::generate_collective(
@@ -1424,24 +1327,25 @@ DataSet* Sys::generate_collective(
     ComType collective_type,
     SchedulingPolicy pref_scheduling,
     EventType event,
-    Callable* layer_ptr ) {
+    Callable* layer_ptr) {
   uint64_t chunk_size = determine_chunk_size(size, collective_type);
-  if(id == 0) std::cout << "chunk size is: " << chunk_size << " , size is: " << size << " , layer_num is: " << layer_num << " , node: " << id << std::endl;
+  if (id == 0)
+    std::cout << "chunk size is: " << chunk_size << " , size is: " << size << " , layer_num is: " << layer_num
+              << " , node: " << id << std::endl;
   uint64_t recommended_chunk_size = chunk_size;
   int streams = ceil(((double)size) / chunk_size);
   int64_t tmp;
-  DataSet* dataset = new DataSet(streams);
-  #ifdef PHY_MTP
+  auto dataset = new DataSet(streams);
+#ifdef PHY_MTP
   if (event != EventType::NONE && layer_ptr != nullptr) {
-    dataset->set_notifier(layer_ptr,event);
+    dataset->set_notifier(layer_ptr, event);
   }
-  #endif
+#endif
   int pri = get_priority(pref_scheduling);
   int count = 0;
   if (id == 0 &&
       (inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedy ||
-       inter_dimension_scheduling ==
-           InterDimensionScheduling::OfflineGreedyFlex)) {
+       inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedyFlex)) {
     if (last_scheduled_collective != Sys::boostedTick()) {
       offline_greedy->reset_loads();
       last_scheduled_collective = Sys::boostedTick();
@@ -1450,28 +1354,22 @@ DataSet* Sys::generate_collective(
 
   while (size > 0) {
     count++;
-    chunk_size=std::min(chunk_size,size); 
+    chunk_size = std::min(chunk_size, size);
     std::vector<int> dim_mapper(topology->get_num_of_dimensions());
     std::iota(std::begin(dim_mapper), std::end(dim_mapper), 0);
     if (collective_type == ComType::All_Gather) {
       std::reverse(dim_mapper.begin(), dim_mapper.end());
     }
     if (inter_dimension_scheduling == InterDimensionScheduling::RoundRobin) {
-      std::rotate(
-          dim_mapper.begin(),
-          dim_mapper.begin() + round_robin_inter_dimension_scheduler,
-          dim_mapper.end());
+      std::rotate(dim_mapper.begin(), dim_mapper.begin() + round_robin_inter_dimension_scheduler, dim_mapper.end());
       round_robin_inter_dimension_scheduler++;
-      if (round_robin_inter_dimension_scheduler ==
-          topology->get_num_of_dimensions()) {
+      if (round_robin_inter_dimension_scheduler == topology->get_num_of_dimensions()) {
         round_robin_inter_dimension_scheduler = 0;
       }
     } else if (
         collective_type != ComType::All_to_All &&
-        (inter_dimension_scheduling ==
-             InterDimensionScheduling::OfflineGreedy ||
-         inter_dimension_scheduling ==
-             InterDimensionScheduling::OfflineGreedyFlex)) {
+        (inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedy ||
+         inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedyFlex)) {
       uint64_t prev_size = size;
       dim_mapper = offline_greedy->get_chunk_scheduling(
           stream_counter,
@@ -1484,30 +1382,24 @@ DataSet* Sys::generate_collective(
     }
 
     if (collective_type == ComType::All_to_All ||
-        (inter_dimension_scheduling !=
-             InterDimensionScheduling::OfflineGreedy &&
-         inter_dimension_scheduling !=
-             InterDimensionScheduling::OfflineGreedyFlex)) {
+        (inter_dimension_scheduling != InterDimensionScheduling::OfflineGreedy &&
+         inter_dimension_scheduling != InterDimensionScheduling::OfflineGreedyFlex)) {
       size -= chunk_size;
     }
     tmp = chunk_size;
     std::list<CollectivePhase> vect;
     CollectivePhase phase;
 
-    if (collective_type != ComType::All_Reduce ||
-        collectiveOptimization == CollectiveOptimization::Baseline) {
+    if (collective_type != ComType::All_Reduce || collectiveOptimization == CollectiveOptimization::Baseline) {
       for (int dim = 0; dim < topology->get_num_of_dimensions(); dim++) {
-        if (topology->get_num_of_nodes_in_dimension(dim_mapper[dim]) == 1 ||
-            !dimensions_involved[dim_mapper[dim]]) {
+        if (topology->get_num_of_nodes_in_dimension(dim_mapper[dim]) == 1 || !dimensions_involved[dim_mapper[dim]]) {
           continue;
         }
-        std::pair<int, RingTopology::Direction> queue =
-            vLevels->get_next_queue_at_level(dim_mapper[dim]);
+        std::pair<int, RingTopology::Direction> queue = vLevels->get_next_queue_at_level(dim_mapper[dim]);
         phase = generate_collective_phase(
             collective_type,
             layer_num,
-            topology->get_basic_topology_at_dimension(
-                dim_mapper[dim], collective_type),
+            topology->get_basic_topology_at_dimension(dim_mapper[dim], collective_type),
             tmp,
             queue.first,
             queue.second,
@@ -1519,22 +1411,18 @@ DataSet* Sys::generate_collective(
       }
     } else if (
         inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedy ||
-        inter_dimension_scheduling ==
-            InterDimensionScheduling::OfflineGreedyFlex ||
+        inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedyFlex ||
         inter_dimension_scheduling == InterDimensionScheduling::OnlineGreedy) {
       int dim = 0;
       for (dim = 0; dim < topology->get_num_of_dimensions(); dim++) {
-        if (topology->get_num_of_nodes_in_dimension(dim_mapper[dim]) == 1 ||
-            !dimensions_involved[dim_mapper[dim]]) {
+        if (topology->get_num_of_nodes_in_dimension(dim_mapper[dim]) == 1 || !dimensions_involved[dim_mapper[dim]]) {
           continue;
         }
-        std::pair<int, RingTopology::Direction> queue =
-            vLevels->get_next_queue_at_level(dim_mapper[dim]);
+        std::pair<int, RingTopology::Direction> queue = vLevels->get_next_queue_at_level(dim_mapper[dim]);
         phase = generate_collective_phase(
             ComType::Reduce_Scatter,
             layer_num,
-            topology->get_basic_topology_at_dimension(
-                dim_mapper[dim], ComType::Reduce_Scatter),
+            topology->get_basic_topology_at_dimension(dim_mapper[dim], ComType::Reduce_Scatter),
             tmp,
             queue.first,
             queue.second,
@@ -1546,17 +1434,14 @@ DataSet* Sys::generate_collective(
       }
       dim--;
       for (; dim >= 0; dim--) {
-        if (topology->get_num_of_nodes_in_dimension(dim_mapper[dim]) == 1 ||
-            !dimensions_involved[dim_mapper[dim]]) {
+        if (topology->get_num_of_nodes_in_dimension(dim_mapper[dim]) == 1 || !dimensions_involved[dim_mapper[dim]]) {
           continue;
         }
-        std::pair<int, RingTopology::Direction> queue =
-            vLevels->get_next_queue_at_level(dim_mapper[dim]);
+        std::pair<int, RingTopology::Direction> queue = vLevels->get_next_queue_at_level(dim_mapper[dim]);
         phase = generate_collective_phase(
             ComType::All_Gather,
             layer_num,
-            topology->get_basic_topology_at_dimension(
-                dim_mapper[dim], ComType::All_Gather),
+            topology->get_basic_topology_at_dimension(dim_mapper[dim], ComType::All_Gather),
             tmp,
             queue.first,
             queue.second,
@@ -1570,23 +1455,19 @@ DataSet* Sys::generate_collective(
       int dim = 0;
       int last_active_dim = 0;
       for (dim = 0; dim < topology->get_num_of_dimensions(); dim++) {
-        if (topology->get_num_of_nodes_in_dimension(dim_mapper[dim]) != 1 &&
-            dimensions_involved[dim_mapper[dim]]) {
+        if (topology->get_num_of_nodes_in_dimension(dim_mapper[dim]) != 1 && dimensions_involved[dim_mapper[dim]]) {
           last_active_dim = dim;
         }
       }
       for (dim = 0; dim < last_active_dim; dim++) {
-        if (topology->get_num_of_nodes_in_dimension(dim_mapper[dim]) == 1 ||
-            !dimensions_involved[dim_mapper[dim]]) {
+        if (topology->get_num_of_nodes_in_dimension(dim_mapper[dim]) == 1 || !dimensions_involved[dim_mapper[dim]]) {
           continue;
         }
-        std::pair<int, RingTopology::Direction> queue =
-            vLevels->get_next_queue_at_level(dim_mapper[dim]);
+        std::pair<int, RingTopology::Direction> queue = vLevels->get_next_queue_at_level(dim_mapper[dim]);
         phase = generate_collective_phase(
             ComType::Reduce_Scatter,
             layer_num,
-            topology->get_basic_topology_at_dimension(
-                dim_mapper[dim], ComType::Reduce_Scatter),
+            topology->get_basic_topology_at_dimension(dim_mapper[dim], ComType::Reduce_Scatter),
             tmp,
             queue.first,
             queue.second,
@@ -1601,15 +1482,12 @@ DataSet* Sys::generate_collective(
               topology->get_num_of_nodes_in_dimension(dim_mapper[dim]) == 1)) {
         dim--;
       }
-      if (dimensions_involved[dim_mapper[dim]] &&
-          topology->get_num_of_nodes_in_dimension(dim_mapper[dim]) > 1) {
-        std::pair<int, RingTopology::Direction> queue =
-            vLevels->get_next_queue_at_level(dim_mapper[dim]);
+      if (dimensions_involved[dim_mapper[dim]] && topology->get_num_of_nodes_in_dimension(dim_mapper[dim]) > 1) {
+        std::pair<int, RingTopology::Direction> queue = vLevels->get_next_queue_at_level(dim_mapper[dim]);
         phase = generate_collective_phase(
             ComType::All_Reduce,
             layer_num,
-            topology->get_basic_topology_at_dimension(
-                dim_mapper[dim], ComType::All_Reduce),
+            topology->get_basic_topology_at_dimension(dim_mapper[dim], ComType::All_Reduce),
             tmp,
             queue.first,
             queue.second,
@@ -1621,17 +1499,14 @@ DataSet* Sys::generate_collective(
       }
       dim--;
       for (; dim >= 0; dim--) {
-        if (topology->get_num_of_nodes_in_dimension(dim_mapper[dim]) == 1 ||
-            !dimensions_involved[dim_mapper[dim]]) {
+        if (topology->get_num_of_nodes_in_dimension(dim_mapper[dim]) == 1 || !dimensions_involved[dim_mapper[dim]]) {
           continue;
         }
-        std::pair<int, RingTopology::Direction> queue =
-            vLevels->get_next_queue_at_level(dim_mapper[dim]);
+        std::pair<int, RingTopology::Direction> queue = vLevels->get_next_queue_at_level(dim_mapper[dim]);
         phase = generate_collective_phase(
             ComType::All_Gather,
             layer_num,
-            topology->get_basic_topology_at_dimension(
-                dim_mapper[dim], ComType::All_Gather),
+            topology->get_basic_topology_at_dimension(dim_mapper[dim], ComType::All_Gather),
             tmp,
             queue.first,
             queue.second,
@@ -1643,15 +1518,14 @@ DataSet* Sys::generate_collective(
       }
     }
     if (vect.size() > 0) {
-      StreamBaseline* newStream =
-          new StreamBaseline(this, dataset, stream_counter++, vect, pri);
+      auto newStream = new StreamBaseline(this, dataset, stream_counter++, vect, pri);
       newStream->current_queue_id = -1;
-      #ifdef PHY_MTP
+#ifdef PHY_MTP
       insert_into_running_list(newStream);
-      #endif
+#endif
       insert_into_ready_list(newStream);
       MockNcclLog* NcclLog = MockNcclLog::getInstance();
-      NcclLog->writeLog(NcclLogLevel::DEBUG,"Sys::generate_collective finished");
+      NcclLog->writeLog(NcclLogLevel::DEBUG, "Sys::generate_collective finished");
     } else {
       dataset->active = false;
       break;
@@ -1664,14 +1538,13 @@ DataSet* Sys::generate_collective(
   return dataset;
 }
 void Sys::call_events() {
-  if(event_queue.find(Sys::boostedTick())==event_queue.end()){
+  if (event_queue.find(Sys::boostedTick()) == event_queue.end()) {
     goto FINISH_CHECK;
   }
   for (auto& callable : event_queue[Sys::boostedTick()]) {
     try {
       pending_events--;
-      (std::get<0>(callable))
-          ->call(std::get<1>(callable), std::get<2>(callable));
+      (std::get<0>(callable))->call(std::get<1>(callable), std::get<2>(callable));
     } catch (...) {
       std::cerr << "warning! a callable is removed before call" << std::endl;
     }
@@ -1681,21 +1554,21 @@ void Sys::call_events() {
     SysCriticalSection cs;
     event_queue.erase(boostedTick());
   }
-  FINISH_CHECK: if ((finished_workloads == 1 && event_queue.size() == 0 && pending_sends.size() == 0) ||
-      initialized == false) {
+FINISH_CHECK:
+  if ((finished_workloads == 1 && event_queue.size() == 0 && pending_sends.size() == 0) || initialized == false) {
     delete this;
   }
-
 }
-void Sys::exitSimLoop(std::string msg) {
-  if(id == 0 ){
-  std::cout << msg << std::endl;
+
+void Sys::exitSimLoop(const std::string& msg) const {
+  if (id == 0) {
+    std::cout << msg << std::endl;
   }
   NI->sim_finish();
-  return;
 }
+
 Tick Sys::boostedTick() {
-  Sys* ts = all_generators[0];
+  const Sys* ts = all_generators[0];
   if (ts == nullptr) {
     for (int i = 1; i < all_generators.size(); i++) {
       if (all_generators[i] != nullptr) {
@@ -1704,14 +1577,19 @@ Tick Sys::boostedTick() {
       }
     }
   }
-  timespec_t tmp = ts->NI->sim_get_time();
-  Tick tick = tmp.time_val / CLOCK_PERIOD;
+  const timespec_t tmp = ts->NI->sim_get_time();
+  const Tick tick = tmp.time_val / CLOCK_PERIOD;
   return tick + offset;
 }
+
 void Sys::proceed_to_next_vnet_baseline(StreamBaseline* stream) {
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
-  NcclLog->writeLog(NcclLogLevel::DEBUG,"proceed_to_next_vnet_baseline :: phase1, stream->current_queue_id %d stream->phases_to_go.size %d",stream->current_queue_id,stream->phases_to_go.size());
-  int previous_vnet = stream->current_queue_id;
+  NcclLog->writeLog(
+      NcclLogLevel::DEBUG,
+      "proceed_to_next_vnet_baseline :: phase1, stream->current_queue_id %d stream->phases_to_go.size %d",
+      stream->current_queue_id,
+      stream->phases_to_go.size());
+  const int previous_vnet = stream->current_queue_id;
   if (stream->steps_finished == 1) {
     first_phase_streams--;
   }
@@ -1725,40 +1603,36 @@ void Sys::proceed_to_next_vnet_baseline(StreamBaseline* stream) {
     stream->take_bus_stats_average();
     stream->dataset->notify_stream_finished((StreamStat*)stream);
   }
-  NcclLog->writeLog(NcclLogLevel::DEBUG,"proceed_to_next_vnet_baseline :: phase2");
+  NcclLog->writeLog(NcclLogLevel::DEBUG, "proceed_to_next_vnet_baseline :: phase2");
   if (stream->current_queue_id >= 0 && stream->my_current_phase.enabled) {
-    std::list<BaseStream*>& target =
-        active_Streams.at(stream->my_current_phase.queue_id);
-    for (std::list<BaseStream*>::iterator it = target.begin();
-         it != target.end();
-         ++it) {
-      if (((StreamBaseline*)(*it))->stream_num == stream->stream_num) {
+    std::list<BaseStream*>& target = active_Streams.at(stream->my_current_phase.queue_id);
+    for (auto it = target.begin(); it != target.end(); ++it) {
+      if ((*it)->stream_num == stream->stream_num) {
         target.erase(it);
         break;
       }
     }
   }
-  NcclLog->writeLog(NcclLogLevel::DEBUG,"proceed_to_next_vnet_baseline :: phase2-1");
+  NcclLog->writeLog(NcclLogLevel::DEBUG, "proceed_to_next_vnet_baseline :: phase2-1");
   if (stream->phases_to_go.size() == 0) {
     total_running_streams--;
     if (previous_vnet >= 0) {
-      NcclLog->writeLog(NcclLogLevel::DEBUG,"proceed_to_next_vnet_baseline :: phase2-1");
-      scheduler_unit->notify_stream_removed(
-          previous_vnet, Sys::boostedTick() - stream->last_init);
+      NcclLog->writeLog(NcclLogLevel::DEBUG, "proceed_to_next_vnet_baseline :: phase2-1");
+      scheduler_unit->notify_stream_removed(previous_vnet, Sys::boostedTick() - stream->last_init);
     }
-    #ifdef PHY_MTP
+#ifdef PHY_MTP
     running_list.pop_front();
-    #endif
-    NcclLog->writeLog(NcclLogLevel::DEBUG,"proceed_to_next_vnet_baseline :: delete stream");
+#endif
+    NcclLog->writeLog(NcclLogLevel::DEBUG, "proceed_to_next_vnet_baseline :: delete stream");
     delete stream;
     return;
   }
-  NcclLog->writeLog(NcclLogLevel::DEBUG,"proceed_to_next_vnet_baseline :: phase3");
+  NcclLog->writeLog(NcclLogLevel::DEBUG, "proceed_to_next_vnet_baseline :: phase3");
   stream->steps_finished++;
-  stream->current_queue_id = stream->phases_to_go.front().queue_id;  
+  stream->current_queue_id = stream->phases_to_go.front().queue_id;
   stream->current_com_type = stream->phases_to_go.front().comm_type;
 
-  CollectivePhase vi = stream->phases_to_go.front();
+  const CollectivePhase vi = stream->phases_to_go.front();
   stream->my_current_phase = vi;
   stream->phases_to_go.pop_front();
   stream->test = 0;
@@ -1769,36 +1643,38 @@ void Sys::proceed_to_next_vnet_baseline(StreamBaseline* stream) {
 
   stream->net_message_latency.push_back(0);
   stream->net_message_counter = 0;
-  NcclLog->writeLog(NcclLogLevel::DEBUG,"proceed_to_next_vnet_baseline :: phase1, stream->current_queue_id %d stream->phases_to_go.size %d",stream->current_queue_id,stream->phases_to_go.size());
+  NcclLog->writeLog(
+      NcclLogLevel::DEBUG,
+      "proceed_to_next_vnet_baseline :: phase1, stream->current_queue_id %d stream->phases_to_go.size %d",
+      stream->current_queue_id,
+      stream->phases_to_go.size());
 
   if (stream->my_current_phase.enabled) {
     insert_stream(&active_Streams[stream->current_queue_id], stream);
   }
-  NcclLog->writeLog(NcclLogLevel::DEBUG,"proceed_to_next_vnet_baseline :: phase4");
+  NcclLog->writeLog(NcclLogLevel::DEBUG, "proceed_to_next_vnet_baseline :: phase4");
 
   stream->state = StreamState::Ready;
 
   if (previous_vnet >= 0) {
-    scheduler_unit->notify_stream_removed(
-        previous_vnet, Sys::boostedTick() - stream->last_init);
+    scheduler_unit->notify_stream_removed(previous_vnet, Sys::boostedTick() - stream->last_init);
   }
-  #ifdef PHY_MTP
+#ifdef PHY_MTP
   ready_list.pop_front();
   first_phase_streams++;
   total_running_streams++;
-  #endif
+#endif
 
   scheduler_unit->notify_stream_added(stream->current_queue_id);
-
-  NcclLog->writeLog(NcclLogLevel::DEBUG,"proceed_to_next_vnet_baseline :: exit");
+  NcclLog->writeLog(NcclLogLevel::DEBUG, "proceed_to_next_vnet_baseline :: exit");
 }
+
 void Sys::exiting() {}
-void Sys::insert_stream(std::list<BaseStream*>* queue, BaseStream* baseStream) {
+
+void Sys::insert_stream(std::list<BaseStream*>* queue, BaseStream* baseStream) const {
   std::list<BaseStream*>::iterator it = queue->begin();
-  if (intra_dimension_scheduling == IntraDimensionScheduling::FIFO ||
-      baseStream->current_queue_id < 0 ||
-      baseStream->current_com_type == ComType::All_to_All ||
-      baseStream->current_com_type == ComType::All_Reduce) {
+  if (intra_dimension_scheduling == IntraDimensionScheduling::FIFO || baseStream->current_queue_id < 0 ||
+      baseStream->current_com_type == ComType::All_to_All || baseStream->current_com_type == ComType::All_Reduce) {
     while (it != queue->end()) {
       if ((*it)->initialized == true) {
         std::advance(it, 1);
@@ -1828,34 +1704,27 @@ void Sys::insert_stream(std::list<BaseStream*>* queue, BaseStream* baseStream) {
         std::advance(it, 1);
         continue;
       } else if (
-          (last == ComType::Reduce_Scatter &&
-           one_to_last == ComType::All_Gather) ||
-          (last == ComType::All_Gather &&
-           one_to_last == ComType::Reduce_Scatter)) {
+          (last == ComType::Reduce_Scatter && one_to_last == ComType::All_Gather) ||
+          (last == ComType::All_Gather && one_to_last == ComType::Reduce_Scatter)) {
         std::advance(it, 1);
         continue;
       } else {
         break;
       }
     }
-  } else if (
-      intra_dimension_scheduling == IntraDimensionScheduling::SmallestFirst) {
+  } else if (intra_dimension_scheduling == IntraDimensionScheduling::SmallestFirst) {
     while (it != queue->end()) {
       if ((*it)->initialized == true) {
         std::advance(it, 1);
         continue;
-      } else if (
-          (*it)->my_current_phase.initial_data_size <
-          baseStream->my_current_phase.initial_data_size) {
+      } else if ((*it)->my_current_phase.initial_data_size < baseStream->my_current_phase.initial_data_size) {
         std::advance(it, 1);
         continue;
       } else {
         break;
       }
     }
-  } else if (
-      intra_dimension_scheduling ==
-      IntraDimensionScheduling::LessRemainingPhaseFirst) {
+  } else if (intra_dimension_scheduling == IntraDimensionScheduling::LessRemainingPhaseFirst) {
     while (it != queue->end()) {
       if ((*it)->initialized == true) {
         std::advance(it, 1);
@@ -1870,29 +1739,25 @@ void Sys::insert_stream(std::list<BaseStream*>* queue, BaseStream* baseStream) {
   }
   queue->insert(it, baseStream);
 }
+
 void Sys::register_for_finished_stream(Callable* callable) {
   registered_for_finished_stream_event.push_back(callable);
 }
-void Sys::increase_finished_streams(int amount) {
+
+void Sys::increase_finished_streams(const int amount) {
   streams_finished += amount;
   for (auto c : registered_for_finished_stream_event) {
     c->call(EventType::StreamsFinishedIncrease, nullptr);
   }
 }
 
-void Sys::register_phases(
-    BaseStream* stream,
-    std::list<CollectivePhase> phases_to_go) {
+void Sys::register_phases(const BaseStream* stream, const std::list<CollectivePhase>& phases_to_go) {
   for (auto& vnet : phases_to_go) {
     stream_priorities[vnet.queue_id].push_back(stream->stream_num);
   }
 }
 
-void Sys::zero_latecy_register_event(
-      Callable* callable,
-      EventType event,
-      CallData* callData,
-      int cycles){
+void Sys::zero_latency_register_event(Callable* callable, EventType event, CallData* callData, int cycles) {
   Tick mycycles = 0;
   bool should_schedule = false;
   {
@@ -1904,37 +1769,28 @@ void Sys::zero_latecy_register_event(
       event_queue[Sys::boostedTick() + mycycles] = tmp;
       should_schedule = true;
     }
-    event_queue[Sys::boostedTick() + mycycles].push_back(
-        std::make_tuple(callable, event, callData));
+    event_queue[Sys::boostedTick() + mycycles].push_back(std::make_tuple(callable, event, callData));
   }
   pending_events++;
   if (should_schedule) {
     timespec_t tmp = generate_time(mycycles);
-    BasicEventHandlerData* data =
-        new BasicEventHandlerData(this, EventType::CallEvents);
+    BasicEventHandlerData* data = new BasicEventHandlerData(this, EventType::CallEvents);
     this->handleEvent(data);
   }
 }
 
-void Sys::register_event(
-    Callable* callable,
-    EventType event,
-    CallData* callData,
-    int cycles) {
+void Sys::register_event(Callable* callable, EventType event, CallData* callData, int cycles) {
   Tick mycycles = cycles;
   try_register_event(callable, event, callData, mycycles);
-  return;
 }
+
 void Sys::call(EventType type, CallData* data) {
   if (id == 0 && type == EventType::General) {
     increase_finished_streams(1);
   }
 }
-void Sys::try_register_event(
-    Callable* callable,
-    EventType event,
-    CallData* callData,
-    Tick& cycles) {
+
+void Sys::try_register_event(Callable* callable, EventType event, CallData* callData, Tick& cycles) {
   bool should_schedule = false;
   {
     #ifdef NS3_MTP
@@ -1952,131 +1808,121 @@ void Sys::try_register_event(
   }
   if (should_schedule) {
     timespec_t tmp = generate_time(cycles);
-    BasicEventHandlerData* data =
-        new BasicEventHandlerData(this, EventType::CallEvents);
+    auto data = new BasicEventHandlerData(this, EventType::CallEvents);
     NI->sim_schedule(tmp, &Sys::handleEvent, data);
   }
   cycles = 0;
   pending_events++;
 }
+
 #ifdef PHY_MTP
-void Sys::insert_into_running_list(StreamBaseline* stream) {
-  running_list.push_back(stream);
-}
+void Sys::insert_into_running_list(StreamBaseline* stream) { running_list.push_back(stream); }
 #endif
 
 void Sys::insert_into_ready_list(BaseStream* stream) {
   insert_stream(&ready_list, stream);
   scheduler_unit->notify_stream_added_into_ready_list();
 }
+
 void Sys::schedule(int num) {
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
   int ready_list_size = ready_list.size();
   int counter = std::min(num, ready_list_size);
-  NcclLog->writeLog(NcclLogLevel::DEBUG,"Sys.cc::schedule num %d ready_list_size %d",num,ready_list_size);
+  NcclLog->writeLog(NcclLogLevel::DEBUG, "Sys.cc::schedule num %d ready_list_size %d", num, ready_list_size);
   while (counter > 0) {
     int top_vn = ready_list.front()->phases_to_go.front().queue_id;
     int total_waiting_streams = ready_list.size();
     int total_phases = ready_list.front()->phases_to_go.size();
 
-    proceed_to_next_vnet_baseline((StreamBaseline*)ready_list.front());
+    proceed_to_next_vnet_baseline(static_cast<StreamBaseline*>(ready_list.front()));
 
-    #ifndef PHY_MTP
+#ifndef PHY_MTP
     if (ready_list.front()->current_queue_id == -1) {
-      Sys::sys_panic(
-          "should not happen! " 
-          );
+      Sys::sys_panic("should not happen!");
     }
     ready_list.pop_front();
     first_phase_streams++;
     total_running_streams++;
-    #endif 
+#endif
     counter--;
   }
-  NcclLog->writeLog(NcclLogLevel::DEBUG,"Sys::shedule finished");
+  NcclLog->writeLog(NcclLogLevel::DEBUG, "Sys::shedule finished");
 }
+
 void Sys::handleEvent(void* arg) {
-  if (arg == nullptr) { 
+  if (arg == nullptr) {
     return;
   }
-  BasicEventHandlerData* ehd = (BasicEventHandlerData*)arg;
+  const auto ehd = static_cast<BasicEventHandlerData*>(arg);
   Sys* node = ehd->node;
   EventType event = ehd->event;
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
 
-
   if (event == EventType::CallEvents) {
-    NcclLog->writeLog(NcclLogLevel::DEBUG," Sys::handleEvent EventType::CallEvents");
+    NcclLog->writeLog(NcclLogLevel::DEBUG, " Sys::handleEvent EventType::CallEvents");
     node->iterate();
     delete ehd;
   } else if (event == EventType::RendezvousSend) {
-    RendezvousSendData* rsd = (RendezvousSendData*)ehd;
+    const auto rsd = static_cast<RendezvousSendData*>(ehd);
     rsd->send->call(EventType::General, nullptr);
     delete rsd;
   } else if (event == EventType::RendezvousRecv) {
-    RendezvousRecvData* rrd = (RendezvousRecvData*)ehd;
+    const auto rrd = static_cast<RendezvousRecvData*>(ehd);
     rrd->recv->call(EventType::General, nullptr);
     delete rrd;
   } else if (event == EventType::PacketReceived) {
-    RecvPacketEventHadndlerData* rcehd = (RecvPacketEventHadndlerData*)ehd;
-    StreamBaseline* owner = static_cast<StreamBaseline*>(rcehd->owner);
+    const auto rcehd = static_cast<RecvPacketEventHadndlerData*>(ehd);
+    const auto owner = static_cast<StreamBaseline*>(rcehd->owner);
     owner->consume(rcehd);
     delete rcehd;
   } else if (event == EventType::PacketSent) {
-    SendPacketEventHandlerData* sendhd = (SendPacketEventHandlerData*)ehd;
-    NcclLog->writeLog(NcclLogLevel::DEBUG,"packet sent, sender id:  %d, node id:  %d",sendhd->senderNodeId,node->id);
-    #if defined(NS3_MTP) || defined(PHY_MTP)
+    const auto sendhd = static_cast<SendPacketEventHandlerData*>(ehd);
+    NcclLog->writeLog(NcclLogLevel::DEBUG, "packet sent, sender id:  %d, node id:  %d", sendhd->senderNodeId, node->id);
+#if defined(NS3_MTP) || defined(PHY_MTP)
     SysExplicitCriticalSection ecs;
-    #endif
-    if(all_generators[sendhd->senderNodeId]== nullptr){
-      #if defined(NS3_MTP) || defined(PHY_MTP)
+#endif
+    if (all_generators[sendhd->senderNodeId] == nullptr) {
+#if defined(NS3_MTP) || defined(PHY_MTP)
       ecs.ExitSection();
-      #endif
+#endif
       goto SEND_HANDLER_END;
     }
 
-    if (node->pending_sends.find(
-            std::make_pair(sendhd->receiverNodeId, sendhd->tag)) ==
-            node->pending_sends.end() ||
-            node->pending_sends[std::make_pair(sendhd->receiverNodeId, sendhd->tag)]
-                .size() == 0) {
-      node->is_there_pending_sends[std::make_pair(
-          sendhd->receiverNodeId, sendhd->tag)] = false;
-      
-      if(node->event_queue.find(Sys::boostedTick())==node->event_queue.end())
+    if (node->pending_sends.find(std::make_pair(sendhd->receiverNodeId, sendhd->tag)) == node->pending_sends.end() ||
+        node->pending_sends[std::make_pair(sendhd->receiverNodeId, sendhd->tag)].size() == 0) {
+      node->is_there_pending_sends[std::make_pair(sendhd->receiverNodeId, sendhd->tag)] = false;
+
+      if (node->event_queue.find(Sys::boostedTick()) == node->event_queue.end())
         if ((node->finished_workloads == 1 && node->event_queue.size() == 0 && node->pending_sends.size() == 0) ||
-      node->initialized == false) {
-        delete node;
-      }
-      #if defined(NS3_MTP) || defined(PHY_MTP)
+            node->initialized == false) {
+          delete node;
+        }
+#if defined(NS3_MTP) || defined(PHY_MTP)
       ecs.ExitSection();
-      #endif
+#endif
     } else {
-      SimSendCaller* simSendCaller =
-          node->pending_sends[std::make_pair(sendhd->receiverNodeId, sendhd->tag)]
-                           .front();
-      node->pending_sends[std::make_pair(sendhd->receiverNodeId, sendhd->tag)]
-          .pop_front();
-      if(node->pending_sends[std::make_pair(sendhd->receiverNodeId, sendhd->tag)].size() == 0)
+      SimSendCaller* simSendCaller = node->pending_sends[std::make_pair(sendhd->receiverNodeId, sendhd->tag)].front();
+      node->pending_sends[std::make_pair(sendhd->receiverNodeId, sendhd->tag)].pop_front();
+      if (node->pending_sends[std::make_pair(sendhd->receiverNodeId, sendhd->tag)].size() == 0)
         node->pending_sends.erase(std::make_pair(sendhd->receiverNodeId, sendhd->tag));
 
-      #if defined(NS3_MTP) || defined(PHY_MTP)
+#if defined(NS3_MTP) || defined(PHY_MTP)
       ecs.ExitSection();
-      #endif
+#endif
       simSendCaller->call(EventType::General, nullptr);
     }
-SEND_HANDLER_END:
+  SEND_HANDLER_END:
     delete sendhd;
-  }else if(event==EventType::PacketSentFinshed){
-    AstraSim::SendPacketEventHandlerData* ehd = (AstraSim::SendPacketEventHandlerData*) arg;
-    if(ehd->owner!=nullptr)
+  } else if (event == EventType::PacketSentFinshed) {
+    auto ehd = static_cast<SendPacketEventHandlerData*>(arg);
+    if (ehd->owner != nullptr)
       ehd->owner->sendcallback(ehd);
   }
 }
 
-AstraSim::timespec_t Sys::generate_time(int cycles) {
+timespec_t Sys::generate_time(const int cycles) const {
   timespec_t tmp = NI->sim_get_time();
-  double addition = cycles * ((double)CLOCK_PERIOD);
+  const double addition = cycles * static_cast<double>(CLOCK_PERIOD);
   tmp.time_val = addition;
   return tmp;
 }

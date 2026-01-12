@@ -73,7 +73,7 @@ public:
   int sim_comm_size(AstraSim::sim_comm comm, int *size) { return 0; }
   int sim_finish() {
     for (auto it = nodeHash.begin(); it != nodeHash.end(); it++) {
-      Finish();
+      finish();
       pair<int, int> p = it->first;
       if (p.second == 0) {
         std::cout << "sim_finish on sent, " << " Thread id: " << pthread_self() << std::endl;
