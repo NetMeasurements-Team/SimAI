@@ -163,7 +163,7 @@ Sys::Sys(
   this->seprate_log = seprate_log;
   this->rendezvous_enabled = rendezvous_enabled;
   this->NVSwitchs = _NVSwitchs;
-  this->all_gpus = _all_gpus;
+  this->topo_gpus = _all_gpus;
   this->gpu_type = _gpu_type;
   this->ngpus_per_node = _ngpus_per_node;
   if ((id + npu_offset + 1) > all_generators.size()) {
@@ -1255,21 +1255,35 @@ bool Sys::mock_nccl_grobal_group_init() const {
   if (GlobalGroup != nullptr) {
     return true;
   } else {
-    int total_nodes = this->total_nodes;
     int TP_size = workload->model_parallel_npu_group == 0 ? total_nodes : workload->model_parallel_npu_group;
-    int PP_size = 1;
-    int DP_size = all_gpus[0] / (TP_size * PP_size);
+    int PP_size = workload->pipeline_model_parallelism;
+    if (workload->all_gpus == topo_gpus[0]*PP_size) {
+      // only simulate one stage of the pipeline
+      PP_size = 1;
+    } else if (workload->all_gpus != topo_gpus[0]) {
+      std::cerr << "Workload has " << workload->all_gpus
+                << " GPUs with PP " << PP_size
+                << ", which is not compatible with the simulated topology (" << topo_gpus[0] << " GPUs)"
+                << std::endl;
+      std::cerr << "This error is fatal. Please check your workload and topology." << std::endl;
+      exit(1);
+    } else {
+      std::cout << "WARNING: PP=" << PP_size
+                << ", but pipeline communication is not simulated currently."
+                << std::endl;
+    }
+    int DP_size = topo_gpus[0] / (TP_size * PP_size);
     int EP_size = workload->expert_parallel_npu_group;
     int DP_EP_size = DP_size / EP_size;
     GlobalGroup = new MockNccl::MockNcclGroup(
-        all_gpus[0], ngpus_per_node, TP_size, DP_size, PP_size, EP_size, DP_EP_size, NVSwitchs, gpu_type);
+        topo_gpus[0], ngpus_per_node, TP_size, DP_size, PP_size, EP_size, DP_EP_size, NVSwitchs, gpu_type);
     return true;
   }
 }
 
 bool Sys::mock_nccl_comms_init() {
   int TP_size = workload->model_parallel_npu_group == 0 ? total_nodes : workload->model_parallel_npu_group;
-  int PP_size = 1;
+  int PP_size = workload->pipeline_model_parallelism;
   int DP_size = total_nodes / (TP_size * PP_size);
   int EP_size = workload->expert_parallel_npu_group;
   int DP_EP_size = DP_size / EP_size;
@@ -1793,7 +1807,7 @@ void Sys::call(EventType type, CallData* data) {
 void Sys::try_register_event(Callable* callable, EventType event, CallData* callData, Tick& cycles) {
   bool should_schedule = false;
   {
-    #ifdef NS3_MTP
+    #if defined(NS3_MTP) || defined(PHY_MTP)
     SysCriticalSection cs;
     #endif
     MockNcclLog* NcclLog = MockNcclLog::getInstance();

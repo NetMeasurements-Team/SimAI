@@ -94,7 +94,7 @@ public:
   std::list<Callable*> registered_for_finished_stream_event;
 
   std::vector<int> physical_dims;
-  std::vector<int> all_gpus;
+  std::vector<int> topo_gpus;
   std::vector<int> queues_per_dim;
   int max_running;
   int concurrent_streams;

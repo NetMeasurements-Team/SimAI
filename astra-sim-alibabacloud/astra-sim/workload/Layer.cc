@@ -566,7 +566,7 @@ LayerData Layer::report(
   int PP_size = workload->pipeline_model_parallelism;
   int vpp = workload->vpp;
   uint32_t pp_commsize = workload->pp_commsize;
-  int DP_size = generator->all_gpus[0] / (TP_size * PP_size);
+  int DP_size = workload->all_gpus / (TP_size * PP_size);
   int GA = workload->GA;
   int EP_size = workload->expert_parallel_npu_group;
   int fwd_pass_group_size ;
@@ -582,9 +582,9 @@ LayerData Layer::report(
                                                              : DP_size;
   if(param->mode == ModeType::ANALYTICAL){
     
-    total_fwd_comm = compute_time(fwd_pass_comm_type,TP_size,fwd_pass_group_size,fwd_pass_comm_size,fwd_pass_group_type,generator->all_gpus[0],EP_size);
-    total_weight_grad_comm = compute_time(weight_grad_comm_type,TP_size,weight_grad_group_size,weight_grad_comm_size,weight_grad_group_type,generator->all_gpus[0],EP_size);
-    total_input_grad_comm = compute_time(input_grad_comm_type,TP_size,input_grad_group_size,input_grad_comm_size,input_grad_group_type,generator->all_gpus[0],EP_size);
+    total_fwd_comm = compute_time(fwd_pass_comm_type,TP_size,fwd_pass_group_size,fwd_pass_comm_size,fwd_pass_group_type,workload->all_gpus/PP_size,EP_size);
+    total_weight_grad_comm = compute_time(weight_grad_comm_type,TP_size,weight_grad_group_size,weight_grad_comm_size,weight_grad_group_type,workload->all_gpus/PP_size,EP_size);
+    total_input_grad_comm = compute_time(input_grad_comm_type,TP_size,input_grad_group_size,input_grad_comm_size,input_grad_group_type,workload->all_gpus/PP_size,EP_size);
     total_waiting_for_fwd_comm = total_fwd_comm; //tp forward
     total_waiting_for_ig_comm = total_input_grad_comm;  //tp backward
     total_waiting_for_wg_comm = total_weight_grad_comm;
