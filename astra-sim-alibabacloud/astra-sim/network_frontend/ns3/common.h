@@ -55,6 +55,7 @@ inline std::string data_rate, link_delay, topology_file, flow_file, trace_file, 
 inline std::string fct_output_file = "fct.txt";
 inline std::string pfc_output_file = "pfc.txt";
 inline std::string send_output_file = "send.txt";
+std::string recv_output_file = "recv.txt";
 
 inline double alpha_resume_interval = 55, rp_timer, ewma_gain = 1 / 16;
 inline double rate_decrease_interval = 4;
@@ -353,11 +354,11 @@ inline void printRoutingEntries() {
         Ptr<Node> firstHop = nexts[k];
         uint32_t interface = nbr2if[src][firstHop].idx;
         if (src->GetNodeType() == 0) {
-          Host[src][dst].push_back(pair(firstHop, interface));
+          Host[src][dst].emplace_back(firstHop, interface);
         } else if(src->GetNodeType() == 1) {
-          NetSwitch[src][dst].push_back(pair(firstHop, interface));
+          NetSwitch[src][dst].emplace_back(firstHop, interface);
         } else if(src->GetNodeType() == 2) {
-          NVSwitch[src][dst].push_back(pair(firstHop, interface));
+          NVSwitch[src][dst].emplace_back(firstHop, interface);
         }
       }
     }
@@ -732,7 +733,8 @@ inline void SetConfig() {
 inline void SetupNetwork(
     void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),
     void (*message_finish)(FILE*, Ptr<RdmaQueuePair>, uint64_t, uint64_t),
-    void (*send_finish)(FILE *, Ptr<RdmaQueuePair>, uint64_t, uint64_t)) {
+    void (*send_finish)(FILE *, Ptr<RdmaQueuePair>, uint64_t, uint64_t),
+    void (*recv_finish)(FILE *, Ptr<RdmaRxQueuePair>, uint64_t, uint64_t)) {
 
   topo_ifs.open(topology_file.c_str());
   flowf.open(flow_file.c_str());
@@ -932,6 +934,7 @@ inline void SetupNetwork(
 #if ENABLE_QP
   FILE *fct_output = fopen(fct_output_file.c_str(), "w");
   FILE *send_output = fopen(send_output_file.c_str(), "w");
+  FILE *recv_output = fopen(recv_output_file.c_str(), "w");
   for (uint32_t i = 0; i < node_num; i++) {
     if (n.Get(i)->GetNodeType() == 0 || n.Get(i)->GetNodeType() == 2) { 
       // create RdmaHw
@@ -952,37 +955,37 @@ inline void SetupNetwork(
       switch (cc_mode) {
       case 1:
         // MellanoxDcqcn
-        rdmaHw->m_cc_configs.push_back(std::make_pair("AlphaResumInterval", DoubleValue(alpha_resume_interval).Copy()));
-        rdmaHw->m_cc_configs.push_back(std::make_pair("RateDecreaseInterval", DoubleValue(rate_decrease_interval).Copy()));
-        rdmaHw->m_cc_configs.push_back(std::make_pair("ClampTargetRate", BooleanValue(clamp_target_rate).Copy()));
-        rdmaHw->m_cc_configs.push_back(std::make_pair("RPTimer", DoubleValue(rp_timer).Copy()));
-        rdmaHw->m_cc_configs.push_back(std::make_pair("EwmaGain", DoubleValue(ewma_gain).Copy()));
-        rdmaHw->m_cc_configs.push_back(std::make_pair("FastRecoveryTimes", UintegerValue(fast_recovery_times).Copy()));
+        rdmaHw->m_cc_configs.emplace_back("AlphaResumInterval", DoubleValue(alpha_resume_interval).Copy());
+        rdmaHw->m_cc_configs.emplace_back("RateDecreaseInterval", DoubleValue(rate_decrease_interval).Copy());
+        rdmaHw->m_cc_configs.emplace_back("ClampTargetRate", BooleanValue(clamp_target_rate).Copy());
+        rdmaHw->m_cc_configs.emplace_back("RPTimer", DoubleValue(rp_timer).Copy());
+        rdmaHw->m_cc_configs.emplace_back("EwmaGain", DoubleValue(ewma_gain).Copy());
+        rdmaHw->m_cc_configs.emplace_back("FastRecoveryTimes", UintegerValue(fast_recovery_times).Copy());
         break;
       case 3:
         // Hpcc
-        rdmaHw->m_cc_configs.push_back(std::make_pair("FastReact", BooleanValue(fast_react).Copy()));
-        rdmaHw->m_cc_configs.push_back(std::make_pair("TargetUtil", DoubleValue(u_target).Copy()));
-        rdmaHw->m_cc_configs.push_back(std::make_pair("MiThresh", DoubleValue(mi_thresh).Copy()));
-        rdmaHw->m_cc_configs.push_back(std::make_pair("MultiRate", BooleanValue(multi_rate).Copy()));
-        rdmaHw->m_cc_configs.push_back(std::make_pair("SampleFeedback ", BooleanValue(sample_feedback).Copy()));
+        rdmaHw->m_cc_configs.emplace_back("FastReact", BooleanValue(fast_react).Copy());
+        rdmaHw->m_cc_configs.emplace_back("TargetUtil", DoubleValue(u_target).Copy());
+        rdmaHw->m_cc_configs.emplace_back("MiThresh", DoubleValue(mi_thresh).Copy());
+        rdmaHw->m_cc_configs.emplace_back("MultiRate", BooleanValue(multi_rate).Copy());
+        rdmaHw->m_cc_configs.emplace_back("SampleFeedback ", BooleanValue(sample_feedback).Copy());
         break;
       case 8:
         // Dctcp
-        rdmaHw->m_cc_configs.push_back(std::make_pair("DctcpRateAI", DataRateValue(DataRate(dctcp_rate_ai)).Copy()));
+        rdmaHw->m_cc_configs.emplace_back("DctcpRateAI", DataRateValue(DataRate(dctcp_rate_ai)).Copy());
         break;
       case 10:
         // HpccPint
-        rdmaHw->m_cc_configs.push_back(std::make_pair("PintProb", DoubleValue(pint_prob).Copy()));
+        rdmaHw->m_cc_configs.emplace_back("PintProb", DoubleValue(pint_prob).Copy());
         break;
       case 12:
         // RealDcqcn
-        rdmaHw->m_cc_configs.push_back(std::make_pair("EwmaGain", DoubleValue(r_dcqcn_ewma_gain).Copy()));
-        rdmaHw->m_cc_configs.push_back(std::make_pair("F", UintegerValue(r_dcqcn_f).Copy()));
-        rdmaHw->m_cc_configs.push_back(std::make_pair("RateUpdateDelay", StringValue(r_dcqcn_rate_u_delay).Copy()));
-        rdmaHw->m_cc_configs.push_back(std::make_pair("AlphaUpdateDelay", StringValue(r_dcqcn_alpha_u_delay).Copy()));
-        rdmaHw->m_cc_configs.push_back(std::make_pair("BytesThreshold", UintegerValue(r_dcqcn_bytes_threshold).Copy()));
-        rdmaHw->m_cc_configs.push_back(std::make_pair("Clamp", BooleanValue(r_dcqcn_clamp).Copy()));
+        rdmaHw->m_cc_configs.emplace_back("EwmaGain", DoubleValue(r_dcqcn_ewma_gain).Copy());
+        rdmaHw->m_cc_configs.emplace_back("F", UintegerValue(r_dcqcn_f).Copy());
+        rdmaHw->m_cc_configs.emplace_back("RateUpdateDelay", StringValue(r_dcqcn_rate_u_delay).Copy());
+        rdmaHw->m_cc_configs.emplace_back("AlphaUpdateDelay", StringValue(r_dcqcn_alpha_u_delay).Copy());
+        rdmaHw->m_cc_configs.emplace_back("BytesThreshold", UintegerValue(r_dcqcn_bytes_threshold).Copy());
+        rdmaHw->m_cc_configs.emplace_back("Clamp", BooleanValue(r_dcqcn_clamp).Copy());
         break;
       default:;
       }
@@ -997,6 +1000,7 @@ inline void SetupNetwork(
       rdma->TraceConnectWithoutContext("QpComplete", MakeBoundCallback(qp_finish, fct_output));
       rdma->TraceConnectWithoutContext("MessageComplete", MakeBoundCallback(message_finish, fct_output));
       rdma->TraceConnectWithoutContext("SendComplete", MakeBoundCallback(send_finish, send_output));
+      rdma->TraceConnectWithoutContext("RecvComplete", MakeBoundCallback(recv_finish, recv_output));
     }
   }
 #endif
@@ -1039,23 +1043,24 @@ inline void SetupNetwork(
     }
   }
 
-  NodeContainer trace_nodes;
-  for (uint32_t i = 0; i < trace_num; i++) {
-    uint32_t nid;
-    tracef >> nid;
-    if (nid >= n.GetN()) {
-      continue;
-    }
-    cout << "Add trace node " << nid << endl;
-    trace_nodes = NodeContainer(trace_nodes, n.Get(nid));
-  }
-
-  FILE *trace_output = fopen(trace_output_file.c_str(), "w");
+  FILE* trace_output = fopen(trace_output_file.c_str(), "w");
   if (trace_output == nullptr) {
     cout << "open trace_output_file failed: " << trace_output_file << endl;
     exit(1);
   }
+
   if (enable_trace) {
+    NodeContainer trace_nodes;
+    for (uint32_t i = 0; i < trace_num; i++) {
+      uint32_t nid;
+      tracef >> nid;
+      if (nid >= n.GetN()) {
+        continue;
+      }
+      cout << "Add trace node " << nid << endl;
+      trace_nodes = NodeContainer(trace_nodes, n.Get(nid));
+    }
+
     cout << "Enabled tracing for " << trace_nodes.GetN() << " nodes (output: " << trace_output_file << ")" << endl;
     qbb.EnableTracing(trace_output, trace_nodes);
   }

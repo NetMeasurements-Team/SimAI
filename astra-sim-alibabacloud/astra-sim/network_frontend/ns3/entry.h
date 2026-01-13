@@ -420,7 +420,7 @@ void finish() {
 }
 
 /**
- * Invoked when receiving the ack of the last packet of the current flow.
+ * Invoked when receiving the ack of the last packet for the current flow.
  */
 void message_finish(FILE* fout, Ptr<RdmaQueuePair> q, uint64_t msg_size, uint64_t flow_id) {
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
@@ -450,34 +450,6 @@ void message_finish(FILE* fout, Ptr<RdmaQueuePair> q, uint64_t msg_size, uint64_
       (Simulator::Now() - q->m_lastMessageStartTime).GetTimeStep(),
       standalone_fct);
   fflush(fout);
-
-  AstraSim::ncclFlowTag flowTag;
-  uint64_t notify_size;
-  {
-#ifdef NS3_MTP
-    MtpInterface::CriticalSection cs;
-#endif
-    if (sender_src_port_map.find(make_pair(flow_id, make_pair(q->sport, make_pair(sid, did)))) ==
-        sender_src_port_map.end()) {
-      NcclLog->writeLog(NcclLogLevel::ERROR, "could not find the tag, there must be something wrong");
-      exit(-1);
-    }
-    flowTag = sender_src_port_map[std::make_pair(flow_id, std::make_pair(q->sport, std::make_pair(sid, did)))];
-    if (flowTag.current_flow_id != flow_id) {
-      NcclLog->writeLog(NcclLogLevel::DEBUG, "Exit with unequal flow_id");
-      exit(-1);
-    }
-    sender_src_port_map.erase(make_pair(flow_id, make_pair(q->sport, make_pair(sid, did))));
-    received_chunksize[std::make_pair(flowTag.current_flow_id, std::make_pair(sid, did))] += size;
-    if (!is_receive_finished(sid, did, flowTag)) {
-      return;
-    }
-    notify_size = received_chunksize[std::make_pair(flowTag.current_flow_id, std::make_pair(sid, did))];
-    received_chunksize.erase(std::make_pair(flowTag.current_flow_id, std::make_pair(sid, did)));
-  }
-  NcclLog->writeLog(NcclLogLevel::DEBUG, "Before enter notify_receiver_data");
-  notify_receiver_receive_data(sid, did, notify_size, flowTag);
-  NcclLog->writeLog(NcclLogLevel::DEBUG, "Out notify_receiver_data");
 }
 
 /**
@@ -528,7 +500,9 @@ void send_finish(FILE* fout, Ptr<RdmaQueuePair> q, uint64_t msg_size, uint64_t f
 #ifdef NS3_MTP
     MtpInterface::CriticalSection cs;
 #endif
-    flowTag = sender_src_port_map[std::make_pair(flow_id, std::make_pair(q->sport, std::make_pair(sid, did)))];
+    flowTag = sender_src_port_map[std::make_pair(
+        flow_id,
+        std::make_pair(q->sport, std::make_pair(sid, did)))];
     if (flowTag.current_flow_id != flow_id) {
       NcclLog->writeLog(NcclLogLevel::DEBUG, "Exit with unequal flow_id");
       exit(-1);
@@ -543,6 +517,51 @@ void send_finish(FILE* fout, Ptr<RdmaQueuePair> q, uint64_t msg_size, uint64_t f
   notify_sender_sending_finished(sid, did, all_sent_chunksize, flowTag);
 }
 
+
+/**
+ * Invoked when sending the last ack of the current flow.
+ */
+void recv_finish(FILE* fout, Ptr<RdmaRxQueuePair> rx_q, uint64_t msg_size, uint64_t flow_id) {
+  MockNcclLog* NcclLog = MockNcclLog::getInstance();
+  const uint32_t sip = rx_q->dip, dip = rx_q->sip;
+  uint16_t sport = rx_q->dport;
+  uint32_t sid = ip_to_node_id(Ipv4Address(sip)), did = ip_to_node_id(Ipv4Address(dip));
+  NcclLog->writeLog(
+      NcclLogLevel::INFO,
+      "recv_finish, flow_id %u, %u -> %u, %u flows left in qp, at the tick: %u",
+      flow_id, sid, did, rx_q->m_messages.size(), AstraSim::Sys::boostedTick());
+
+  AstraSim::ncclFlowTag flowTag;
+  uint64_t notify_size;
+  {
+    #ifdef NS3_MTP
+    MtpInterface::CriticalSection cs;
+    #endif
+    if (sender_src_port_map.find(make_pair(flow_id, make_pair(sport, make_pair(sid, did)))) ==
+        sender_src_port_map.end()) {
+      NcclLog->writeLog(NcclLogLevel::ERROR,"could not find the tag, there must be something wrong");
+      exit(-1);
+        }
+    flowTag = sender_src_port_map[std::make_pair(
+        flow_id,
+        std::make_pair(sport, std::make_pair(sid, did)))];
+    if (flowTag.current_flow_id != flow_id) {
+      NcclLog->writeLog(NcclLogLevel::DEBUG,"Exit with unequal flow_id");
+      exit(-1);
+    }
+    sender_src_port_map.erase(make_pair(flow_id,make_pair(sport, make_pair(sid, did))));
+    received_chunksize[std::make_pair(flowTag.current_flow_id,std::make_pair(sid,did))] += msg_size;
+    if (!is_receive_finished(sid,did,flowTag)) {
+      return;
+    }
+    notify_size = received_chunksize[std::make_pair(flowTag.current_flow_id,std::make_pair(sid,did))];
+    received_chunksize.erase(std::make_pair(flowTag.current_flow_id,std::make_pair(sid,did)));
+  }
+  NcclLog->writeLog(NcclLogLevel::DEBUG,"Before enter notify_receiver_data");
+  notify_receiver_receive_data(sid, did, notify_size, flowTag);
+  NcclLog->writeLog(NcclLogLevel::DEBUG,"Out notify_receiver_data");
+}
+
 int setup_ns3_simulation(const string& network_topo, const string& network_conf, const string& run_name) {
   clock_t begint, endt;
   begint = clock();
@@ -550,7 +569,7 @@ int setup_ns3_simulation(const string& network_topo, const string& network_conf,
   if (!ReadConf(network_topo, network_conf, run_name))
     return -1;
   SetConfig();
-  SetupNetwork(qp_finish, message_finish, send_finish);
+  SetupNetwork(qp_finish, message_finish, send_finish, recv_finish);
 
   std::cout << "Running Simulation.\n";
   fflush(stdout);
