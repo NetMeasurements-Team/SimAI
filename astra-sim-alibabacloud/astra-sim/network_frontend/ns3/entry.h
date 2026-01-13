@@ -232,12 +232,12 @@ void send_flow(
       MtpInterface::CriticalSection cs;
 #endif
       sender_src_port_map[std::make_pair(flow_id, std::make_pair(port, std::make_pair(src, dst)))] = request->flowTag;
+      waiting_to_sent_callback[std::make_pair(flow_id, std::make_pair(src, dst))]++;
+      waiting_to_notify_receiver[std::make_pair(flow_id, std::make_pair(src, dst))]++;
     }
 
     Simulator::ScheduleWithContext(
         n.Get(src)->GetId(), Time(send_lat + 1), push_msg_to_client, clients[qp_index], size, flow_id);
-    waiting_to_sent_callback[std::make_pair(flow_id, std::make_pair(src, dst))]++;
-    waiting_to_notify_receiver[std::make_pair(flow_id, std::make_pair(src, dst))]++;
   }
   flow_input.idx++;
 }
