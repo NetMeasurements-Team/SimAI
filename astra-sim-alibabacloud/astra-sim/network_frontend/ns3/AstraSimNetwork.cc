@@ -51,6 +51,8 @@ extern uint32_t node_num, switch_num, link_num, trace_num, nvswitch_num, gpus_pe
 extern GPUType gpu_type;
 extern std::vector<int>NVswitchs;
 
+static std::once_flag sim_finished;
+
 struct sim_event {
   void *buffer;
   uint64_t count;
@@ -72,8 +74,10 @@ public:
   ~ASTRASimNetwork() {}
   int sim_comm_size(AstraSim::sim_comm comm, int *size) { return 0; }
   int sim_finish() {
-    for (auto it = nodeHash.begin(); it != nodeHash.end(); it++) {
-      finish();
+    for (auto it = nodeHash.begin(); it != nodeHash.end(); ++it) {
+      std::call_once(sim_finished, [] {
+        finish();
+      });
       pair<int, int> p = it->first;
       if (p.second == 0) {
         std::cout << "sim_finish on sent, " << " Thread id: " << pthread_self() << std::endl;
