@@ -476,6 +476,9 @@ inline uint64_t get_nic_rate(const NodeContainer &n) {
 inline bool ReadConf(const string& network_topo, const string& network_conf, const string& run_name) {
   std::ifstream conf;
   conf.open(network_conf);
+  if (!conf.is_open()) {
+    return false;
+  }
   topology_file = network_topo;
   while (!conf.eof()) {
     std::string key;
@@ -735,11 +738,16 @@ inline void SetupNetwork(
     void (*message_finish)(FILE*, Ptr<RdmaQueuePair>, uint64_t, uint64_t),
     void (*send_finish)(FILE *, Ptr<RdmaQueuePair>, uint64_t, uint64_t),
     void (*recv_finish)(FILE *, Ptr<RdmaRxQueuePair>, uint64_t, uint64_t)) {
+  string gpu_type_str;
 
   topo_ifs.open(topology_file.c_str());
   flowf.open(flow_file.c_str());
   tracef.open(trace_file.c_str());
-  string gpu_type_str;
+  if (!topo_ifs.is_open()) {
+    std::cerr << "Unable to open topology file: " << topology_file << std::endl;
+    std::cerr << "This error is fatal." << std::endl;
+    exit(1);
+  }
 
   topo_ifs >> node_num >> gpus_per_server >> nvswitch_num >> switch_num >> link_num >> gpu_type_str;
   flowf >> flow_num;

@@ -22,6 +22,7 @@
 
 #include "astra-sim/system/MockNcclLog.h"
 #include "astra-sim/system/MockNcclQps.h"
+#include "astra-sim/system/AstraNetworkAPI.hh"
 #include "common.h"
 
 #include <ns3/applications-module.h>
@@ -566,8 +567,11 @@ int setup_ns3_simulation(const string& network_topo, const string& network_conf,
   clock_t begint, endt;
   begint = clock();
 
-  if (!ReadConf(network_topo, network_conf, run_name))
-    return -1;
+  if (!ReadConf(network_topo, network_conf, run_name)) {
+    std::cerr << "Unable to open configuration file: " << network_conf << std::endl;
+    std::cerr << "This error is fatal." << std::endl;
+    exit(1);
+  }
   SetConfig();
   SetupNetwork(qp_finish, message_finish, send_finish, recv_finish);
 
