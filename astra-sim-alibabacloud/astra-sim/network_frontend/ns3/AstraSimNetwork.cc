@@ -30,6 +30,7 @@
 #include <queue>
 #include <stdio.h>
 #include <string>
+#include <atomic>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -50,8 +51,7 @@ extern std::map<std::pair<std::pair<int, int>,int>, AstraSim::ncclFlowTag> recei
 extern uint32_t node_num, switch_num, link_num, trace_num, nvswitch_num, gpus_per_server;
 extern GPUType gpu_type;
 extern std::vector<int>NVswitchs;
-
-static std::once_flag sim_finished;
+extern std::atomic<bool> waiting_sim_finish;
 
 struct sim_event {
   void *buffer;
@@ -75,9 +75,6 @@ public:
   int sim_comm_size(AstraSim::sim_comm comm, int *size) { return 0; }
   int sim_finish() {
     for (auto it = nodeHash.begin(); it != nodeHash.end(); ++it) {
-      std::call_once(sim_finished, [] {
-        finish();
-      });
       pair<int, int> p = it->first;
       if (p.second == 0) {
         std::cout << "sim_finish on sent, " << " Thread id: " << pthread_self() << std::endl;
@@ -89,7 +86,8 @@ public:
              << "\n";
       }
     }
-    Simulator::Stop();
+    waiting_sim_finish = true;
+    std::cout << "Waiting for any pending message..." << std::endl;
     return 0;
   }
   double sim_time_resolution() { return 0; }

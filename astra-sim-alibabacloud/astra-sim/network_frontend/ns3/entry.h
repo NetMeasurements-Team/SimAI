@@ -65,8 +65,12 @@ inline std::map<std::pair<int, std::pair<int, int>>, task1> sentHash;
 inline std::map<std::pair<int, int>, uint64_t> nodeHash;
 inline std::map<std::pair<int, std::pair<int, int>>, int> waiting_to_sent_callback;
 inline std::map<std::pair<int, std::pair<int, int>>, int> waiting_to_notify_receiver;
+inline std::map<std::pair<int, std::pair<int, int>>, int> waiting_to_message_finish;
 inline std::map<std::pair<int, std::pair<int, int>>, uint64_t> received_chunksize;
 inline std::map<std::pair<int, std::pair<int, int>>, uint64_t> sent_chunksize;
+
+static std::once_flag sim_finished;
+static std::atomic<bool> waiting_sim_finish(false);
 
 inline bool is_sending_finished(int src, int dst, const AstraSim::ncclFlowTag& flowTag) {
   int tag_id = flowTag.current_flow_id;
@@ -92,6 +96,16 @@ inline bool is_receive_finished(int src, int dst, const AstraSim::ncclFlowTag& f
         waiting_to_notify_receiver[std::make_pair(tag_id, std::make_pair(src, dst))]);
     if (--waiting_to_notify_receiver[std::make_pair(tag_id, std::make_pair(src, dst))] == 0) {
       waiting_to_notify_receiver.erase(std::make_pair(tag_id, std::make_pair(src, dst)));
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool is_message_finished(int src, int dst, int flow_id) {
+  if (waiting_to_message_finish.count(std::make_pair(flow_id, std::make_pair(src, dst)))) {
+    if (--waiting_to_message_finish[std::make_pair(flow_id, std::make_pair(src, dst))] == 0) {
+      waiting_to_message_finish.erase(std::make_pair(flow_id, std::make_pair(src, dst)));
       return true;
     }
   }
@@ -235,6 +249,7 @@ void send_flow(
       sender_src_port_map[std::make_pair(flow_id, std::make_pair(port, std::make_pair(src, dst)))] = request->flowTag;
       waiting_to_sent_callback[std::make_pair(flow_id, std::make_pair(src, dst))]++;
       waiting_to_notify_receiver[std::make_pair(flow_id, std::make_pair(src, dst))]++;
+      waiting_to_message_finish[std::make_pair(flow_id, std::make_pair(src, dst))]++;
     }
 
     Simulator::ScheduleWithContext(
@@ -420,6 +435,17 @@ void finish() {
   }
 }
 
+void check_sim_finish() {
+  if (waiting_sim_finish && waiting_to_notify_receiver.empty() && waiting_to_sent_callback.empty() &&
+      waiting_to_message_finish.empty() && sentHash.empty() && expeRecvHash.empty()) {
+    std::call_once(sim_finished, [] {
+      std::cout << "All messages finished. Stopping simulation." << std::endl;
+      finish();
+    });
+    Simulator::Stop();
+  }
+}
+
 /**
  * Invoked when receiving the ack of the last packet for the current flow.
  */
@@ -432,6 +458,7 @@ void message_finish(FILE* fout, Ptr<RdmaQueuePair> q, uint64_t msg_size, uint64_
       q->m_messages.size(),
       AstraSim::Sys::boostedTick());
   uint32_t sid = ip_to_node_id(q->sip), did = ip_to_node_id(q->dip);
+
   uint64_t base_rtt = pairRtt[sid][did], b = pairBw[sid][did];
   uint64_t size = msg_size;
   uint32_t total_bytes = size +
@@ -451,6 +478,16 @@ void message_finish(FILE* fout, Ptr<RdmaQueuePair> q, uint64_t msg_size, uint64_
       (Simulator::Now() - q->m_lastMessageStartTime).GetTimeStep(),
       standalone_fct);
   fflush(fout);
+
+  {
+    #ifdef NS3_MTP
+    MtpInterface::CriticalSection cs;
+    #endif
+    if (!is_message_finished(sid, did, flow_id)) {
+      return;
+    }
+  }
+  Simulator::Schedule(Time(0), &check_sim_finish);
 }
 
 /**
@@ -558,9 +595,7 @@ void recv_finish(FILE* fout, Ptr<RdmaRxQueuePair> rx_q, uint64_t msg_size, uint6
     notify_size = received_chunksize[std::make_pair(flowTag.current_flow_id,std::make_pair(sid,did))];
     received_chunksize.erase(std::make_pair(flowTag.current_flow_id,std::make_pair(sid,did)));
   }
-  NcclLog->writeLog(NcclLogLevel::DEBUG,"Before enter notify_receiver_data");
   notify_receiver_receive_data(sid, did, notify_size, flowTag);
-  NcclLog->writeLog(NcclLogLevel::DEBUG,"Out notify_receiver_data");
 }
 
 int setup_ns3_simulation(const string& network_topo, const string& network_conf, const string& run_name) {
