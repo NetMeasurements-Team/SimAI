@@ -68,6 +68,8 @@ inline double error_rate_per_link = 0.0;
 inline uint32_t has_win = 1;
 inline uint32_t global_t = 1;
 inline uint32_t mi_thresh = 5;
+inline bool flow_stripping = false;
+inline bool reuse_qps = true;
 inline bool var_win = false, fast_react = true;
 inline bool multi_rate = true;
 inline bool sample_feedback = false;
@@ -114,6 +116,7 @@ inline uint64_t nic_rate;
 inline uint64_t maxRtt, maxBdp;
 inline std::vector<Ipv4Address> serverAddress;
 inline std::unordered_map<uint32_t, unordered_map<uint32_t, uint16_t>> portNumber;
+inline std::map<std::pair<uint32_t, uint32_t>, uint32_t> ecmp_ctr;
 
 struct Interface {
   uint32_t idx;
@@ -576,6 +579,14 @@ inline bool ReadConf(const string& network_topo, const string& network_conf, con
       fct_output_file = extend_output_file_name(run_name, fct_output_file);
     } else if (key.compare("HAS_WIN") == 0) {
       conf >> has_win;
+    } if (key.compare("REUSE_QPS") == 0) {
+      uint32_t v;
+      conf >> v;
+      reuse_qps = v;
+    } if (key.compare("ENABLE_FLOW_STRIPPING") == 0) {
+      uint32_t v;
+      conf >> v;
+      flow_stripping = v;
     } else if (key.compare("GLOBAL_T") == 0) {
       conf >> global_t;
       global_t = 1;

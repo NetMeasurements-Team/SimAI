@@ -18,7 +18,6 @@
 
 #undef PGO_TRAINING
 #define PATH_TO_PGO_CONFIG "path_to_pgo_config"
-#define _QPS_PER_CONNECTION_ 1
 
 #include "astra-sim/system/MockNcclLog.h"
 #include "astra-sim/system/MockNcclQps.h"
@@ -125,15 +124,16 @@ inline std::vector<Ptr<RdmaClient>> get_clients(
     void* fun_arg,
     int tag,
     int sendLat,
-    bool nvls_on) {
+    bool nvls_on,
+    size_t n_clients) {
   std::vector<Ptr<RdmaClient>> clients;
-  constexpr bool reuse = true; // src/gpus_per_server != dst/gpus_per_server;
+  const bool reuse = reuse_qps; // src/gpus_per_server != dst/gpus_per_server;
   std::string hashKey = get_hash_key(src, dst, pg, dport);
 #ifdef NS3_MTP
   MtpInterface::CriticalSection cs;
 #endif
   if (appCon[hashKey].GetN() == 0) {
-    for (int i = 0; i < _QPS_PER_CONNECTION_; i++) {
+    for (int i = 0; i < n_clients; i++) {
       uint32_t port = portNumber[src][dst]++; // get a new port number
       RdmaClientHelper clientHelper(
           pg,
@@ -157,7 +157,7 @@ inline std::vector<Ptr<RdmaClient>> get_clients(
     }
     appCon[hashKey].Start(Time(sendLat));
   }
-  for (int i = 0; i < _QPS_PER_CONNECTION_; i++) {
+  for (int i = 0; i < n_clients; i++) {
     Ptr<RdmaClient> qp = DynamicCast<RdmaClient>(appCon[hashKey].Get(i));
     clients.push_back(qp);
   }
@@ -207,13 +207,20 @@ void send_flow(
     maxPacketCount = 1;
   }
 
-  std::vector<Ptr<RdmaClient>> clients = get_clients(src, dst, pg, dport, msg_handler, fun_arg, tag, send_lat, nvls_on);
+  uint16_t qps_per_flow = 1;
+  if (flow_stripping && src/gpus_per_server != dst/gpus_per_server) {
+    const size_t next_hops = nextHop[n.Get(src)][n.Get(dst)].size();
+    // use four qps per each next hop to increase the chances of distributing them across all the interfaces
+    qps_per_flow = next_hops*4;
+  }
 
+  std::vector<Ptr<RdmaClient>> clients =
+      get_clients(src, dst, pg, dport, msg_handler, fun_arg, tag, send_lat, nvls_on, qps_per_flow);
 
-  const uint64_t base_size = maxPacketCount / _QPS_PER_CONNECTION_;
-  const uint64_t last_size = base_size + maxPacketCount % _QPS_PER_CONNECTION_;
-  for (int qp_index = 0; qp_index < _QPS_PER_CONNECTION_; qp_index++) {
-    uint64_t size = qp_index == _QPS_PER_CONNECTION_ - 1 ? last_size : base_size;
+  const uint64_t base_size = maxPacketCount / qps_per_flow;
+  const uint64_t last_size = base_size + maxPacketCount % qps_per_flow;
+  for (int qp_index = 0; qp_index < qps_per_flow; qp_index++) {
+    uint64_t size = qp_index == qps_per_flow - 1 ? last_size : base_size;
     uint32_t port = clients[qp_index]->GetSourcePort();
 
     NcclLog->writeLog(
