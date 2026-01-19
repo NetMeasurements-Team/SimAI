@@ -55,7 +55,6 @@ FlowPhyRdma::send_wr_id_to_buff(int qpn,int wr_id){
         ptrsendata->sender_node,
         ptrsendata->receiver_node,
         ptrsendata->flow_size,
-        ptrsendata->pQps,
         ptrsendata->tag_id,
         ptrsendata->nvls_on);
     NcclLog->writeLog(NcclLogLevel::DEBUG,"SimAiFlowModelRdma.cc::send_wr_id_to_buff 数据包 send cqe,src_id %d dst_id %d qpn %d wr_id %d remote_addr %lld len %d  flow_id %d channel_id %d message_count: %lu",flowTag.sender_node,flowTag.receiver_node,qpn,wr_id,send_wr.wr.rdma.remote_addr,send_wr.sg_list[0].length,flowTag.current_flow_id,flowTag.channel_id,flowTag.flow_size);
@@ -78,7 +77,6 @@ FlowPhyRdma::recv_wr_id_to_buff(int qpn,int wr_id,int chunk_id){
         ptrsendata->sender_node,
         ptrsendata->receiver_node,
         ptrsendata->flow_size,
-        ptrsendata->pQps,
         ptrsendata->tag_id,
         ptrsendata->nvls_on);
     NcclLog->writeLog(NcclLogLevel::DEBUG,"SimAiFlowModelRdma.cc::recv_wr_id_to_buff 数据包 recv cqe,src_id %d dst_id %d qpn %d wr_id %d local_addr %lld flow_id %d channel_id %d message_count: %lu",flowTag.sender_node,flowTag.receiver_node,qpn,wr_id,recv_addr,flowTag.current_flow_id,flowTag.channel_id,flowTag.flow_size);

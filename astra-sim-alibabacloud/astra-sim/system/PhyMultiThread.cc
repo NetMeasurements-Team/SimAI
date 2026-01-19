@@ -51,7 +51,6 @@ insert_recv_cqe(void* buff) {
       ptrrecvdata->sender_node,
       ptrrecvdata->receiver_node,
       ptrrecvdata->flow_size,
-      ptrrecvdata->pQps,
       ptrrecvdata->tag_id,
       ptrrecvdata->nvls_on);
     NcclLog->writeLog(NcclLogLevel::DEBUG,"PhyMultiThread.cc::insert_recv_cqe src_id %d dst_id %d flow_id %d channel_id %d",flowTag.sender_node,flowTag.receiver_node,flowTag.current_flow_id,flowTag.channel_id);
@@ -74,7 +73,6 @@ insert_send_cqe(void* buff) {
       ptrrecvdata->sender_node,
       ptrrecvdata->receiver_node,
       ptrrecvdata->flow_size,
-      ptrrecvdata->pQps,
       ptrrecvdata->tag_id,
       ptrrecvdata->nvls_on);
     NcclLog->writeLog(NcclLogLevel::DEBUG,"PhyMultiThread.cc::insert_send_cqe src_id %d dst_id %d flow_id %d channel_id %d",flowTag.sender_node,flowTag.receiver_node,flowTag.current_flow_id,flowTag.channel_id);
@@ -97,7 +95,6 @@ judge_polling_all_recv_cqe(void * buff){
     ptrrecvdata->sender_node,
     ptrrecvdata->receiver_node,
     ptrrecvdata->flow_size,
-    ptrrecvdata->pQps,
     ptrrecvdata->tag_id,
     ptrrecvdata->nvls_on);
   int temp = 0;
@@ -130,7 +127,6 @@ judge_polling_all_send_cqe(void * buff){
     ptrrecvdata->sender_node,
     ptrrecvdata->receiver_node,
     ptrrecvdata->flow_size,
-    ptrrecvdata->pQps,
     ptrrecvdata->tag_id,
     ptrrecvdata->nvls_on);
   int temp = 0;

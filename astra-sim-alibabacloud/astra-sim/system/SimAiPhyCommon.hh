@@ -60,7 +60,6 @@ struct TransportData{
   int sender_node;
   int receiver_node;
   uint64_t flow_size;
-  void* pQps;
   int tag_id;
   int child_flow_size;
   int child_flow_list[MAX_CHILD_FLOW_SIZE];
@@ -73,7 +72,6 @@ struct TransportData{
       int _sender_node,
       int _receiver_node,
       uint64_t _flow_size,
-      void* _pQps,
       int _tag_id,
       bool _nvls_on)
       : channel_id(_channel_id),
@@ -83,7 +81,6 @@ struct TransportData{
         sender_node(_sender_node),
         receiver_node(_receiver_node),
         flow_size(_flow_size),
-        pQps(_pQps),
         tag_id(_tag_id),
         nvls_on(_nvls_on) {};
   ~TransportData(){};

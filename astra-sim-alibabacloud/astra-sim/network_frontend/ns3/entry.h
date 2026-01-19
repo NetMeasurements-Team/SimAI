@@ -20,7 +20,6 @@
 #define PATH_TO_PGO_CONFIG "path_to_pgo_config"
 
 #include "astra-sim/system/MockNcclLog.h"
-#include "astra-sim/system/MockNcclQps.h"
 #include "astra-sim/system/AstraNetworkAPI.hh"
 #include "common.h"
 

@@ -94,7 +94,6 @@ void send_flow(int src, int dst, uint64_t maxPacketCount,
       flowtag.sender_node,
       flowtag.receiver_node,
       flowtag.flow_size,
-      flowtag.pQps,
       flowtag.tag_id,
       flowtag.nvls_on);
   send_data.child_flow_size = flowtag.tree_flow_list.size();
