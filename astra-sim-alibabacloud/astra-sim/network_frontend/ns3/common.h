@@ -69,6 +69,7 @@ inline uint32_t has_win = 1;
 inline uint32_t global_t = 1;
 inline uint32_t mi_thresh = 5;
 inline bool flow_stripping = false;
+inline bool packet_spraying = false;
 inline bool reuse_qps = true;
 inline bool var_win = false, fast_react = true;
 inline bool multi_rate = true;
@@ -587,6 +588,10 @@ inline bool ReadConf(const string& network_topo, const string& network_conf, con
       uint32_t v;
       conf >> v;
       flow_stripping = v;
+    } else if (key.compare("PACKET_SPRAYING") == 0) {
+      uint32_t v;
+      conf >> v;
+      packet_spraying = v;
     } else if (key.compare("GLOBAL_T") == 0) {
       conf >> global_t;
       global_t = 1;
@@ -1059,6 +1064,7 @@ inline void SetupNetwork(
       Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(n.Get(i));
       sw->SetAttribute("CcMode", UintegerValue(cc_mode));
       sw->SetAttribute("MaxRtt", UintegerValue(maxRtt));
+      sw->SetAttribute("PacketSpraying", BooleanValue(packet_spraying));
     }
   }
 
