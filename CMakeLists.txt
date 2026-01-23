@@ -47,6 +47,39 @@ option(SYS_ASSERTS "Enable assert() in all profile with -UNDEBUG" OFF)
 
 get_filename_component(BUILD_DIR_NAME ${BUILD_DIR} NAME)
 
+function(ns3_export_file src dst)
+    get_filename_component(_dst_abs "${dst}" ABSOLUTE)
+    get_filename_component(dst_dir "${dst}" DIRECTORY)
+    file(MAKE_DIRECTORY "${dst_dir}")
+
+    if(NS3_USE_RELATIVE_PATHS_SYMLINKS)
+        # Compute a relative path from destination directory to source file.
+        file(RELATIVE_PATH src_path "${dst_dir}" "${src}")
+        # Ensure forward slashes for the preprocessor include
+        file(TO_CMAKE_PATH "${src_path}" src_path)
+    else()
+        set(src_path "${src}")
+    endif()
+
+    if(NS3_EXPORT_HEADERS_AS_STUBS)
+        # Remove destination file if it is a symlink
+        if(IS_SYMLINK "${_dst_abs}")
+            file(REMOVE "${dst}")
+        endif()
+        if("${src_path}" MATCHES "\\.(h|hh)$")
+            file(GENERATE OUTPUT "${dst}" CONTENT "#include \"${src_path}\"\n")
+        else()
+            # Source files are just copied
+            configure_file(${src} ${dst} COPYONLY)
+        endif()
+    else()
+        if(NOT IS_SYMLINK "${_dst_abs}")
+            # Create/overwrite a symbolic link.
+            file(CREATE_LINK "${src_path}" "${dst}" SYMBOLIC)
+        endif()
+    endif()
+endfunction()
+
 if(CLEAN_BUILD)
     message(STATUS "Cleaning build directory: ${BUILD_DIR}")
     file(REMOVE_RECURSE "${BUILD_DIR}")
@@ -80,20 +113,22 @@ if(BUILD_SIM)
     list(FILTER astra_sim_files EXCLUDE REGEX "/network_frontend/")
     foreach(file ${astra_sim_files})
         string(REPLACE "${ASTRA_SIM_DIR}/" "astra-sim/" relative_path ${file})
-        get_filename_component(output_dir ${NS3_SRC_DIR}/src/applications/${relative_path} DIRECTORY)
-        file(MAKE_DIRECTORY ${output_dir})
-        configure_file(${file} ${NS3_SRC_DIR}/src/applications/${relative_path} COPYONLY)
+        ns3_export_file("${file}" "${NS3_SRC_DIR}/src/applications/${relative_path}")
     endforeach()
 
-    file(GLOB scratch_files
-            CONFIGURE_DEPENDS
-            ${ASTRA_SIM_DIR}/network_frontend/ns3/*)
+    file(GLOB scratch_files CONFIGURE_DEPENDS ${ASTRA_SIM_DIR}/network_frontend/ns3/*)
     foreach(file ${scratch_files})
         get_filename_component(filename ${file} NAME)
-        configure_file(${file} ${NS3_SRC_DIR}/scratch/${filename} COPYONLY)
+        ns3_export_file("${file}" "${NS3_SRC_DIR}/scratch/${filename}")
     endforeach()
 
-    # NS3
+    # Register original files as configure dependencies
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            ${astra_sim_files}
+            ${scratch_files}
+    )
+
+    # NS3 options
     string(TOLOWER ${CMAKE_BUILD_TYPE} build_type)
     if (build_type STREQUAL "release")
         if (NOT DEFINED NS3_ASSERT)
@@ -118,6 +153,7 @@ if(BUILD_SIM)
             -ffile-prefix-map=${COPIED_PREFIX_2}=${ORIGINAL_PREFIX_2}
     )
 
+    # NS3
     add_subdirectory(${NS3_SRC_DIR} ${NS3_SRC_DIR}/${BUILD_DIR_NAME})
 
     # Link binaries

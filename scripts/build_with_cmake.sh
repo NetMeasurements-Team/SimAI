@@ -25,6 +25,8 @@ function compile {
     local native="$3"
     local sys_asserts="$4"
     local ns3_asserts="$5"
+    local ns3_stub_headers="$6"
+    local ns3_relative_links="$7"
 
     mkdir -p "${SIM_LOG_DIR}"/inputs/system/
     mkdir -p "${SIM_LOG_DIR}"/inputs/workload/
@@ -37,8 +39,11 @@ function compile {
     case "$mode" in
     "ns3")
         mkdir -p "${build_dir}"
-        cmake -DCMAKE_BUILD_TYPE="${profile}" -DNS3_NATIVE_OPTIMIZATIONS="${native}" -DSYS_ASSERTS="${sys_asserts}" \
-          -DBUILD_SIM=ON -DNS3_MTP=ON ""${ns3_asserts:+-DNS3_ASSERT="${ns3_asserts}"} \
+        cmake -DCMAKE_BUILD_TYPE="${profile}" -DNS3_NATIVE_OPTIMIZATIONS="${native}" \
+          -DSYS_ASSERTS="${sys_asserts}" ""${ns3_asserts:+-DNS3_ASSERT="${ns3_asserts}"} \
+          -DNS3_EXPORT_HEADERS_AS_STUBS="${ns3_stub_headers}" \
+          -DNS3_USE_RELATIVE_PATHS_SYMLINKS="${ns3_relative_links}" \
+          -DBUILD_SIM=ON -DNS3_MTP=ON \
           -G "Unix Makefiles" -S "${ROOT_DIR}" -B "${build_dir}"
         cmake --build "${build_dir}" -j "$(($(lscpu | grep '^CPU(s):' | awk '{print $2}') - 1))"
         ;;
@@ -49,7 +54,7 @@ function compile {
         fi
         cd "${SIMAI_DIR:?}"
         ./build.sh -lr phy
-        ./build.sh -c phy 
+        ./build.sh -c phy
         ln -s "${SOURCE_PHY_BIN_DIR:?}" "${TARGET_BIN_DIR:?}"/SimAI_phynet
         ;;
     "analytical")
@@ -60,7 +65,7 @@ function compile {
         fi
         cd "${SIMAI_DIR:?}"
         ./build.sh -lr analytical
-        ./build.sh -c analytical 
+        ./build.sh -c analytical
         ln -s "${SOURCE_ANA_BIN_DIR:?}" "${TARGET_BIN_DIR:?}"/SimAI_analytical
         ;;
     esac
@@ -110,6 +115,8 @@ print_usage() {
     printf -- "-d|--build-profile   ns3 build profile debug|default|release|optimized.\n"
     printf -- "--sys-asserts        Enable asserts() in any build profile.\n"
     printf -- "--ns3-asserts        Enable NS3_ASSERT in any build profile.\n"
+    printf -- "--ns3-stub-headers   Set NS3_EXPORT_HEADERS_AS_STUBS=ON (exports stubs in place of symlinks).\n"
+    printf -- "--ns3-relative-links Set NS3_USE_RELATIVE_PATHS_SYMLINKS=ON (use relative paths for symlinks/stubs).\n"
     printf -- "-h|--help            Show this help message.\n"
     printf -- "\n"
     printf -- "Example: $0 -lc ns3 -d optimized --sys-asserts\n"
@@ -122,6 +129,8 @@ clean=OFF
 compile=OFF
 sys_asserts=OFF
 ns3_asserts=
+ns3_stub_headers=OFF
+ns3_relative_links=OFF
 
 # Expand -lc <mode> into -l <mode> -c <mode>
 processed_args=()
@@ -138,7 +147,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-OPTS=$(getopt -o c:l:d:h --long compile:,clean:,help,build-profile:,sys-asserts,ns3-asserts -n "$0" -- "${processed_args[@]}")
+OPTS=$(getopt -o c:l:d:h \
+  --long compile:,clean:,help,build-profile:,sys-asserts,ns3-asserts,ns3-stub-headers,ns3-relative-links \
+  -n "$0" -- "${processed_args[@]}")
 if [ $? != 0 ]; then
   echo "Failed parsing options." >&2; print_usage; exit 1
 fi
@@ -154,6 +165,8 @@ while true; do
                               esac;                                       shift 2 ;;
     --sys-asserts)            sys_asserts=ON;                             shift ;;
     --ns3-asserts)            ns3_asserts=ON;                             shift ;;
+    --ns3-stub-headers)       ns3_stub_headers=ON;                        shift ;;
+    --ns3-relative-links)     ns3_relative_links=ON;                      shift ;;
     -h|--help)                print_usage;                                exit 0 ;;
     --)                       shift;                                      break ;;
     *)                        echo "Unexpected option: $1";
@@ -167,5 +180,5 @@ if [[ $clean == "ON" ]]; then
   cleanup_build "$mode" "$profile"
 fi
 if [[ $compile == "ON" ]]; then
-  compile "$mode" "$profile" "$native" "$sys_asserts" "$ns3_asserts"
+  compile "$mode" "$profile" "$native" "$sys_asserts" "$ns3_asserts" "$ns3_stub_headers" "$ns3_relative_links"
 fi
