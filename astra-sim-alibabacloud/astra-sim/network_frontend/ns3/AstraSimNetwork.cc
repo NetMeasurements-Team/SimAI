@@ -146,15 +146,20 @@ public:
     t.type = 1;
     t.fun_arg = fun_arg;
     t.msg_handler = msg_handler;
-    AstraSim::RecvPacketEventHadndlerData* ehd = (AstraSim::RecvPacketEventHadndlerData*) t.fun_arg;
+    const auto ehd = static_cast<AstraSim::RecvPacketEventHadndlerData*>(t.fun_arg);
     AstraSim::EventType event = ehd->event;
     tag = ehd->flowTag.tag_id;
-    NcclLog->writeLog(NcclLogLevel::DEBUG,"[Receive event registration] src %d sim_recv on rank %d tag_id %d channdl id %d",src,rank,tag,ehd->flowTag.channel_id);
+    NcclLog->writeLog(
+        NcclLogLevel::DEBUG,
+        "[Receive event registration] src %d sim_recv on rank %d tag_id %d channel id %d",
+        src,
+        rank,
+        tag,
+        ehd->flowTag.channel_id);
     
-    if (recvHash.find(make_pair(tag, make_pair(t.src, t.dest))) !=
-        recvHash.end()) {
-      uint64_t count = recvHash[make_pair(tag, make_pair(t.src, t.dest))];
-      if (count == t.count) {
+    if (recvHash.find(make_pair(tag, make_pair(t.src, t.dest))) != recvHash.end()) {
+      const uint64_t count_ = recvHash[make_pair(tag, make_pair(t.src, t.dest))];
+      if (count_ == t.count) {
         recvHash.erase(make_pair(tag, make_pair(t.src, t.dest)));
         assert(ehd->flowTag.child_flow_id == -1 && ehd->flowTag.current_flow_id == -1);
         if(receiver_pending_queue.count(std::make_pair(std::make_pair(rank, src),tag))!= 0) {
@@ -167,8 +172,8 @@ public:
         #endif
         t.msg_handler(t.fun_arg);
         goto sim_recv_end_section;
-      } else if (count > t.count) {
-        recvHash[make_pair(tag, make_pair(t.src, t.dest))] = count - t.count;
+      } else if (count_ > t.count) {
+        recvHash[make_pair(tag, make_pair(t.src, t.dest))] = count_ - t.count;
         assert(ehd->flowTag.child_flow_id == -1 && ehd->flowTag.current_flow_id == -1);
         if(receiver_pending_queue.count(std::make_pair(std::make_pair(rank, src),tag))!= 0) {
           AstraSim::ncclFlowTag pending_tag = receiver_pending_queue[std::make_pair(std::make_pair(rank, src),tag)];
@@ -182,19 +187,35 @@ public:
         goto sim_recv_end_section;
       } else {
         recvHash.erase(make_pair(tag, make_pair(t.src, t.dest)));
-        t.count -= count;
+        t.count -= count_;
         expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))] = t;
       }
     } else {
       if (expeRecvHash.find(make_pair(tag, make_pair(t.src, t.dest))) ==
           expeRecvHash.end()) {
         expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))] = t;
-          NcclLog->writeLog(NcclLogLevel::DEBUG," [Packet arrived late, registering first] recvHash do not find expeRecvHash.new make src  %d dest  %d t.count:  %llu channel_id  %d current_flow_id  %d",t.src,t.dest,t.count,tag,flowTag.current_flow_id);
+        NcclLog->writeLog(
+            NcclLogLevel::DEBUG,
+            " [Packet arrived late, registering first] recvHash do not find expeRecvHash.new make src %d dest %d "
+            "t.count: %llu tag_id %d current_flow_id %d",
+            t.src,
+            t.dest,
+            t.count,
+            tag,
+            flowTag.current_flow_id);
           
       } else {
-        uint64_t expecount =
-            expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))].count;
-          NcclLog->writeLog(NcclLogLevel::DEBUG," [Packet arrived late, re-registering] recvHash do not find expeRecvHash.add make src  %d dest  %d expecount:  %d t.count:  %d tag_id  %d current_flow_id  %d",t.src,t.dest,expecount,t.count,tag,flowTag.current_flow_id);
+        uint64_t expecount = expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))].count;
+        NcclLog->writeLog(
+            NcclLogLevel::DEBUG,
+            " [Packet arrived late, re-registering] recvHash do not find expeRecvHash.add make src %d dest %d "
+            "expecount: %d t.count: %d tag_id %d current_flow_id %d",
+            t.src,
+            t.dest,
+            expecount,
+            t.count,
+            tag,
+            flowTag.current_flow_id);
           
       }
     }
@@ -225,19 +246,17 @@ struct user_param {
   ~user_param(){};
 };
 
-static int user_param_prase(int argc,char * argv[],struct user_param* user_param){
+static int user_param_prase(const int argc, char* argv[], user_param* user_param) {
   int opt;
   while ((opt = getopt(argc,argv,"ht:w:g:s:n:r:c:"))!=-1) {
     switch (opt) {
     case 'h':
-      /* code */
       std::cout<<"-t    number of threads,default 1"<<std::endl;
       std::cout<<"-w    workloads default none "<<std::endl;
       std::cout<<"-n    network topo"<<std::endl;
       std::cout<<"-c    network conf"<<std::endl;
       std::cout<<"-r    run name"<<std::endl;
       return 1;
-      break;
     case 't':
       user_param->thread = stoi(optarg);
       break;
@@ -262,17 +281,17 @@ static int user_param_prase(int argc,char * argv[],struct user_param* user_param
 }
 
 int main(int argc, char *argv[]) {
-  struct user_param user_param;
-  MockNcclLog::set_log_name("SimAI.log");
-  MockNcclLog* NcclLog = MockNcclLog::getInstance();
-  NcclLog->writeLog(NcclLogLevel::INFO," init SimAI.log ");
+  user_param user_param;
   if(user_param_prase(argc,argv,&user_param)){
     return 0;
   }
+  MockNcclLog::set_log_name("SimAI" + (user_param.run_name.empty() ? "" : "." + user_param.run_name) +".log");
+  MockNcclLog* NcclLog = MockNcclLog::getInstance();
+  NcclLog->writeLog(NcclLogLevel::INFO," init SimAI.log ");
   #ifdef NS3_MTP
   MtpInterface::Enable(user_param.thread);
   #endif
-  
+
   setup_ns3_simulation(user_param.network_topo, user_param.network_conf, user_param.run_name);
   int nodes_num = node_num - switch_num;
   int gpu_num = node_num - nvswitch_num - switch_num;

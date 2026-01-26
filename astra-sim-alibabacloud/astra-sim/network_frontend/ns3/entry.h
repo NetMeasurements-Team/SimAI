@@ -71,10 +71,10 @@ static std::once_flag sim_finished;
 static std::atomic<bool> waiting_sim_finish(false);
 
 inline bool is_sending_finished(int src, int dst, const AstraSim::ncclFlowTag& flowTag) {
-  int tag_id = flowTag.current_flow_id;
-  if (waiting_to_sent_callback.count(std::make_pair(tag_id, std::make_pair(src, dst)))) {
-    if (--waiting_to_sent_callback[std::make_pair(tag_id, std::make_pair(src, dst))] == 0) {
-      waiting_to_sent_callback.erase(std::make_pair(tag_id, std::make_pair(src, dst)));
+  int flow_id = flowTag.current_flow_id;
+  if (waiting_to_sent_callback.count(std::make_pair(flow_id, std::make_pair(src, dst)))) {
+    if (--waiting_to_sent_callback[std::make_pair(flow_id, std::make_pair(src, dst))] == 0) {
+      waiting_to_sent_callback.erase(std::make_pair(flow_id, std::make_pair(src, dst)));
       return true;
     }
   }
@@ -82,18 +82,18 @@ inline bool is_sending_finished(int src, int dst, const AstraSim::ncclFlowTag& f
 }
 
 inline bool is_receive_finished(int src, int dst, const AstraSim::ncclFlowTag& flowTag) {
-  int tag_id = flowTag.current_flow_id;
+  int flow_id = flowTag.current_flow_id;
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
-  if (waiting_to_notify_receiver.count(std::make_pair(tag_id, std::make_pair(src, dst)))) {
+  if (waiting_to_notify_receiver.count(std::make_pair(flow_id, std::make_pair(src, dst)))) {
     NcclLog->writeLog(
         NcclLogLevel::DEBUG,
-        " is_receive_finished waiting_to_notify_receiver  tag_id  %d src  %d dst  %d count  %d",
-        tag_id,
+        " is_receive_finished waiting_to_notify_receiver  flow_id %d src %d dst %d count %d",
+        flow_id,
         src,
         dst,
-        waiting_to_notify_receiver[std::make_pair(tag_id, std::make_pair(src, dst))]);
-    if (--waiting_to_notify_receiver[std::make_pair(tag_id, std::make_pair(src, dst))] == 0) {
-      waiting_to_notify_receiver.erase(std::make_pair(tag_id, std::make_pair(src, dst)));
+        waiting_to_notify_receiver[std::make_pair(flow_id, std::make_pair(src, dst))]);
+    if (--waiting_to_notify_receiver[std::make_pair(flow_id, std::make_pair(src, dst))] == 0) {
+      waiting_to_notify_receiver.erase(std::make_pair(flow_id, std::make_pair(src, dst)));
       return true;
     }
   }
@@ -274,14 +274,14 @@ void notify_receiver_receive_data(
     MtpInterface::ExplicitCriticalSection ecs;
 #endif
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
-    NcclLog->writeLog(
-        NcclLogLevel::DEBUG, " %d notify recevier:  %d message size:  %llu", sender_node, receiver_node, message_size);
     int tag = flowTag.tag_id;
+    NcclLog->writeLog(NcclLogLevel::DEBUG," %d notify receiver: %d message size: %llu tag_id: %d channel_id: %d",
+        sender_node, receiver_node, message_size, tag, flowTag.channel_id);
     if (expeRecvHash.find(make_pair(tag, make_pair(sender_node, receiver_node))) != expeRecvHash.end()) {
       task1 t2 = expeRecvHash[make_pair(tag, make_pair(sender_node, receiver_node))];
       NcclLog->writeLog(
           NcclLogLevel::DEBUG,
-          " %d notify recevier:  %d message size:  %llu t2.count:  %llu channle id:  %d",
+          " %d notify receiver: %d message size: %llu t2.count: %llu channel_id: %d",
           sender_node,
           receiver_node,
           message_size,
@@ -291,7 +291,7 @@ void notify_receiver_receive_data(
       if (message_size == t2.count) {
         NcclLog->writeLog(
             NcclLogLevel::DEBUG,
-            " message_size = t2.count expeRecvHash.erase  %d notify recevier:  %d message size:  %llu channel_id  %d",
+            " message_size = t2.count expeRecvHash.erase  %d notify receiver: %d message size: %llu tag_id %d",
             sender_node,
             receiver_node,
             message_size,
@@ -308,7 +308,7 @@ void notify_receiver_receive_data(
         recvHash[make_pair(tag, make_pair(sender_node, receiver_node))] = message_size - t2.count;
         NcclLog->writeLog(
             NcclLogLevel::DEBUG,
-            "message_size > t2.count expeRecvHash.erase %d notify recevier:  %d message size:  %llu channel_id  %d",
+            "message_size > t2.count expeRecvHash.erase %d notify receiver: %d message size: %llu tag_id  %d",
             sender_node,
             receiver_node,
             message_size,
@@ -322,10 +322,23 @@ void notify_receiver_receive_data(
         t2.msg_handler(t2.fun_arg);
         goto receiver_end_1st_section;
       } else {
+        NcclLog->writeLog(
+            NcclLogLevel::DEBUG,
+            "message_size > t2.count expeRecvHash.decrease %d notify receiver: %d message size: %llu tag_id  %d",
+            sender_node,
+            receiver_node,
+            message_size,
+            tag);
         t2.count -= message_size;
         expeRecvHash[make_pair(tag, make_pair(sender_node, receiver_node))] = t2;
       }
     } else {
+      NcclLog->writeLog(
+          NcclLogLevel::DEBUG,
+          " %d notify receiver: %d message size: %d expeRecvHash not found",
+          sender_node,
+          receiver_node,
+          message_size);
       receiver_pending_queue[std::make_pair(std::make_pair(receiver_node, sender_node), tag)] = flowTag;
       if (recvHash.find(make_pair(tag, make_pair(sender_node, receiver_node))) == recvHash.end()) {
         recvHash[make_pair(tag, make_pair(sender_node, receiver_node))] = message_size;
