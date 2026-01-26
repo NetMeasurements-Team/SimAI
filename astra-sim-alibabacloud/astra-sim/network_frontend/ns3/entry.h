@@ -458,7 +458,9 @@ void check_sim_finish() {
   if (waiting_sim_finish && waiting_to_notify_receiver.empty() && waiting_to_sent_callback.empty() &&
       waiting_to_message_finish.empty() && sentHash.empty() && expeRecvHash.empty()) {
     std::call_once(sim_finished, [] {
-      std::cout << "All messages finished. Stopping simulation." << std::endl;
+      std::cout << "All messages finished. Stopping simulation at time "
+                << AstraSim::Sys::boostedTick() << "."
+                << std::endl;
       finish();
     });
     Simulator::Stop();

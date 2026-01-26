@@ -88,6 +88,7 @@ public:
     }
     waiting_sim_finish = true;
     std::cout << "Waiting for any pending message..." << std::endl;
+    Simulator::Schedule(Time(0), &check_sim_finish);
     return 0;
   }
   double sim_time_resolution() { return 0; }
