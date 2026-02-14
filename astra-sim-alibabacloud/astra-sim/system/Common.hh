@@ -27,6 +27,23 @@ enum class ComType {
   All_Reduce_All_to_All,
   All_Reduce_NVLS
 };
+constexpr const char* to_cstr(const ComType type) noexcept {
+  switch (type) {
+  case ComType::All_Gather:
+    return "allgather";
+  case ComType::All_Reduce:
+    return "allreduce";
+  case ComType::Reduce_Scatter:
+    return "reducescatter";
+  case ComType::All_to_All:
+    return "alltoall";
+  default:
+    return "unknown";
+  }
+}
+inline std::ostream& operator<<(std::ostream& os, const ComType type) {
+  return os << to_cstr(type);
+}
 enum class CollectiveOptimization { Baseline, LocalBWAware };
 enum class CollectiveImplementationType {
   Ring, 
@@ -143,5 +160,30 @@ class DirectCollectiveImplementation : public CollectiveImplementation {
     this->direct_collective_window = direct_collective_window;
   }
 };
+
+template <class T>
+struct PrintableVector {
+  const std::vector<T>& v;
+};
+
+template <class T>
+PrintableVector<T> asPrintable(const std::vector<T>& v) { return {v}; }
+
+template <class T>
+std::ostream& operator<<(std::ostream& os, PrintableVector<T> w) {
+  os << "[";
+  for (size_t i = 0; i < w.v.size(); ++i) {
+    os << w.v[i];
+    if (i + 1 != w.v.size()) os << ",";
+  }
+  os << "]";
+  return os;
+}
+
+inline int pos_mod(const int a, const int m) {
+  const int r = a % m;
+  return r < 0 ? r + m : r;
+}
+
 } // namespace AstraSim
 #endif

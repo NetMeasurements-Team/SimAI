@@ -139,7 +139,7 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
 #endif
   } else if (event == EventType::PacketReceived) {
     auto* rcv_ehd = static_cast<RecvPacketEventHadndlerData*>(ehd);
-    AstraSim::ncclFlowTag flowTag = rcv_ehd->flowTag;
+    ncclFlowTag flowTag = rcv_ehd->flowTag;
     int received_flow_id = flowTag.current_flow_id;
     int channel_id = flowTag.channel_id;
     std::vector<int> next_flow_list = flowTag.tree_flow_list;
@@ -149,7 +149,7 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
       return;
     }
 #else
-    bool flow_exist = next_flow_list.size() == 0 ? true : false;
+    bool flow_exist = next_flow_list.size() == 0;
     for (int i = 0; i < next_flow_list.size(); ++i) {
       int next_flow_id = next_flow_list[i];
       if (next_flow_id == -1 || _flow_models.count(std::make_pair(channel_id, next_flow_id)) != 0) {
@@ -270,7 +270,8 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
 #endif
       for (int j = 0; j < m_channels; j++) {
         for (const auto flow_model : _flow_models) {
-          if (flow_model.second.src != id) {
+          if (flow_model.second.src != id
+              && (comType != ComType::All_to_All || flow_model.second.dest != id)) {
             continue;
           }
           std::vector<int> parent_list = flow_model.second.parent_flow_id;
@@ -292,7 +293,7 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
     }
   } else if (event == EventType::PacketSentFinshed) {
     auto* snd_ehd = static_cast<SendPacketEventHandlerData*>(ehd);
-    AstraSim::ncclFlowTag flowTag = snd_ehd->flowTag;
+    ncclFlowTag flowTag = snd_ehd->flowTag;
     int sent_flow_id = flowTag.current_flow_id;
     int channel_id = flowTag.channel_id;
     std::vector<int> next_flow_list = flowTag.tree_flow_list;
@@ -336,7 +337,7 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
 bool NcclTreeFlowModel::init_recv_ready() {
   std::map<std::pair<int, std::vector<int>>, std::vector<int>> recv_ready_flows;
   for (auto flow : _flow_models) {
-    if (flow.second.src != id) {
+    if (flow.second.src != id && (flow.second.conn_type != "PTP_PXN_END" || flow.second.dest != id)) {
       continue;
     }
     if (flow.second.chunk_id != 0) {
@@ -375,7 +376,7 @@ bool NcclTreeFlowModel::init_recv_ready() {
 
 bool NcclTreeFlowModel::recv_ready(int channel_id, int flow_id) {
   const auto flow_model = _flow_models[std::make_pair(channel_id, flow_id)];
-  const std::vector<int> recv_prevs = flow_model.prev;
+  std::vector<int> data_sources = flow_model.prev;
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
   NcclLog->writeLog(
       NcclLogLevel::DEBUG,
@@ -383,23 +384,27 @@ bool NcclTreeFlowModel::recv_ready(int channel_id, int flow_id) {
       channel_id,
       flow_id);
 
-  for (const int recv_prev : recv_prevs) {
+  if (flow_model.conn_type == "PTP_PXN_END" && flow_model.dest == id) {
+    data_sources = { flow_model.src };
+  }
+  for (const int data_source : data_sources) {
     sim_request rcv_req;
     rcv_req.vnet = this->stream->current_queue_id;
     rcv_req.layerNum = layer_num;
 
-    const auto ehd = new RecvPacketEventHadndlerData(stream, stream->owner->id, EventType::PacketReceived, recv_prev, 1);
+    const auto ehd = new RecvPacketEventHadndlerData(stream, stream->owner->id, EventType::PacketReceived, data_source, 1);
     ehd->flowTag.child_flow_id = -1;
     ehd->flowTag.current_flow_id = -1;
     ehd->flowTag.channel_id = channel_id;
-    ehd->flowTag.tag_id = layer_num * flow_model.chunk_count * m_channels +
+    ehd->flowTag.tag_id =
+        layer_num * flow_model.chunk_count * m_channels +
         flow_model.chunk_count * flow_model.channel_id;
     stream->owner->front_end_sim_recv(
         0,
         Sys::dummy_data,
         _flow_models[std::make_pair(channel_id, flow_id)].flow_size,
         UINT8,
-        recv_prev,
+        data_source,
         channel_id,
         &rcv_req,
         &Sys::handleEvent,
@@ -480,14 +485,13 @@ void NcclTreeFlowModel::insert_packets(int channel_id, int flow_id) {
     toggle = !toggle;
   }
   const int current_receiver = f.dest;
-  const std::vector<int> current_sender = f.prev;
   if ((*zero_latency_packets)[channel_id] > 0) {
     NcclLog->writeLog(NcclLogLevel::DEBUG, "id:  %d (*zero_latency_packets)[channel_id] > 0", id);
     const uint64_t message_size = f.flow_size;
     packets[std::make_pair(channel_id, flow_id)].push_back(
         MyPacket(
             stream->current_queue_id,
-            current_sender[0],
+            -1 /* this is not used by NcclTreeFlowModel */,
             current_receiver,
             message_size,
             channel_id,
@@ -511,7 +515,7 @@ void NcclTreeFlowModel::insert_packets(int channel_id, int flow_id) {
     packets[std::make_pair(channel_id, flow_id)].push_back(
         MyPacket(
             stream->current_queue_id,
-            current_sender[0],
+            -1,
             current_receiver,
             message_size,
             channel_id,
@@ -554,9 +558,15 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
     }
     packet = packets[std::make_pair(channel_id, flow_id)].front();
   }
-  std::vector<int> recv_prevs;
-  recv_prevs = _flow_models[std::make_pair(channel_id, flow_id)].prev;
-  for (int recv_prev : recv_prevs) {
+  std::vector<int> data_sources;
+  MockNccl::SingleFlow flow = _flow_models[std::make_pair(channel_id, flow_id)];
+  data_sources = flow.prev;
+  if (flow.conn_type == "PTP" && flow.dest == id) {
+    // direct flows in AllToAll
+    data_sources.push_back(flow.src);
+  }
+  NcclLog->writeLog(NcclLogLevel::INFO, "id %d ready() handle flow_id %u", id, flow_id);
+  for (int data_source : data_sources) {
     sim_request rcv_req;
     rcv_req.vnet = this->stream->current_queue_id;
     rcv_req.layerNum = layer_num;
@@ -568,18 +578,33 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
     ehd->flowTag.current_flow_id = -1;
 
     auto const& flow_model = this->_flow_models[std::make_pair(channel_id, flow_id)];
-    if (flow_model.parent_flow_id.empty() || flow_model.conn_type == "RING") {
-      ehd->flowTag.tag_id = layer_num * flow_model.chunk_count * m_channels +
-          flow_model.chunk_count * flow_model.channel_id + flow_model.chunk_id;
+    if (flow_model.parent_flow_id.empty() || comType == ComType::All_to_All || flow_model.conn_type == "RING") {
+      ehd->flowTag.tag_id =
+          layer_num * flow_model.chunk_count * m_channels +
+          flow_model.chunk_count * flow_model.channel_id +
+          flow_model.chunk_id;
     } else {
-      ehd->flowTag.tag_id = layer_num * flow_model.chunk_count * m_channels +
-          flow_model.chunk_count * flow_model.channel_id + flow_model.chunk_id + 1;
+      ehd->flowTag.tag_id =
+          layer_num * flow_model.chunk_count * m_channels +
+          flow_model.chunk_count * flow_model.channel_id +
+          flow_model.chunk_id + 1;
     }
     ehd->flowTag.channel_id = packet.channel_id;
-    if (free_packets[std::make_pair(channel_id, recv_prev)] > 0) {
+    if (free_packets[std::make_pair(channel_id, data_source)] > 0) {
       stream->owner->front_end_sim_recv(
-          0, Sys::dummy_data, rcv_req.reqCount, UINT8, recv_prev, rcv_req.tag, &rcv_req, &Sys::handleEvent, ehd);
+          0,
+          Sys::dummy_data,
+          rcv_req.reqCount,
+          UINT8,
+          data_source,
+          rcv_req.tag,
+          &rcv_req,
+          &Sys::handleEvent,
+          ehd);
     }
+  }
+  if (flow.dest == id) {
+    return true;
   }
   sim_request snd_req;
   snd_req.srcRank = id;
@@ -590,8 +615,10 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
   snd_req.layerNum = layer_num;
   snd_req.reqCount = packet.msg_size;
   MockNccl::SingleFlow flow_model = this->_flow_models[std::make_pair(channel_id, flow_id)];
-  snd_req.flowTag.tag_id = layer_num * flow_model.chunk_count * m_channels +
-      flow_model.channel_id * flow_model.chunk_count + flow_model.chunk_id;
+  snd_req.flowTag.tag_id =
+      layer_num * flow_model.chunk_count * m_channels +
+      flow_model.channel_id * flow_model.chunk_count +
+      flow_model.chunk_id;
   snd_req.flowTag.channel_id = channel_id;
   snd_req.flowTag.flow_size = flow_model.flow_size;
   snd_req.flowTag.current_flow_id = flow_id;
@@ -667,9 +694,13 @@ bool NcclTreeFlowModel::phy_ready(int channel_id, int flow_id) {
     stream->changeState(StreamState::Executing);
   }
   MockNccl::SingleFlow flow = _flow_models[std::make_pair(channel_id, flow_id)];
-  std::vector<int> recv_prevs;
-  recv_prevs = _flow_models[std::make_pair(channel_id, flow_id)].prev;
-  for (int recv_prev : recv_prevs) {
+  std::vector<int> data_sources;
+  data_sources = _flow_models[std::make_pair(channel_id, flow_id)].prev;
+  if (flow.conn_type == "PTP" && flow.dest == id) {
+    // root flows in AllToAll
+    data_sources.push_back(packet.preferred_src);
+  }
+  for (int data_source : data_sources) {
     sim_request rcv_req;
     rcv_req.vnet = this->stream->current_queue_id;
     rcv_req.layerNum = layer_num;
@@ -680,7 +711,7 @@ bool NcclTreeFlowModel::phy_ready(int channel_id, int flow_id) {
     ehd->flowTag.child_flow_id = -1;
     ehd->flowTag.current_flow_id = -1;
     auto flow_model = this->_flow_models[std::make_pair(channel_id, flow_id)];
-    if (flow_model.parent_flow_id.size() == 0 || flow_model.conn_type == "RING") {
+    if (flow_model.parent_flow_id.empty() || comType == ComType::All_to_All || flow_model.conn_type == "RING") {
       ehd->flowTag.tag_id = layer_num * flow_model.chunk_count * m_channels +
           flow_model.chunk_count * flow_model.channel_id + flow_model.chunk_id;
     } else {
@@ -688,10 +719,13 @@ bool NcclTreeFlowModel::phy_ready(int channel_id, int flow_id) {
           flow_model.chunk_count * flow_model.channel_id + flow_model.chunk_id + 1;
     }
     ehd->flowTag.channel_id = flow.channel_id;
-    if (free_packets[std::make_pair(channel_id, recv_prev)] > 0) {
+    if (free_packets[std::make_pair(channel_id, data_source)] > 0) {
       stream->owner->front_end_sim_recv(
-          0, Sys::dummy_data, rcv_req.reqCount, UINT8, recv_prev, rcv_req.tag, &rcv_req, &Sys::handleEvent, ehd);
+          0, Sys::dummy_data, rcv_req.reqCount, UINT8, data_source, rcv_req.tag, &rcv_req, &Sys::handleEvent, ehd);
     }
+  }
+  if (flow.dest == id) {
+    return true;
   }
   sim_request snd_req;
   snd_req.srcRank = id;

@@ -21,8 +21,57 @@
 #include <cmath>
 #include <algorithm>
 #include "astra-sim/system/MockNcclLog.h"
+
 using namespace std;
 namespace MockNccl {
+
+void logFlowModels(
+    const NcclLogLevel level,
+    const std::string& algorithmName,
+    const std::map<int, std::shared_ptr<FlowModels>>& rank2pflowmodels) {
+
+  MockNcclLog* NcclLog = MockNcclLog::getInstance();
+
+  // Header for the log output
+  NcclLog->writeLog(level, "=======================================================================");
+  NcclLog->writeLog(level, "--- Flow Model Details for: %s ---", algorithmName.c_str());
+  NcclLog->writeLog(level, "=======================================================================");
+
+  // Iterate over each rank that has associated flows.
+  for (const auto& rank_pair : rank2pflowmodels) {
+    int rank = rank_pair.first;
+    const auto& models_ptr = rank_pair.second;
+
+    if (!models_ptr)
+      continue;
+
+    std::stringstream header_ss;
+    header_ss << "--- Flows visible to Rank " << rank << " ---";
+    NcclLog->writeLog(level, "%s", header_ss.str().c_str());
+
+    // Copy flows to a vector to sort them by flow_id for readability.
+    std::vector<SingleFlow> sorted_flows;
+    for (const auto& flow_pair : *models_ptr) {
+      sorted_flows.push_back(flow_pair.second);
+    }
+    std::sort(sorted_flows.begin(), sorted_flows.end(), [](const SingleFlow& a, const SingleFlow& b) {
+      return a.flow_id < b.flow_id;
+    });
+
+    // Log the details of each sorted flow.
+    for (const auto& flow : sorted_flows) {
+      std::stringstream flow_ss;
+      flow_ss << "  Flow ID: " << flow.flow_id << "\t| Type: " << flow.conn_type << "\t| Ch: " << flow.channel_id
+              << "\t| Chunk ID: " << flow.chunk_id << "\t| " << flow.src << " -> " << flow.dest
+              << "\t| Size: " << flow.flow_size << "\t| Parents: " << AstraSim::asPrintable(flow.parent_flow_id)
+              << "\t| Children: " << AstraSim::asPrintable(flow.child_flow_id)
+              << "\t| prev: " << AstraSim::asPrintable(flow.prev);
+      NcclLog->writeLog(level, "%s", flow_ss.str().c_str());
+    }
+  }
+  NcclLog->writeLog(level, "=======================================================================");
+}
+
   MockNcclGroup::MockNcclGroup(int _ngpus,int _gpus_per_nodes,int _TP_size,int _DP_size,int _PP_size,int _EP_size,int _DP_EP_size,std::vector<int>_NVSwitch,GPUType _gpu_type):g_flow_id(0),gpu_type(_gpu_type){
     /*init groups
     */
@@ -329,9 +378,23 @@ namespace MockNccl {
       return presult;
     } else {
       flow_models[flow_model_name] = genFlowModels(type,rank,op,data_size);
+      NcclLog->writeLog(
+          NcclLogLevel::DEBUG,
+          "Generated flow model at rank %u for group_idx %d (%s), op %s, data_size %lu, layer_num %d,"
+          " loopstate %d, for a total of %u flows.",
+          rank, gp_info.group_index, to_cstr(gp_info.type), to_cstr(op), data_size,
+          layer_num, static_cast<int>(loopstate), countFlowsInFlowModels(flow_models[flow_model_name]));
       FlowName2nums[flow_model_name]= 1;
       return flow_models[flow_model_name][rank];
     }
+  }
+
+  unsigned int MockNcclGroup::countFlowsInFlowModels(const map<int, shared_ptr<FlowModels>>& flowModelsMap) {
+    unsigned int count = 0;
+    for (auto& [_, flowModels] : flowModelsMap) {
+      count += flowModels->size();
+    }
+    return count/2;
   }
 
   std::map<int,std::shared_ptr<FlowModels>> MockNcclGroup::genFlowModels(GroupType type , int rank, AstraSim::ComType op,uint64_t data_size){
@@ -373,19 +436,69 @@ namespace MockNccl {
       gp_info = AllGroups[gp_idx];
     }
     nranks = gp_info.nRanks;
+    size_t ranks_per_node = gp_info.nRanks / gp_info.nNodes;
     chunkcount = nranks - 1;
     chunksize = data_size / nranks;
     data_size = data_size / nranks;
+    bool PXN_ENABLE = false;
+    const char* PXN_ENV = std::getenv("AS_PXN_ENABLE");
+    if (PXN_ENV && strcmp(PXN_ENV, "1") == 0) {
+      PXN_ENABLE = true;
+    } else {
+      PXN_ENABLE = false;
+    }
     for (int i = 0; i < gp_info.Ranks.size(); i++) {
-      std::vector<int> prev;
-      for(int j = 0;j<gp_info.Ranks.size();j++) {
-        if(i == j) continue;
-        else prev.push_back(gp_info.Ranks[j]);  
-      }
-      for(int j=0;j<gp_info.Ranks.size();j++){
-        if(i == j ) continue;
-        tmp_result = SingleFlow(g_flow_id,gp_info.Ranks[i],gp_info.Ranks[j],chunksize,prev,{},{},0,0,1,"RING");
-        result[std::make_pair(0, g_flow_id)] = tmp_result;
+      for (int j = 0; j < gp_info.Ranks.size(); j++) {
+        if (i == j) {
+          continue;
+        }
+        std::vector<int> prev;
+        int src = gp_info.Ranks[i];
+        vector<int> parent_flows = {};
+        string connection_type = "PTP";
+        uint32_t channel_id = 0;
+        if (PXN_ENABLE
+            && gp_info.Ranks[i] / ranks_per_node != gp_info.Ranks[j] / ranks_per_node
+            && gp_info.Ranks[i] % ranks_per_node != gp_info.Ranks[j] % ranks_per_node) {
+          int pxn_rank = gp_info.Ranks[j] % ranks_per_node + ranks_per_node * (gp_info.Ranks[i] / ranks_per_node);
+          channel_id = (AstraSim::pos_mod(
+              gp_info.Ranks[j] / ranks_per_node - gp_info.Ranks[i] / ranks_per_node,
+              gp_info.nNodes) - 1) * ranks_per_node;
+          channel_id += AstraSim::pos_mod(
+              gp_info.Ranks[j] % ranks_per_node - gp_info.Ranks[i] % ranks_per_node,
+              ranks_per_node);
+          tmp_result = SingleFlow(
+              g_flow_id,
+              gp_info.Ranks[i],
+              pxn_rank,
+              chunksize,
+              {},
+              {},
+              {g_flow_id + 1},
+              channel_id,
+              0,
+              1,
+              "PTP_PXN_START");
+          result[std::make_pair(channel_id, g_flow_id)] = tmp_result;
+          src = pxn_rank;
+          parent_flows.push_back(g_flow_id);
+          connection_type = "PTP_PXN_END";
+          prev = {gp_info.Ranks[i]};
+          g_flow_id++;
+        }
+        tmp_result = SingleFlow(
+            g_flow_id,
+            src,
+            gp_info.Ranks[j],
+            chunksize,
+            prev,
+            parent_flows,
+            {},
+            channel_id,
+            0,
+            1,
+            connection_type);
+        result[std::make_pair(channel_id, g_flow_id)] = tmp_result;
         g_flow_id++;
       }
     }
@@ -398,6 +511,7 @@ namespace MockNccl {
     for(auto it = rank2flowmodels.begin();it!=rank2flowmodels.end();it++){
       rank2pflowmodels[it->first] = std::make_shared<FlowModels>(it->second);
     }
+    logFlowModels(NcclLogLevel::INFO, "AllToAll", rank2pflowmodels);
     return rank2pflowmodels;
   }
 
@@ -1585,6 +1699,7 @@ namespace MockNccl {
             curnodesendrank = rank_it->second[3];
           }
             int cur_rank = rank_it->first;
+            // for chunks > 0, set previous chunk as parent (e.g., 0 -> 1 chunk 0 is parent for 1 -> 2 chunk 1)
             int partner_flow_id = task_list[rank_it->second[0]].flow_id;
             if (rank_it->second[3] == cur_rank &&
                 rank_it->second[2] != cur_rank && gp_info.nNodes > 1 &&
@@ -1689,6 +1804,7 @@ namespace MockNccl {
     for(auto it = rank2flowmodels.begin();it!=rank2flowmodels.end();it++){
       rank2pflowmodels[it->first] = std::make_shared<FlowModels>(it->second);
     }
+    logFlowModels(NcclLogLevel::INFO, "AllGather", rank2pflowmodels);
     return rank2pflowmodels;
   }
   

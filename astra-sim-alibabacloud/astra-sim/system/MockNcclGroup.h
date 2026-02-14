@@ -15,15 +15,17 @@
 #ifndef __MOCKNCCLGROUP_H__
 #define __MOCKNCCLGROUP_H__
 
-#include<stdlib.h>
+#include <stdlib.h>
 #include <cstdint>
 #include <vector>
 #include <string>
 #include <memory>
 #include <map>
 #include <unordered_map>
+#include <sstream>
+
 #include "astra-sim/system/Common.hh"
-#include"astra-sim/system/MockNccl.h"
+#include "astra-sim/system/MockNccl.h"
 using namespace std;
 
 namespace MockNccl {
@@ -47,6 +49,25 @@ namespace MockNccl {
     DP_EP,
     NONE
   };
+  constexpr const char* to_cstr(const GroupType type) noexcept {
+    switch (type) {
+    case TP:
+      return "TP";
+    case DP:
+      return "DP";
+    case PP:
+      return "PP";
+    case EP:
+      return "EP";
+    case DP_EP:
+      return "DP_EP";
+    default:
+      return "NONE";
+    }
+  }
+  inline std::ostream& operator<<(std::ostream& os, const GroupType type) {
+    return os << to_cstr(type);
+  }
   struct ncclInfo {
     ncclFunc_t coll;
     TuneInfo_t tuneinfo;
@@ -136,6 +157,7 @@ namespace MockNccl {
     std::map<std::string ,std::map<int,std::shared_ptr<FlowModels> >> flow_models; 
     std::map<std::string ,struct ncclInfo*> nccl_infos;  
     std::shared_ptr<void> getFlowModels(GroupType type , int rank, AstraSim::ComType op,uint64_t data_size,int layer_num,State loopstate);
+    static unsigned int countFlowsInFlowModels(const map<int, shared_ptr<FlowModels>>& flowModelsMap);
    private:
     std::map<int,std::shared_ptr<FlowModels>> genFlowModels(GroupType type , int rank, AstraSim::ComType op,uint64_t data_size);
     std::map<int,std::shared_ptr<FlowModels>> genReduceScatterFlowModels(GroupType type , int rank, uint64_t data_size);

@@ -115,19 +115,12 @@ public:
                        AstraSim::sim_request *request, 
                        void (*msg_handler)(void *fun_arg), void *fun_arg) {
     dst += npu_offset;
-    task1 t;
-    t.src = rank;
-    t.dest = dst;
-    t.count = count;
-    t.type = 0;
-    t.fun_arg = fun_arg;
-    t.msg_handler = msg_handler;
-    {
-      #ifdef NS3_MTP
-      MtpInterface::CriticalSection cs;
-      #endif
-      sentHash[make_pair(tag, make_pair(t.src, t.dest))] = t;
-    }
+    const auto ehd = static_cast<AstraSim::SendPacketEventHandlerData*>(fun_arg);
+    MockNcclLog* NcclLog = MockNcclLog::getInstance();
+    NcclLog->writeLog(
+        NcclLogLevel::DEBUG,
+        "[Send event registration] dst %d sim_send on rank %d tag %u channel id %d",
+        dst, rank, tag, ehd->flowTag.channel_id);
     send_flow(rank, dst, count, msg_handler, fun_arg, tag, request);
     return 0;
   }
@@ -152,72 +145,83 @@ public:
     tag = ehd->flowTag.tag_id;
     NcclLog->writeLog(
         NcclLogLevel::DEBUG,
-        "[Receive event registration] src %d sim_recv on rank %d tag_id %d channel id %d",
-        src,
-        rank,
-        tag,
-        ehd->flowTag.channel_id);
-    
+        "[Receive event registration] src %d sim_recv on rank %d tag %u channel id %d",
+        src, rank, tag, ehd->flowTag.channel_id);
+
     if (recvHash.find(make_pair(tag, make_pair(t.src, t.dest))) != recvHash.end()) {
-      const uint64_t count_ = recvHash[make_pair(tag, make_pair(t.src, t.dest))];
-      if (count_ == t.count) {
+      // 1) ns3 has already received some message before sim_recv is called.
+      const uint64_t already_received_size = recvHash[make_pair(tag, make_pair(t.src, t.dest))];
+      if (already_received_size == t.count) {
+        // 1.1) The received message size is the same as what we expect. Exit.
         recvHash.erase(make_pair(tag, make_pair(t.src, t.dest)));
         assert(ehd->flowTag.child_flow_id == -1 && ehd->flowTag.current_flow_id == -1);
         if(receiver_pending_queue.count(std::make_pair(std::make_pair(rank, src),tag))!= 0) {
           AstraSim::ncclFlowTag pending_tag = receiver_pending_queue[std::make_pair(std::make_pair(rank, src),tag)];
           receiver_pending_queue.erase(std::make_pair(std::make_pair(rank,src),tag));
           ehd->flowTag = pending_tag;
-        } 
+        }
         #ifdef NS3_MTP
         ecs.ExitSection();
         #endif
+        NcclLog->writeLog(
+            NcclLogLevel::DEBUG,
+            " [Message arrived early, skip registering] recvHash already had the expected bytes for src %d, dst %d,"
+            " tag %u; directly invoke handler: t.count %llu, tag %u, current_flow_id %d",
+            t.src, t.dest, tag, t.count, flowTag.current_flow_id);
         t.msg_handler(t.fun_arg);
         goto sim_recv_end_section;
-      } else if (count_ > t.count) {
-        recvHash[make_pair(tag, make_pair(t.src, t.dest))] = count_ - t.count;
+      } else if (already_received_size > t.count) {
+        // 1.2) The node received more than expected. Do trigger the callback handler for this message, but also wait
+        //      for the Sys layer to call sim_recv for more messages.
+        recvHash[make_pair(tag, make_pair(t.src, t.dest))] = already_received_size - t.count;
         assert(ehd->flowTag.child_flow_id == -1 && ehd->flowTag.current_flow_id == -1);
         if(receiver_pending_queue.count(std::make_pair(std::make_pair(rank, src),tag))!= 0) {
           AstraSim::ncclFlowTag pending_tag = receiver_pending_queue[std::make_pair(std::make_pair(rank, src),tag)];
           receiver_pending_queue.erase(std::make_pair(std::make_pair(rank,src),tag));
           ehd->flowTag = pending_tag;
-        } 
+        }
         #ifdef NS3_MTP
         ecs.ExitSection();
         #endif
+        NcclLog->writeLog(
+            NcclLogLevel::DEBUG,
+            " [Message arrived early (more left), skip registering] recvHash had more bytes (%u) than expected for "
+            "src %d, dst %d, tag %u, directly invoke handler for them: t.count %llu, tag %u, current_flow_id %d",
+            already_received_size, t.src, t.dest, tag, t.count, flowTag.current_flow_id);
         t.msg_handler(t.fun_arg);
         goto sim_recv_end_section;
       } else {
+        // 1.3) The node received less than what we expected. Reduce the number of bytes we are waiting to receive.
         recvHash.erase(make_pair(tag, make_pair(t.src, t.dest)));
-        t.count -= count_;
-        expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))] = t;
-      }
-    } else {
-      if (expeRecvHash.find(make_pair(tag, make_pair(t.src, t.dest))) ==
-          expeRecvHash.end()) {
+        t.count -= already_received_size;
         expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))] = t;
         NcclLog->writeLog(
             NcclLogLevel::DEBUG,
-            " [Packet arrived late, registering first] recvHash do not find expeRecvHash.new make src %d dest %d "
-            "t.count: %llu tag_id %d current_flow_id %d",
-            t.src,
-            t.dest,
-            t.count,
-            tag,
-            flowTag.current_flow_id);
-          
+            " [Message arrived early (not enough), registering partial] recvHash had less bytes (%u) than expected"
+            " for src %d, dest %d, tag %u; register the difference in expeRecvHash: t.count: %llu, current_flow_id %d",
+            t.src, t.dest, tag,
+            t.count, flowTag.current_flow_id);
+      }
+    } else {
+      // 2) ns3 has not yet received anything.
+      if (expeRecvHash.find(make_pair(tag, make_pair(t.src, t.dest))) ==
+          expeRecvHash.end()) {
+        // 2.1) We have not been expecting anything so far.
+        expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))] = t;
+        NcclLog->writeLog(
+            NcclLogLevel::DEBUG,
+            " [Message not arrived yet, registering] recvHash had no entry for src %d, dst %d, tag %u; register the"
+            " message in expeRecvHash: t.count %llu, current_flow_id %d",
+            t.src, t.dest, tag, t.count, flowTag.current_flow_id);
       } else {
+        // 2.2) We have already been expecting something. Increment the number of bytes we are waiting to receive.
         uint64_t expecount = expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))].count;
         NcclLog->writeLog(
             NcclLogLevel::DEBUG,
-            " [Packet arrived late, re-registering] recvHash do not find expeRecvHash.add make src %d dest %d "
-            "expecount: %d t.count: %d tag_id %d current_flow_id %d",
-            t.src,
-            t.dest,
-            expecount,
-            t.count,
-            tag,
-            flowTag.current_flow_id);
-          
+            " [Message not arrived yet, re-registering] recvHash had no entry for src %d, dst %d, tag %u, but we "
+            "were already waiting %u bytes for it; updating the entry in expeRecvHash with %u additional bytes: "
+            "current_flow_id %d", t.src, t.dest, tag, expecount, t.count, flowTag.current_flow_id);
+        expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))].count += t.count;
       }
     }
     #ifdef NS3_MTP

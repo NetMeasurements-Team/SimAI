@@ -67,15 +67,6 @@ namespace MockNccl {
     Input_Gradient,
   };
 
-  enum class ComType {
-    None,
-    Reduce_Scatter,
-    All_Gather,
-    All_Reduce,
-    All_to_All,
-    All_Reduce_All_to_All
-  };
-
   struct ncclTree {
     int depth;
     int rank;
