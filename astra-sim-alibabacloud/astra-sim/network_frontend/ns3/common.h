@@ -588,7 +588,7 @@ inline bool ReadConf(const string& network_topo, const string& network_conf, con
       uint32_t v;
       conf >> v;
       flow_stripping = v;
-    } else if (key.compare("PACKET_SPRAYING") == 0) {
+    } else if (key.compare("ENABLE_PACKET_SPRAYING") == 0) {
       uint32_t v;
       conf >> v;
       packet_spraying = v;
@@ -1036,6 +1036,7 @@ inline void SetupNetwork(
 
   CalculateRoutes(n);
   SetRoutingEntries();
+  //printRoutingEntries();
 
   maxRtt = maxBdp = 0;
   for (uint32_t i = 0; i < node_num; i++) {
