@@ -5,7 +5,7 @@ csv_files
 /*.txt
 astra-sim-alibabacloud/build/simai_analytical/build/
 astra-sim-alibabacloud/build/astra_ns3/build/
-astra-sim-alibabacloud/inputs/config/
+astra-sim-alibabacloud/inputs/config/*
 !astra-sim-alibabacloud/inputs/config/SimAI.conf
 bin/
 results/

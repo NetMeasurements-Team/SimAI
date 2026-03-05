@@ -295,6 +295,9 @@ int main(int argc, char *argv[]) {
   NcclLog->writeLog(NcclLogLevel::INFO," init SimAI.log ");
   #ifdef NS3_MTP
   MtpInterface::Enable(user_param.thread);
+  if (user_param.thread == 1) {
+    GlobalValue::Bind("PartitionSchedulingMethod", StringValue ("ByPendingEventCount"));
+  }
   #endif
 
   setup_ns3_simulation(user_param.network_topo, user_param.network_conf, user_param.run_name);
