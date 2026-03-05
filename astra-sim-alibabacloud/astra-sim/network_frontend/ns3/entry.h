@@ -235,7 +235,7 @@ void send_flow(
   bool nvls_on = request->flowTag.nvls_on;
   int flow_id = request->flowTag.current_flow_id;
   int pg = 3, dport = 100;
-  int send_lat = 6000;
+  int send_lat = 6;
   if (const char* send_lat_env = std::getenv("AS_SEND_LAT")) {
     try {
       send_lat = std::stoi(send_lat_env);
@@ -411,58 +411,56 @@ void notify_receiver_receive_data(
 }
 
 void notify_sender_sending_finished(
-    int sender_node,
-    int receiver_node,
-    uint64_t message_size,
-    AstraSim::ncclFlowTag flowTag) {
-  {
-    MockNcclLog* NcclLog = MockNcclLog::getInstance();
-#ifdef NS3_MTP
-    MtpInterface::ExplicitCriticalSection ecs;
-#endif
-    int tag = flowTag.tag_id;
-    // Lookup the send_event registered at send_flow().
-    if (sentHash.find(make_pair(tag, make_pair(sender_node, receiver_node))) != sentHash.end()) {
-      task1 t2 = sentHash[make_pair(tag, make_pair(sender_node, receiver_node))];
-      const auto ehd = static_cast<AstraSim::SendPacketEventHandlerData*>(t2.fun_arg);
-      ehd->flowTag = flowTag;
-      // Verify that the (ns3 identified) sent message size matches what was expected by the system layer.
-      if (t2.count == message_size) {
-        sentHash.erase(make_pair(tag, make_pair(sender_node, receiver_node)));
-        // Add to the number of total bytes sent.
-        if (nodeHash.find(make_pair(sender_node, 0)) == nodeHash.end()) {
-          nodeHash[make_pair(sender_node, 0)] = message_size;
-        } else {
-          nodeHash[make_pair(sender_node, 0)] += message_size;
-        }
-#ifdef NS3_MTP
-        ecs.ExitSection();
-#endif
-        t2.msg_handler(t2.fun_arg);
-        return;
+  int sender_node,
+  int receiver_node,
+  uint64_t message_size,
+  AstraSim::ncclFlowTag flowTag) {
+  MockNcclLog* NcclLog = MockNcclLog::getInstance();
+  #ifdef NS3_MTP
+  MtpInterface::ExplicitCriticalSection ecs;
+  #endif
+  int tag = flowTag.tag_id;
+  // Lookup the send_event registered at send_flow().
+  if (sentHash.find(make_pair(tag, make_pair(sender_node, receiver_node))) != sentHash.end()) {
+    task1 t2 = sentHash[make_pair(tag, make_pair(sender_node, receiver_node))];
+    const auto ehd = static_cast<AstraSim::SendPacketEventHandlerData*>(t2.fun_arg);
+    ehd->flowTag = flowTag;
+    // Verify that the (ns3 identified) sent message size matches what was expected by the system layer.
+    if (t2.count == message_size) {
+      sentHash.erase(make_pair(tag, make_pair(sender_node, receiver_node)));
+      // Add to the number of total bytes sent.
+      if (nodeHash.find(make_pair(sender_node, 0)) == nodeHash.end()) {
+        nodeHash[make_pair(sender_node, 0)] = message_size;
       } else {
-        NcclLog->writeLog(NcclLogLevel::ERROR,
-            "sentHash msg size != sender_node %d receiver_node %d message_size %lu flow_id ",
-            sender_node, receiver_node, message_size);
-        cerr << "The message size does not match what is expected. Something is wrong."
-             << "tag, src_id, dst_id, expected msg_bytes, actual msg_bytes: " << tag
-             << " " << sender_node << " " << receiver_node << " "
-             << t2.count << " " << message_size << endl;
-        exit(1);
+        nodeHash[make_pair(sender_node, 0)] += message_size;
       }
+      #ifdef NS3_MTP
+      ecs.ExitSection();
+      #endif
+      t2.msg_handler(t2.fun_arg);
+      return;
     } else {
       NcclLog->writeLog(NcclLogLevel::ERROR,
-          "sentHash Cannot find sender_node %d receiver_node %d message_size %lu",
-          sender_node, receiver_node, message_size);
-      cerr << "Cannot find send_event in sent_hash. Something is wrong."
-           << "tag, src_id, dst_id: " << tag << " " << sender_node << " " << receiver_node
+          "sentHash: msg size %u != expected bytes %u, %d -> %d, tag %u, flow_id %u",
+          message_size, t2.count, sender_node, receiver_node, tag, flowTag.current_flow_id);
+      cerr << "The message size does not match what is expected. Something is wrong. "
+           << "tag, src_id, dst_id, expected msg_bytes, actual msg_bytes: "
+           << tag << ", " << sender_node << ", " << receiver_node << ", " << t2.count << ", " << message_size
            << endl;
       exit(1);
     }
-#ifdef NS3_MTP
-    ecs.ExitSection();
-#endif
+  } else {
+    NcclLog->writeLog(NcclLogLevel::ERROR,
+        "sentHash: cannot find sender_node %d receiver_node %d message_size %lu",
+        sender_node, receiver_node, message_size);
+    cerr << "Cannot find send_event in sentHash. Something is wrong."
+         << "tag, src_id, dst_id: " << tag << ", " << sender_node << ", " << receiver_node
+         << endl;
+    exit(1);
   }
+  #ifdef NS3_MTP
+  ecs.ExitSection();
+  #endif
 }
 
 [[maybe_unused]]
@@ -542,7 +540,7 @@ inline void print_fct_entry(FILE *fout, Ptr<RdmaQueuePair> q, const uint64_t msg
 void message_finish(FILE* fout, Ptr<RdmaQueuePair> q, uint64_t msg_size, uint64_t flow_id) {
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
   NcclLog->writeLog(
-      NcclLogLevel::DEBUG,
+      NcclLogLevel::INFO,
       "message_finish, %u -> %u, flow_id %u, tag %u, %u flows left in qp, at the tick %u",
       q->m_src, q->m_dest, flow_id, q->m_tag, q->m_messages.size(), AstraSim::Sys::boostedTick());
   uint32_t sid = ip_to_node_id(q->sip), did = ip_to_node_id(q->dip);

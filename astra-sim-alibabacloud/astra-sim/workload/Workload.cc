@@ -203,7 +203,9 @@ void Workload::report() {
   }
   std::cout << "*************************" << std::endl;
   std::cout << "all passes finished at time: " << Sys::boostedTick()
-            << ", id of first layer: " << layers[0]->id << std::endl;
+            << ", id of first layer: " << layers[0]->id
+            << ", id: " << generator->id
+            << std::endl;
   generator->NI->pass_front_end_report(astraSimDataAPI);
   #ifdef NS3_MTP 
   if (this->seprate_log) {

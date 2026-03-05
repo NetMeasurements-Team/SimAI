@@ -82,6 +82,7 @@ inline bool rate_bound = true;
 inline int nic_total_pause_time = 0;
 inline std::string nic_coalesce_method = "PER_QP";
 inline double nack_gen_interval = 0.01;
+inline size_t max_rdma_out_of_seq = 4;
 inline bool r_dcqcn_ewma_gain, r_dcqcn_clamp = false;
 inline uint32_t r_dcqcn_f = 1, r_dcqcn_bytes_threshold = 524240;
 inline std::string r_dcqcn_rate_u_delay = "300us";
@@ -959,6 +960,12 @@ inline void SetupNetwork(
   FILE *fct_output = fopen(fct_output_file.c_str(), "w");
   FILE *send_output = fopen(send_output_file.c_str(), "w");
   FILE *recv_output = fopen(recv_output_file.c_str(), "w");
+
+  // Only tolerate out-of-order packets in case of packet spraying
+  if (!packet_spraying) {
+    max_rdma_out_of_seq = 0;
+  }
+
   for (uint32_t i = 0; i < node_num; i++) {
     if (n.Get(i)->GetNodeType() == 0 || n.Get(i)->GetNodeType() == 2) { 
       // create RdmaHw
@@ -975,6 +982,7 @@ inline void SetupNetwork(
       rdmaHw->SetAttribute("RateBound", BooleanValue(rate_bound));
       rdmaHw->SetAttribute("NicCoalesceMethod", StringValue(nic_coalesce_method));
       rdmaHw->SetAttribute("NACKGenerationInterval", DoubleValue(nack_gen_interval));
+      rdmaHw->SetAttribute("MaxOutOfSeq", UintegerValue(max_rdma_out_of_seq));
 
       switch (cc_mode) {
       case 1:
