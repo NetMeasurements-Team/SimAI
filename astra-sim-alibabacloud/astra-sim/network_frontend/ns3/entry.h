@@ -151,9 +151,9 @@ inline bool is_message_finished(int src, int dst, int flow_id) {
   return false;
 }
 
-inline std::string get_hash_key(uint32_t src, uint32_t dst, uint32_t pg, uint32_t dport, uint64_t tag) {
+inline std::string get_hash_key(uint32_t src, uint32_t dst, uint32_t pg, uint32_t dport, uint64_t channel_id) {
   return std::to_string(src) + '_' + std::to_string(dst) + '_' + std::to_string(pg) + '_' + std::to_string(dport) +
-      '_' + std::to_string(tag);
+      '_' + std::to_string(channel_id);
 }
 
 inline std::vector<Ptr<RdmaClient>> get_clients(
@@ -163,13 +163,13 @@ inline std::vector<Ptr<RdmaClient>> get_clients(
     uint32_t dport,
     void (*msg_handler)(void* fun_arg),
     void* fun_arg,
-    int tag,
+    int channel_id,
     int sendLat,
     bool nvls_on,
     size_t n_clients) {
   std::vector<Ptr<RdmaClient>> clients;
-  const bool reuse = reuse_qps; // src/gpus_per_server != dst/gpus_per_server;
-  std::string hashKey = get_hash_key(src, dst, pg, dport, tag);
+  const bool reuse = reuse_qps;
+  std::string hashKey = get_hash_key(src, dst, pg, dport, channel_id);
 #ifdef NS3_MTP
   MtpInterface::CriticalSection cs;
 #endif
@@ -187,7 +187,6 @@ inline std::vector<Ptr<RdmaClient>> get_clients(
           global_t == 1 ? maxRtt : pairRtt[src][dst],
           msg_handler,
           fun_arg,
-          tag,
           src,
           dst,
           !reuse);
@@ -208,13 +207,13 @@ inline std::vector<Ptr<RdmaClient>> get_clients(
   return clients;
 }
 
-inline void push_msg_to_client(Ptr<RdmaClient> client, uint64_t size, uint64_t flow_id) {
+inline void push_msg_to_client(Ptr<RdmaClient> client, uint64_t size, uint64_t flow_id, uint64_t tag) {
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
   NcclLog->writeLog(
       NcclLogLevel::INFO,
       "push_msg_to_client, %u -> %u, flow_id %u, tag %u, at the tick %u",
-      client->m_qp->m_src, client->m_qp->m_dest, flow_id, client->m_qp->m_tag, AstraSim::Sys::boostedTick());
-  client->PushMessageToQp(size, flow_id);
+      client->m_qp->m_src, client->m_qp->m_dest, flow_id, tag, AstraSim::Sys::boostedTick());
+  client->PushMessageToQp(size, flow_id, tag);
 }
 
 /**
@@ -234,6 +233,7 @@ void send_flow(
 
   bool nvls_on = request->flowTag.nvls_on;
   int flow_id = request->flowTag.current_flow_id;
+  int channel_id = request->flowTag.channel_id;
   int pg = 3, dport = 100;
   int send_lat = 6;
   if (const char* send_lat_env = std::getenv("AS_SEND_LAT")) {
@@ -274,7 +274,7 @@ void send_flow(
     qps_per_flow = next_hops*4;
   }
   std::vector<Ptr<RdmaClient>> clients =
-      get_clients(src, dst, pg, dport, msg_handler, fun_arg, tag, send_lat, nvls_on, qps_per_flow);
+      get_clients(src, dst, pg, dport, msg_handler, fun_arg, channel_id, send_lat, nvls_on, qps_per_flow);
 
   // Schedule the flow within the ns3 simulator
   const uint64_t base_size = maxPacketCount / qps_per_flow;
@@ -285,15 +285,8 @@ void send_flow(
 
     NcclLog->writeLog(
         NcclLogLevel::DEBUG,
-        "[SendFlow Event] %d -> %d on ch=%d. Port: %u. Flow ID: %d. NVLink: %d. Size: %llu. Tick: %ld",
-        src, dst, tag, port, flow_id, nvls_on, size, AstraSim::Sys::boostedTick());
-
-    // This log provides context from the original ASTRA-sim request.
-    NcclLog->writeLog(
-        NcclLogLevel::DEBUG,
-        " -> [ASTRA-sim Req] %d -> d. Port: %u. Tag ID: %d. Flow ID: %d. NVLink: %d. Size: %llu",
-        request->flowTag.sender_node, request->flowTag.receiver_node, port, request->flowTag.tag_id, flow_id, nvls_on,
-        size);
+        "[send_flow] %d -> %d on ch=%d. Port: %u. Flow ID: %d. NVLink: %d. Size: %llu. Tick: %ld",
+        src, dst, channel_id, port, flow_id, nvls_on, size, AstraSim::Sys::boostedTick());
 
     {
 #ifdef NS3_MTP
@@ -307,7 +300,7 @@ void send_flow(
     }
 
     Simulator::ScheduleWithContext(
-        n.Get(src)->GetId(), Time(send_lat + 1), push_msg_to_client, clients[qp_index], size, flow_id);
+        n.Get(src)->GetId(), Time(send_lat + 1), push_msg_to_client, clients[qp_index], size, flow_id, tag);
   }
   flow_input.idx++;
 }
@@ -332,19 +325,22 @@ void notify_receiver_receive_data(
     #endif
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
     int tag = flowTag.tag_id;
-    NcclLog->writeLog(NcclLogLevel::DEBUG,
-        " %d notify receiver %d, tag %u, message size %llu, channel_id %d",
-        sender_node, receiver_node, tag, message_size, flowTag.channel_id);
+    NcclLog->writeLog(
+        NcclLogLevel::DEBUG,
+        " %d notify receiver %d, tag %u, message size %llu, channel_id %d, flow_id %u",
+        sender_node, receiver_node, tag, message_size, flowTag.channel_id, flowTag.current_flow_id);
     if (expeRecvHash.find(make_pair(tag, make_pair(sender_node, receiver_node))) != expeRecvHash.end()) {
       // The Sys object is waiting for packets to arrive.
       task1 t2 = expeRecvHash[make_pair(tag, make_pair(sender_node, receiver_node))];
-      NcclLog->writeLog(NcclLogLevel::DEBUG,
+      NcclLog->writeLog(
+          NcclLogLevel::DEBUG,
           " %d notify receiver %d, tag %u, message size %llu, t2.count %llu, channel_id %d",
           sender_node, receiver_node, tag, message_size, t2.count, flowTag.channel_id);
       const auto ehd = static_cast<AstraSim::RecvPacketEventHadndlerData*>(t2.fun_arg);
       if (message_size == t2.count) {
         // We received exactly the amount of data what Sys object was expecting.
-        NcclLog->writeLog(NcclLogLevel::DEBUG,
+        NcclLog->writeLog(
+            NcclLogLevel::DEBUG,
             " message_size = t2.count expeRecvHash.erase %d notify receiver %d, tag %u, message size %llu",
             sender_node, receiver_node, tag, message_size);
         expeRecvHash.erase(make_pair(tag, make_pair(sender_node, receiver_node)));
@@ -360,7 +356,8 @@ void notify_receiver_receive_data(
         // Place task in recvHash and wait for Sys object to issue more sim_recv
         // calls. Call callback handler for the amount Sys object was waiting for.
         recvHash[make_pair(tag, make_pair(sender_node, receiver_node))] = message_size - t2.count;
-        NcclLog->writeLog(NcclLogLevel::DEBUG,
+        NcclLog->writeLog(
+            NcclLogLevel::DEBUG,
             "message_size > t2.count expeRecvHash.erase, %d notify receiver %d, tag %u, message size %llu",
             sender_node, receiver_node, tag, message_size);
         expeRecvHash.erase(make_pair(tag, make_pair(sender_node, receiver_node)));
@@ -374,7 +371,8 @@ void notify_receiver_receive_data(
       } else {
         // There are still packets to arrive.
         // Reduce the number of packets we are waiting for. Do not call callback handler.
-        NcclLog->writeLog(NcclLogLevel::DEBUG,
+        NcclLog->writeLog(
+            NcclLogLevel::DEBUG,
             "message_size < t2.count expeRecvHash.decrease, %d notify receiver %d, tag %u, message size %llu",
             sender_node, receiver_node, tag, message_size);
         t2.count -= message_size;
@@ -382,7 +380,8 @@ void notify_receiver_receive_data(
       }
     } else {
       // The Sys object is not yet waiting for packets to arrive.
-      NcclLog->writeLog(NcclLogLevel::DEBUG,
+      NcclLog->writeLog(
+          NcclLogLevel::DEBUG,
           " %d notify receiver %d, tag %u, message size %d, expeRecvHash not found",
           sender_node, receiver_node, tag, message_size);
       receiver_pending_queue[std::make_pair(std::make_pair(receiver_node, sender_node), tag)] = flowTag;
@@ -537,21 +536,21 @@ inline void print_fct_entry(FILE *fout, Ptr<RdmaQueuePair> q, const uint64_t msg
 /**
  * Invoked when receiving the ack of the last packet for the current flow.
  */
-void message_finish(FILE* fout, Ptr<RdmaQueuePair> q, uint64_t msg_size, uint64_t flow_id) {
+void message_finish(FILE* fout, Ptr<RdmaQueuePair> q, const RdmaQueuePair::RdmaMessage& msg) {
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
   NcclLog->writeLog(
       NcclLogLevel::INFO,
       "message_finish, %u -> %u, flow_id %u, tag %u, %u flows left in qp, at the tick %u",
-      q->m_src, q->m_dest, flow_id, q->m_tag, q->m_messages.size(), AstraSim::Sys::boostedTick());
+      q->m_src, q->m_dest, msg.m_flow_id, msg.m_tag, q->m_messages.size(), AstraSim::Sys::boostedTick());
   uint32_t sid = ip_to_node_id(q->sip), did = ip_to_node_id(q->dip);
-  print_fct_entry(fout, q, msg_size);
+  print_fct_entry(fout, q, msg.m_size);
 
   {
     #ifdef NS3_MTP
     MtpInterface::CriticalSection cs;
     #endif
-    sender_src_port_map.erase(make_pair(flow_id,make_pair(q->sport, make_pair(sid, did))));
-    if (!is_message_finished(sid, did, flow_id)) {
+    sender_src_port_map.erase(make_pair(msg.m_flow_id, make_pair(q->sport, make_pair(sid, did))));
+    if (!is_message_finished(sid, did, msg.m_flow_id)) {
       return;
     }
   }
@@ -576,35 +575,35 @@ void qp_finish(FILE* fout, Ptr<RdmaQueuePair> q) {
   }
   NcclLog->writeLog(
       NcclLogLevel::INFO,
-      "qp_finish, %d -> %d, tag %u, port %d, at the tick %d",
-      sid, did, q->m_tag, q->sport, AstraSim::Sys::boostedTick());
+      "qp_finish, %d -> %d, port %d, at the tick %d",
+      sid, did, q->sport, AstraSim::Sys::boostedTick());
 }
 
 /**
  * Invoked when the last packet of a flow has been sent.
  */
-void send_finish(FILE* fout, Ptr<RdmaQueuePair> q, uint64_t msg_size, uint64_t flow_id) {
+void send_finish(FILE* fout, Ptr<RdmaQueuePair> q, const RdmaQueuePair::RdmaMessage& msg) {
   uint32_t sid = ip_to_node_id(q->sip), did = ip_to_node_id(q->dip);
   AstraSim::ncclFlowTag flowTag;
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
   NcclLog->writeLog(
       NcclLogLevel::INFO,
       "send_finish, %d -> %d, flow_id %d, tag %u, port %d, total bytes %llu, at the tick %d",
-      sid,  did, flow_id, q->m_tag, q->sport, msg_size, AstraSim::Sys::boostedTick());
+      sid,  did, msg.m_flow_id, msg.m_tag, q->sport, msg.m_size, AstraSim::Sys::boostedTick());
   uint64_t all_sent_chunksize;
   {
 #ifdef NS3_MTP
     MtpInterface::CriticalSection cs;
 #endif
     flowTag = sender_src_port_map[std::make_pair(
-        flow_id,
+        msg.m_flow_id,
         std::make_pair(q->sport, std::make_pair(sid, did)))];
-    if (flowTag.current_flow_id != flow_id) {
+    if (flowTag.current_flow_id != msg.m_flow_id) {
       NcclLog->writeLog(NcclLogLevel::ERROR,"Exit with unequal flow_id %d", flowTag.current_flow_id);
-      std::cout << "[send_finish] Exit with unequal flow_id " << flowTag.current_flow_id << " in sender_src_port_map for flow " << flow_id << "," << q->sport << "," << sid << "," << did << std::endl;
+      std::cout << "[send_finish] Exit with unequal flow_id " << flowTag.current_flow_id << " in sender_src_port_map for flow " << msg.m_flow_id << "," << q->sport << "," << sid << "," << did << std::endl;
       exit(-1);
     }
-    sent_chunksize[std::make_pair(flowTag.current_flow_id, std::make_pair(sid, did))] += msg_size;
+    sent_chunksize[std::make_pair(flowTag.current_flow_id, std::make_pair(sid, did))] += msg.m_size;
     if (!is_sending_finished(sid, did, flowTag)) {
       return;
     }
@@ -618,7 +617,7 @@ void send_finish(FILE* fout, Ptr<RdmaQueuePair> q, uint64_t msg_size, uint64_t f
 /**
  * Invoked when sending the last ack of the current flow.
  */
-void recv_finish(FILE* fout, Ptr<RdmaRxQueuePair> rx_q, uint64_t msg_size, uint64_t flow_id) {
+void recv_finish(FILE* fout, Ptr<RdmaRxQueuePair> rx_q, const RdmaRxQueuePair::RdmaMessage& msg) {
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
   const uint32_t sip = rx_q->dip, dip = rx_q->sip;
   uint16_t sport = rx_q->dport;
@@ -626,7 +625,7 @@ void recv_finish(FILE* fout, Ptr<RdmaRxQueuePair> rx_q, uint64_t msg_size, uint6
   NcclLog->writeLog(
       NcclLogLevel::INFO,
       "recv_finish, %u -> %u, flow_id %u, tag %u, %u flows left in qp, at the tick %u",
-      sid, did, flow_id, rx_q->m_tag, rx_q->m_messages.size(), AstraSim::Sys::boostedTick());
+      sid, did, msg.m_flow_id, msg.m_tag, rx_q->m_messages.size(), AstraSim::Sys::boostedTick());
 
   AstraSim::ncclFlowTag flowTag;
   uint64_t notify_size;
@@ -634,20 +633,20 @@ void recv_finish(FILE* fout, Ptr<RdmaRxQueuePair> rx_q, uint64_t msg_size, uint6
     #ifdef NS3_MTP
     MtpInterface::CriticalSection cs;
     #endif
-    if (sender_src_port_map.find(make_pair(flow_id, make_pair(sport, make_pair(sid, did)))) ==
+    if (sender_src_port_map.find(make_pair(msg.m_flow_id, make_pair(sport, make_pair(sid, did)))) ==
         sender_src_port_map.end()) {
       NcclLog->writeLog(NcclLogLevel::ERROR,"could not find the tag, there must be something wrong");
       exit(-1);
     }
     flowTag = sender_src_port_map[std::make_pair(
-        flow_id,
+        msg.m_flow_id,
         std::make_pair(sport, std::make_pair(sid, did)))];
-    if (flowTag.current_flow_id != flow_id) {
+    if (flowTag.current_flow_id != msg.m_flow_id) {
       NcclLog->writeLog(NcclLogLevel::ERROR,"Exit with unequal flow_id");
-      std::cout << "[recv_finish] Exit with unequal flow_id " << flowTag.current_flow_id << " in sender_src_port_map (expected " << flow_id << ")" << std::endl;
+      std::cout << "[recv_finish] Exit with unequal flow_id " << flowTag.current_flow_id << " in sender_src_port_map (expected " << msg.m_flow_id << ")" << std::endl;
       exit(-1);
     }
-    received_chunksize[std::make_pair(flowTag.current_flow_id,std::make_pair(sid,did))] += msg_size;
+    received_chunksize[std::make_pair(flowTag.current_flow_id,std::make_pair(sid,did))] += msg.m_size;
     if (!is_receive_finished(sid,did,flowTag)) {
       return;
     }

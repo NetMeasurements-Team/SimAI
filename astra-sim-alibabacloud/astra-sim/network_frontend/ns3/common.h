@@ -751,10 +751,10 @@ inline void SetConfig() {
 }
 
 inline void SetupNetwork(
-    void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>),
-    void (*message_finish)(FILE*, Ptr<RdmaQueuePair>, uint64_t, uint64_t),
-    void (*send_finish)(FILE *, Ptr<RdmaQueuePair>, uint64_t, uint64_t),
-    void (*recv_finish)(FILE *, Ptr<RdmaRxQueuePair>, uint64_t, uint64_t)) {
+    void (*qp_finish)(FILE*, Ptr<RdmaQueuePair>),
+    void (*message_finish)(FILE*, Ptr<RdmaQueuePair>, const RdmaQueuePair::RdmaMessage&),
+    void (*send_finish)(FILE *, Ptr<RdmaQueuePair>, const RdmaQueuePair::RdmaMessage&),
+    void (*recv_finish)(FILE *, Ptr<RdmaRxQueuePair>, const RdmaRxQueuePair::RdmaMessage&)) {
   string gpu_type_str;
 
   topo_ifs.open(topology_file.c_str());

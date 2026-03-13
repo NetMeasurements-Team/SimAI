@@ -241,6 +241,7 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
         received_flow_id);
 #endif
   } else if (event == EventType::StreamInit) {
+    NcclLog->writeLog(NcclLogLevel::INFO, "NcclTreeFlowModel::run StreamInit ID: %d", id);
 #ifdef PHY_MTP
     MPI_Barrier(MPI_COMM_WORLD);
     for (auto single_flow : _flow_models) {
@@ -379,7 +380,7 @@ bool NcclTreeFlowModel::recv_ready(int channel_id, int flow_id) {
   std::vector<int> data_sources = flow_model.prev;
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
   NcclLog->writeLog(
-      NcclLogLevel::DEBUG,
+      NcclLogLevel::INFO,
       "NcclTreeFlowModel::recv_ready called for channel_id: %d, flow_id: %d",
       channel_id,
       flow_id);
@@ -637,7 +638,7 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
       stream,
       id,
       packet.preferred_dest,
-      channel_id,
+      snd_req.flowTag.tag_id,
       EventType::PacketSentFinshed);
   stream->owner->front_end_sim_send(
       0,
@@ -766,7 +767,12 @@ bool NcclTreeFlowModel::phy_ready(int channel_id, int flow_id) {
   else
     snd_req.flowTag.nvls_on = false;
   SendPacketEventHandlerData* send_ehd =
-      new SendPacketEventHandlerData(stream, id, flow.dest, channel_id, EventType::PacketSentFinshed);
+      new SendPacketEventHandlerData(
+          stream,
+          id,
+          flow.dest,
+          snd_req.flowTag.tag_id,
+          EventType::PacketSentFinshed);
   stream->owner->front_end_sim_send(
       0,
       Sys::dummy_data,

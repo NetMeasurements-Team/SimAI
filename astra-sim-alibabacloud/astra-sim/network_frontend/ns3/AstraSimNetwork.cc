@@ -204,8 +204,7 @@ public:
       }
     } else {
       // 2) ns3 has not yet received anything.
-      if (expeRecvHash.find(make_pair(tag, make_pair(t.src, t.dest))) ==
-          expeRecvHash.end()) {
+      if (expeRecvHash.find(make_pair(tag, make_pair(t.src, t.dest))) == expeRecvHash.end()) {
         // 2.1) We have not been expecting anything so far.
         expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))] = t;
         NcclLog->writeLog(
