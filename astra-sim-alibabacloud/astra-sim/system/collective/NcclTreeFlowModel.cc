@@ -573,7 +573,6 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
     rcv_req.vnet = this->stream->current_queue_id;
     rcv_req.layerNum = layer_num;
     rcv_req.reqCount = packet.msg_size;
-    rcv_req.tag = channel_id; // TODO what is this for?
     auto* ehd = new RecvPacketEventHadndlerData(
         stream, stream->owner->id, EventType::PacketReceived, packet.preferred_vnet, packet.stream_num);
     ehd->flowTag.child_flow_id = -1;
@@ -582,12 +581,12 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
     auto const& flow_model = this->_flow_models[std::make_pair(channel_id, flow_id)];
     if (flow_model.parent_flow_id.empty() || comType == ComType::All_to_All || flow_model.conn_type == "RING") {
       ehd->flowTag.tag_id =
-          //layer_num * flow_model.chunk_count * m_channels +
+          layer_num * flow_model.chunk_count * m_channels +
           flow_model.chunk_count * flow_model.channel_id +
           flow_model.chunk_id;
     } else {
       ehd->flowTag.tag_id =
-          //layer_num * flow_model.chunk_count * m_channels +
+          layer_num * flow_model.chunk_count * m_channels +
           flow_model.chunk_count * flow_model.channel_id +
           flow_model.chunk_id + 1;
     }
@@ -611,14 +610,13 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
   sim_request snd_req;
   snd_req.srcRank = id;
   snd_req.dstRank = packet.preferred_dest;
-  snd_req.tag = channel_id;
   snd_req.reqType = UINT8;
   snd_req.vnet = this->stream->current_queue_id;
   snd_req.layerNum = layer_num;
   snd_req.reqCount = packet.msg_size;
   MockNccl::SingleFlow flow_model = this->_flow_models[std::make_pair(channel_id, flow_id)];
   snd_req.flowTag.tag_id =
-      //layer_num * flow_model.chunk_count * m_channels +
+      layer_num * flow_model.chunk_count * m_channels +
       flow_model.channel_id * flow_model.chunk_count +
       flow_model.chunk_id;
   snd_req.flowTag.channel_id = channel_id;

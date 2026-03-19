@@ -82,7 +82,7 @@ inline bool rate_bound = true;
 inline int nic_total_pause_time = 0;
 inline std::string nic_coalesce_method = "PER_QP";
 inline double nack_gen_interval = 0.01;
-inline size_t max_rdma_out_of_seq = 4;
+inline size_t max_rdma_out_of_seq = 8;
 inline bool r_dcqcn_ewma_gain, r_dcqcn_clamp = false;
 inline uint32_t r_dcqcn_f = 1, r_dcqcn_bytes_threshold = 524240;
 inline std::string r_dcqcn_rate_u_delay = "300us";
