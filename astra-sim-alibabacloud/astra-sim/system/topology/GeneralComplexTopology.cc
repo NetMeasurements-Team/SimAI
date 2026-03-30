@@ -47,7 +47,9 @@ GeneralComplexTopology::GeneralComplexTopology(
         collective_implementation[dim]->type ==
             CollectiveImplementationType::NcclFlowModel || 
         collective_implementation[dim]->type ==
-            CollectiveImplementationType::NcclTreeFlowModel) {
+            CollectiveImplementationType::NcclTreeFlowModel ||
+           collective_implementation[dim]->type ==
+            CollectiveImplementationType::MscclCustomFlow) {
       RingTopology* ring = new RingTopology(
           RingTopology::Dimension::NA,
           id,

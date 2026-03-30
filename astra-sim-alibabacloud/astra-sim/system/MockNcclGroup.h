@@ -26,6 +26,14 @@
 
 #include "astra-sim/system/Common.hh"
 #include "astra-sim/system/MockNccl.h"
+// #include <string>
+// #include <vector>
+// #include <map>
+#include "astra-sim/system/XmlReader.hh"
+#include <optional>
+#include "astra-sim/system/MockNcclLog.h"
+
+
 using namespace std;
 
 namespace MockNccl {
@@ -39,8 +47,15 @@ namespace MockNccl {
   struct ncclChannelNode;
   typedef std::map<std::pair<int,int>,SingleFlow> FlowModels; 
   typedef std::map<int,std::map<int,std::vector<int>>> RingChannels; 
-  typedef std::map<int,std::map<int,std::vector<ncclChannelNode*>>> NVLStreechannels;  
+  typedef std::map<int, std::vector<int>> FullyConnectedChannels;
+  typedef std::map<int,std::map<int,std::vector<ncclChannelNode*>>> NVLStreechannels;
   typedef std::map<int,std::map<int,ncclTree>> TreeChannels;
+
+  void logRankToFlowModels(
+    const NcclLogLevel level,
+    const std::string& algorithmName,
+    const std::map<int, std::shared_ptr<FlowModels>>& rank2pflowmodels);
+
   enum GroupType {
     TP,
     DP,
@@ -147,6 +162,7 @@ namespace MockNccl {
     std::map<int,GroupInfo> AllGroups;
 
     std::map<int,RingChannels> Allringchannels;
+    std::map<int,FullyConnectedChannels> AllFullyConnectedChannels;
     std::map<int,NVLStreechannels> AllNVLStreechannels;
     std::map<int,TreeChannels> Alltreechannels;
     std::map<int,TreeChannels> AllNVLSchannels;
@@ -156,14 +172,19 @@ namespace MockNccl {
     std::map<std::string,int> FlowName2nums;
     std::map<std::string ,std::map<int,std::shared_ptr<FlowModels> >> flow_models; 
     std::map<std::string ,struct ncclInfo*> nccl_infos;  
-    std::shared_ptr<void> getFlowModels(GroupType type , int rank, AstraSim::ComType op,uint64_t data_size,int layer_num,State loopstate);
+    std::shared_ptr<void> getFlowModels(GroupType type , int rank, AstraSim::ComType op,uint64_t data_size,int layer_num,State loopstate, bool& msccl, bool NCCL_Simple_LL_splitting);
     static unsigned int countFlowsInFlowModels(const map<int, shared_ptr<FlowModels>>& flowModelsMap);
+
    private:
-    std::map<int,std::shared_ptr<FlowModels>> genFlowModels(GroupType type , int rank, AstraSim::ComType op,uint64_t data_size);
-    std::map<int,std::shared_ptr<FlowModels>> genReduceScatterFlowModels(GroupType type , int rank, uint64_t data_size);
-    std::map<int,std::shared_ptr<FlowModels>> genAlltoAllFlowModels(GroupType type, int rank, uint64_t data_size);
-    std::map<int,std::shared_ptr<FlowModels>> genAllReduceFlowModels(GroupType type , int rank,uint64_t data_size);
+    std::map<int,std::shared_ptr<FlowModels>> genFlowModels(GroupType type , int rank, AstraSim::ComType op,uint64_t data_size,bool& msccl, bool NCCL_Simple_LL_splitting);
+    std::map<int,std::shared_ptr<FlowModels>> genReduceScatterFlowModels(GroupType type , int rank, uint64_t data_size,bool& msccl);
+    std::map<int,std::shared_ptr<FlowModels>> genAlltoAllFlowModels(GroupType type, int rank, uint64_t data_size,bool& msccl);
+    std::map<int,std::shared_ptr<FlowModels>> genAllReduceFlowModels(GroupType type , int rank,uint64_t data_size,bool& msccl);
     std::map<int,std::shared_ptr<FlowModels>> genAllReduceRingFlowModels(GroupType type , int rank,uint64_t data_size);
+    std::map<int,std::shared_ptr<FlowModels>> genAllGatherRingFlowModels(GroupType type , int rank,uint64_t data_size);
+    std::optional<std::map<int,std::shared_ptr<FlowModels>>> genAllGatherCustomFlowModels(GroupType type , int rank,uint64_t data_size, int protocol);
+    bool validate_flow_graph(const FlowModels& flows, const MscclAlgorithm& msccl_algorithm, uint64_t data_size, int total_unique_chunks, MockNcclLog* NcclLog, int protocol);
+    bool validate_flow_graph_PXN(const FlowModels& flows, const MscclAlgorithm& msccl_algorithm, uint64_t data_size, int total_unique_chunks, MockNcclLog* NcclLog, int protocol);
     std::map<int,std::shared_ptr<FlowModels>> genAllreduceNVLSFlowModels(
         GroupType type,
         int rank,
@@ -174,7 +195,7 @@ namespace MockNccl {
     std::shared_ptr<FlowModels> genAllReduceTreeFlowModels(GroupType type , int rank,uint64_t data_size);
     FlowModels generate_flow_model_tree_allreduce_up(std::map<int,ncclTree> &nodes,std::unordered_map<int, int> upinDegree,std::unordered_map<int,std::vector<int>>& nodeprevs,int chunk_size,int chunk_id,int chunk_count,int channle_id,FlowModels& result);
     FlowModels generate_flow_model_tree_allreduce_down(std::map<int,ncclTree> &nodes,std::unordered_map<int, int> downinDegree,std::unordered_map<int,std::vector<int>>& nodeprevs,int chunk_size,int chunk_id,int chunk_count,int channle_id,FlowModels& result);
-    std::map<int,std::shared_ptr<FlowModels>> genAllGatherFlowModels(GroupType type , int rank,uint64_t data_size);
+    std::map<int,std::shared_ptr<FlowModels>> genAllGatherFlowModels(GroupType type , int rank,uint64_t data_size,bool& msccl, bool NCCL_Simple_LL_splitting);
     std::vector<DoubleBinaryTreeNode*> genInterDouBinTree(GroupInfo pgroupinfo);
     DoubleBinaryTreeNode* InterDouBinTreeShift(DoubleBinaryTreeNode* root,std::vector<int>nodes);
     void ConnInterIntraTree(DoubleBinaryTreeNode*root,std::map<int,std::vector<int>>node2ranks,std::map<int,ncclTree>&TreeChannel);
@@ -197,6 +218,13 @@ namespace MockNccl {
         int rank,
         AstraSim::ComType op,
         uint64_t data_size);
+    ncclInfo* get_algo_proto_info(
+            GroupType type,
+            int rank,
+            AstraSim::ComType op,
+            uint64_t data_size,
+            bool msccl,
+            bool NCCL_Simple_LL_splitting);
   };
 }
 #endif

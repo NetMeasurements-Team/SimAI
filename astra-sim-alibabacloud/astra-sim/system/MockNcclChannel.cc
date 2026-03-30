@@ -52,6 +52,10 @@ namespace MockNccl {
     return nvlschannel;
   }
 
+  MockNccl::FullyConnectedChannels MockNcclComm::get_msccl_channels() {
+    return this->mscclchannels;
+  }
+
   MockNccl::TreeChannels MockNcclComm::get_nvls_channels(){
     return this->nvlschannels;
   }
@@ -60,11 +64,15 @@ namespace MockNccl {
     return this->nvlstreechannels;
   }
 
-  std::shared_ptr<void> MockNcclComm::get_flow_model(uint64_t data_size,AstraSim::ComType collective_type,int layer_num,State loopstate) {
-    return this->GlobalGroup->getFlowModels(type,rank,collective_type,data_size,layer_num,loopstate);
+  std::shared_ptr<void> MockNcclComm::get_flow_model(uint64_t data_size,AstraSim::ComType collective_type,int layer_num,State loopstate, bool& msccl, bool NCCL_Simple_LL_splitting) {
+    return this->GlobalGroup->getFlowModels(type,rank,collective_type,data_size,layer_num,loopstate,msccl, NCCL_Simple_LL_splitting);
   }
 
   struct ncclInfo* MockNcclComm::get_algo_proto_info(uint64_t data_size,AstraSim::ComType collective_type){
     return this->GlobalGroup->get_algo_proto_info(type,rank,collective_type,data_size);
+  }
+
+  struct ncclInfo* MockNcclComm::get_algo_proto_info(uint64_t data_size,AstraSim::ComType collective_type, bool msccl, bool NCCL_Simple_LL_splitting) {
+    return this->GlobalGroup->get_algo_proto_info(type,rank,collective_type,data_size,msccl, NCCL_Simple_LL_splitting);
   }
 }

@@ -376,7 +376,9 @@ public:
   static std::map<std::pair<int, int>, MockNccl::SingleFlow> generate_net_test_flow_model(uint64_t data_size, int nums);
   static std::map<std::pair<int, int>, MockNccl::SingleFlow> generate_nvl_test_flow_model(uint64_t data_size, int nums);
   std::shared_ptr<void> generate_flow_model(ParallelStrategy comm_ps, uint64_t data_size, ComType collective_type);
+  std::shared_ptr<void> generate_flow_model(ParallelStrategy comm_ps, uint64_t data_size, ComType collective_type, bool& msccl, bool NCCL_Simple_LL_splitting);
   MockNccl::ncclInfo* get_nccl_Info(ParallelStrategy comm_ps, uint64_t data_size, ComType collective_type);
+  struct MockNccl::ncclInfo* get_nccl_Info(ParallelStrategy comm_ps, uint64_t data_size, ComType collective_type, bool msccl, bool NCCL_Simple_LL_splitting);
   bool mock_nccl_comms_init();
   bool mock_nccl_grobal_group_init() const;
 };

@@ -20,6 +20,7 @@
 #include <memory>
 #include "astra-sim/system/Common.hh"
 #include "MockNcclGroup.h"
+#include <optional>
 
 namespace MockNccl {
   struct SingleFlow{
@@ -59,6 +60,37 @@ namespace MockNccl {
           chunk_count(_chunk_count),
           conn_type(_conn_type) {}
     ~SingleFlow(){};
+    std::string parent_flow_str() const{
+      std::string result = "";
+      for (int i = 0; i < parent_flow_id.size(); i++){
+        result += std::to_string(parent_flow_id[i]);
+        if (i != parent_flow_id.size() - 1) {
+          result += ",";
+        }
+      }
+      return result;
+    }
+    std::string child_flow_str() const{
+      std::string result = "";
+      for (int i = 0; i < child_flow_id.size(); i++){
+        result += std::to_string(child_flow_id[i]);
+        if (i != child_flow_id.size() - 1) {
+          result += ",";
+        }
+      }
+      return result;
+    }
+
+    std::string prev_str() const{
+      std::string result = "";
+      for (int i = 0; i < prev.size(); i++){
+        result += std::to_string(prev[i]);
+        if (i != prev.size() - 1) {
+          result += ",";
+        }
+      }
+      return result;
+    }
   };
 
   enum class State{
@@ -97,6 +129,7 @@ namespace MockNccl {
     GroupType type; 
     int rank;
     std::map<int,std::map<int,std::vector<int>>> ringchannels;
+    FullyConnectedChannels mscclchannels;
     TreeChannels treechannels; 
     TreeChannels nvlschannels;
     NVLStreechannels nvlstreechannels;
@@ -105,8 +138,10 @@ namespace MockNccl {
     MockNccl::TreeChannels get_treechannels();
     MockNccl::TreeChannels get_nvls_channels();
     MockNccl::NVLStreechannels get_nvls_tree_channels();
-    std::shared_ptr<void> get_flow_model(uint64_t data_size,AstraSim::ComType collective_type,int layer_num,State loopstate);
+    MockNccl::FullyConnectedChannels get_msccl_channels();
+    std::shared_ptr<void> get_flow_model(uint64_t data_size,AstraSim::ComType collective_type,int layer_num,State loopstate, bool& msccl, bool NCCL_Simple_LL_splitting);
     struct ncclInfo* get_algo_proto_info(uint64_t data_size,AstraSim::ComType collective_type);
+    struct ncclInfo* get_algo_proto_info(uint64_t data_size,AstraSim::ComType collective_type, bool msccl, bool NCCL_Simple_LL_splitting);
   };
 }
 

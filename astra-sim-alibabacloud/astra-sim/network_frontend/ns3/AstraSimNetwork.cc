@@ -105,7 +105,7 @@ public:
     t.fun_arg = fun_arg;
     t.msg_handler = fun_ptr;
     t.schTime = delta.time_val;
-    Simulator::Schedule(NanoSeconds(t.schTime), t.msg_handler, t.fun_arg);
+    Simulator::ScheduleWithContext(n.Get(rank)->GetId(), NanoSeconds(t.schTime), t.msg_handler, t.fun_arg);
   }
   virtual int sim_send(void *buffer,   
                        uint64_t count, 
