@@ -72,6 +72,7 @@ inline bool flow_stripping = false;
 inline bool packet_spraying = false;
 inline bool reuse_qps = true;
 inline bool var_win = false, fast_react = true;
+inline bool rto = false;
 inline bool multi_rate = true;
 inline bool sample_feedback = false;
 inline double pint_log_base = 1.05;
@@ -82,7 +83,6 @@ inline bool rate_bound = true;
 inline int nic_total_pause_time = 0;
 inline std::string nic_coalesce_method = "PER_QP";
 inline double nack_gen_interval = 0.01;
-inline size_t max_rdma_out_of_seq = 8;
 inline bool r_dcqcn_ewma_gain, r_dcqcn_clamp = false;
 inline uint32_t r_dcqcn_f = 1, r_dcqcn_bytes_threshold = 524240;
 inline std::string r_dcqcn_rate_u_delay = "300us";
@@ -267,6 +267,9 @@ inline void CalculateRoute(Ptr<Node> host) {
         delay[next] = delay[now] + it->second.delay;
         txDelay[next] = txDelay[now] + packet_payload_size * 1000000000lu * 8 / it->second.bw;
         bw[next] = std::min(bw[now], it->second.bw);
+        if (next->GetNodeType() == 1) {
+          delay[next] += switch_fw_delay*1000;
+        }
         if (next->GetNodeType() == 1 || next->GetNodeType() == 2) {
           q.push_back(next);
         }
@@ -602,6 +605,10 @@ inline bool ReadConf(const string& network_topo, const string& network_conf, con
       uint32_t v;
       conf >> v;
       var_win = v;
+    } else if (key.compare("RTO") == 0) {
+      uint32_t v;
+      conf >> v;
+      rto = v;
     } else if (key.compare("FAST_REACT") == 0) {
       uint32_t v;
       conf >> v;
@@ -804,6 +811,7 @@ inline void SetupNetwork(
 		} else if (node_type[i] == 2) {
 			Ptr<NVSwitchNode> sw = CreateObject<NVSwitchNode>();
 			n.Add(sw);
+		  sw->SetAttribute("AckHighPrio", UintegerValue(1));
 		}
 	}
 
@@ -902,6 +910,29 @@ inline void SetupNetwork(
         "QbbPfc", MakeBoundCallback(&get_pfc, pfc_file, DynamicCast<QbbNetDevice>(d.Get(1))));
   }
 
+  CalculateRoutes(n);
+  maxRtt = maxBdp = 0;
+  for (uint32_t i = 0; i < node_num; i++) {
+    if (n.Get(i)->GetNodeType() != 0)
+      continue;
+    for (uint32_t j = 0; j < node_num; j++) {
+      if (n.Get(j)->GetNodeType() != 0)
+        continue;
+      uint64_t delay = pairDelay[n.Get(i)][n.Get(j)];
+      uint64_t txDelay = pairTxDelay[n.Get(i)][n.Get(j)];
+      uint64_t rtt = delay * 2 + txDelay;
+      uint64_t bw = pairBw[i][j];
+      uint64_t bdp = rtt * bw / 1000000000 / 8;
+      pairBdp[n.Get(i)][n.Get(j)] = bdp;
+      pairRtt[i][j] = rtt;
+      if (bdp > maxBdp)
+        maxBdp = bdp;
+      if (rtt > maxRtt)
+        maxRtt = rtt;
+    }
+  }
+  printf("maxRtt=%lu maxBdp=%lu\n", maxRtt, maxBdp);
+
   nic_rate = get_nic_rate(n);
   for (uint32_t i = 0; i < node_num; i++) {
     if (n.Get(i)->GetNodeType() == 1) { 
@@ -919,10 +950,10 @@ inline void SetupNetwork(
                       "must set pmax for each link speed");
         sw->m_mmu->ConfigEcn(j, rate2kmin[rate], rate2kmax[rate],
                              rate2pmax[rate]);
-        uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())
-                             ->GetDelay()
-                             .GetTimeStep();
-        uint32_t headroom = rate * delay / 8 / 1000000000 * 3 + packet_payload_size * 2;  // BDP + 2 packet;
+        // uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())
+        //                      ->GetDelay()
+        //                      .GetTimeStep();
+        uint32_t headroom = rate * maxRtt / 8 / 1000000000 + packet_payload_size * 2;  // BDP + 2 packet;
         sw->m_mmu->ConfigHdrm(j, headroom);
         sw->m_mmu->pfc_a_shift[j] = shift;
         while (rate > nic_rate && sw->m_mmu->pfc_a_shift[j] > 0) {
@@ -942,7 +973,7 @@ inline void SetupNetwork(
         uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())
                              ->GetDelay()
                              .GetTimeStep();
-        uint32_t headroom = rate * delay / 8 / 1000000000 * 3;
+        uint32_t headroom = rate * delay / 8 / 1000000000 * 4;
         sw->m_mmu->ConfigHdrm(j, headroom);
         sw->m_mmu->pfc_a_shift[j] = shift;
         while (rate > nic_rate && sw->m_mmu->pfc_a_shift[j] > 0) {
@@ -961,13 +992,9 @@ inline void SetupNetwork(
   FILE *send_output = fopen(send_output_file.c_str(), "w");
   FILE *recv_output = fopen(recv_output_file.c_str(), "w");
 
-  // Only tolerate out-of-order packets in case of packet spraying
-  if (!packet_spraying) {
-    max_rdma_out_of_seq = 0;
-  }
-
   for (uint32_t i = 0; i < node_num; i++) {
-    if (n.Get(i)->GetNodeType() == 0 || n.Get(i)->GetNodeType() == 2) { 
+    if (n.Get(i)->GetNodeType() == 0 || n.Get(i)->GetNodeType() == 2) {
+
       // create RdmaHw
       Ptr<RdmaHw> rdmaHw = CreateObject<RdmaHw>();
       rdmaHw->SetAttribute("Mtu", UintegerValue(packet_payload_size));
@@ -982,7 +1009,7 @@ inline void SetupNetwork(
       rdmaHw->SetAttribute("RateBound", BooleanValue(rate_bound));
       rdmaHw->SetAttribute("NicCoalesceMethod", StringValue(nic_coalesce_method));
       rdmaHw->SetAttribute("NACKGenerationInterval", DoubleValue(nack_gen_interval));
-      rdmaHw->SetAttribute("MaxOutOfSeq", UintegerValue(max_rdma_out_of_seq));
+      rdmaHw->SetAttribute("EnableRto", BooleanValue(rto));
 
       switch (cc_mode) {
       case 1:
@@ -1042,31 +1069,8 @@ inline void SetupNetwork(
   else
     RdmaEgressQueue::ack_q_idx = 3;
 
-  CalculateRoutes(n);
   SetRoutingEntries();
   //printRoutingEntries();
-
-  maxRtt = maxBdp = 0;
-  for (uint32_t i = 0; i < node_num; i++) {
-    if (n.Get(i)->GetNodeType() != 0)
-      continue;
-    for (uint32_t j = 0; j < node_num; j++) {
-      if (n.Get(j)->GetNodeType() != 0)
-        continue;
-      uint64_t delay = pairDelay[n.Get(i)][n.Get(j)];
-      uint64_t txDelay = pairTxDelay[n.Get(i)][n.Get(j)];
-      uint64_t rtt = delay * 2 + txDelay;
-      uint64_t bw = pairBw[i][j];
-      uint64_t bdp = rtt * bw / 1000000000 / 8;
-      pairBdp[n.Get(i)][n.Get(j)] = bdp;
-      pairRtt[i][j] = rtt;
-      if (bdp > maxBdp)
-        maxBdp = bdp;
-      if (rtt > maxRtt)
-        maxRtt = rtt;
-    }
-  }
-  printf("maxRtt=%lu maxBdp=%lu\n", maxRtt, maxBdp);
 
   for (uint32_t i = 0; i < node_num; i++) {
     if (n.Get(i)->GetNodeType() == 1) { 

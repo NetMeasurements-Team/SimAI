@@ -185,6 +185,7 @@ inline std::vector<Ptr<RdmaClient>> get_clients(
           0, // create a qp w/o message
           has_win ? (global_t == 1 ? maxBdp : pairBdp[n.Get(src)][n.Get(dst)]) : 0,
           global_t == 1 ? maxRtt : pairRtt[src][dst],
+          packet_spraying && src/gpus_per_server != dst/gpus_per_server,
           msg_handler,
           fun_arg,
           src,
@@ -506,7 +507,7 @@ void finish() {
 
 void check_sim_finish() {
   if (waiting_sim_finish && waiting_to_notify_receiver.empty() && waiting_to_sent_callback.empty() &&
-      waiting_to_message_finish.empty() && sentHash.empty() && expeRecvHash.empty()) {
+      waiting_to_message_finish.empty() && sentHash.empty() && expeRecvHash.empty() && recvHash.empty()) {
     std::call_once(sim_finished, [] {
       std::cout << "All messages finished. Stopping simulation at time "
                 << AstraSim::Sys::boostedTick() << "."
