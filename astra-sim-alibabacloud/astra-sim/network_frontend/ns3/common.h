@@ -812,10 +812,11 @@ inline void SetupNetwork(
 		  sw->SetAttribute("EcnEnabled", BooleanValue(enable_qcn));
 		  sw->SetAttribute("PfcEnabled", BooleanValue(enable_pfc));
 		  sw->SetAttribute("ForwardDelay", DoubleValue(switch_fw_delay));
+      sw->SetAttribute("AckHighPrio", UintegerValue(ack_high_prio));
 		} else if (node_type[i] == 2) {
 			Ptr<NVSwitchNode> sw = CreateObject<NVSwitchNode>();
 			n.Add(sw);
-		  sw->SetAttribute("AckHighPrio", UintegerValue(1));
+		  sw->SetAttribute("AckHighPrio", UintegerValue(ack_high_prio));
 		}
 	}
 
