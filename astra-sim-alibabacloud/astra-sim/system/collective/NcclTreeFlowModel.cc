@@ -398,7 +398,7 @@ bool NcclTreeFlowModel::recv_ready(int channel_id, int flow_id) {
     ehd->flowTag.current_flow_id = -1;
     ehd->flowTag.channel_id = channel_id;
     ehd->flowTag.tag_id =
-        //layer_num * flow_model.chunk_count * m_channels +
+        layer_num * flow_model.chunk_count * m_channels +
         flow_model.chunk_count * flow_model.channel_id +
         flow_model.chunk_id;
     stream->owner->front_end_sim_recv(
@@ -579,6 +579,7 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
     ehd->flowTag.current_flow_id = -1;
 
     auto const& flow_model = this->_flow_models[std::make_pair(channel_id, flow_id)];
+    // if this is a root flow, call sim_recv for the flow with the same chunk id; otherwise, use the next chunk id
     if (flow_model.parent_flow_id.empty() || comType == ComType::All_to_All || flow_model.conn_type == "RING") {
       ehd->flowTag.tag_id =
           layer_num * flow_model.chunk_count * m_channels +

@@ -586,10 +586,11 @@ void logFlowModels(
           }
           if (rank_it->second[3] == cur_rank &&
               rank_it->second[2] != cur_rank && gp_info.nNodes > 1 &&
-              PXN_ENABLE) { 
+              PXN_ENABLE) {
             prevranks.clear();
-            if (rank_it->second[0] != -1)
+            if (rank_it->second[0] != -1) {
               prevranks = {rank_it->second[0]};
+            }
             tmp_result = SingleFlow(
                 g_flow_id,
                 rank_it->first,
@@ -604,10 +605,9 @@ void logFlowModels(
                 "RING");
             result[std::make_pair(ring_id, g_flow_id)] = tmp_result;
             g_flow_id++;
+            prevranks.clear();
             if (rank_it->first != -1) {
               prevranks = {rank_it->first};
-            } else {
-              prevranks = {};
             }
             tmp_result = SingleFlow(
                 g_flow_id,
@@ -647,9 +647,9 @@ void logFlowModels(
             result[std::make_pair(ring_id, g_flow_id)] = tmp_result;
             task_list[rank_it->first] = tmp_result;
             g_flow_id++;
-          } else { 
+          } else {
             prevranks.clear();
-            if(rank_it->second[0]!=-1){
+            if (rank_it->second[0] != -1) {
               prevranks = {rank_it->second[0]};
             }
             tmp_result = SingleFlow(
@@ -685,10 +685,11 @@ void logFlowModels(
             curnodesendrank = rank_it->second[3];
           }
             int cur_rank = rank_it->first;
+            // for chunks > 0, set previous chunk as parent (e.g., 0 -> 1 chunk 0 is parent for 1 -> 2 chunk 1)
             int partner_flow_id = task_list[rank_it->second[0]].flow_id;
             if (rank_it->second[3] == cur_rank &&
                 rank_it->second[2] != cur_rank && gp_info.nNodes > 1 &&
-                PXN_ENABLE) { 
+                PXN_ENABLE) {
               prevranks.clear();
               if (rank_it->second[0] != -1) {
                 prevranks = {rank_it->second[0]};
@@ -708,10 +709,9 @@ void logFlowModels(
               result[std::make_pair(ring_id, partner_flow_id)].child_flow_id.push_back(g_flow_id);
               result[std::make_pair(ring_id, g_flow_id)] = tmp_result;
               g_flow_id++;
-              if(rank_it->first!=-1){
-                prevranks={rank_it->first};
-              }else{
-                prevranks ={};
+              prevranks.clear();
+              if (rank_it->first != -1) {
+                prevranks = {rank_it->first};
               }
               tmp_result = SingleFlow(
                   g_flow_id,
@@ -724,7 +724,7 @@ void logFlowModels(
                   ring_id,
                   chunkid,
                   chunkcount,
-                  "RING");
+                  "PXN");
               task_list2[rank_it->first] = tmp_result;
               result[std::make_pair(ring_id, g_flow_id)] = tmp_result;
               g_flow_id++;
@@ -748,14 +748,14 @@ void logFlowModels(
                   chunkid,
                   chunkcount,
                   "RING");
-              result[std::make_pair(ring_id, partner_flow_id)].child_flow_id .push_back(g_flow_id);
+              result[std::make_pair(ring_id, partner_flow_id)].child_flow_id.push_back(g_flow_id);
               task_list2[rank_it->first] = tmp_result;
               result[std::make_pair(ring_id, g_flow_id)] = tmp_result;
               g_flow_id++;
-            } else { 
+            } else {
               prevranks.clear();
-              if(rank_it->second[0]!=-1){
-                prevranks= {rank_it->second[0]};
+              if(rank_it->second[0] != -1) {
+                prevranks = {rank_it->second[0]};
               }
               tmp_result = SingleFlow(
                   g_flow_id,
@@ -787,9 +787,10 @@ void logFlowModels(
       rank2flowmodels[src][std::make_pair(flow_models_it->first.first,flow_models_it->first.second)]=flow_models_it->second;
       rank2flowmodels[dst][std::make_pair(flow_models_it->first.first,flow_models_it->first.second)]=flow_models_it->second;
     }
-    for(auto it = rank2flowmodels.begin();it!=rank2flowmodels.end();it++){
-      rank2pflowmodels[it->first] = std::make_shared<FlowModels>(it->second);
+    for (auto & rank2flowmodel : rank2flowmodels) {
+      rank2pflowmodels[rank2flowmodel.first] = std::make_shared<FlowModels>(rank2flowmodel.second);
     }
+    logFlowModels(NcclLogLevel::INFO, "ReduceScatter", rank2pflowmodels);
     return rank2pflowmodels;
   }
 
