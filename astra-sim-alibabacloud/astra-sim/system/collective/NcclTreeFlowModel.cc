@@ -694,12 +694,12 @@ bool NcclTreeFlowModel::phy_ready(int channel_id, int flow_id) {
   if (stream->state == StreamState::Created || stream->state == StreamState::Ready) {
     stream->changeState(StreamState::Executing);
   }
-  MockNccl::SingleFlow flow = _flow_models[std::make_pair(channel_id, flow_id)];
   std::vector<int> data_sources;
-  data_sources = _flow_models[std::make_pair(channel_id, flow_id)].prev;
+  MockNccl::SingleFlow flow = _flow_models[std::make_pair(channel_id, flow_id)];
+  data_sources = flow.prev;
   if (flow.conn_type == "PTP" && flow.dest == id) {
-    // root flows in AllToAll
-    data_sources.push_back(packet.preferred_src);
+    // direct flows in AllToAll
+    data_sources.push_back(flow.src);
   }
   for (int data_source : data_sources) {
     sim_request rcv_req;
@@ -714,12 +714,12 @@ bool NcclTreeFlowModel::phy_ready(int channel_id, int flow_id) {
     auto flow_model = this->_flow_models[std::make_pair(channel_id, flow_id)];
     if (flow_model.parent_flow_id.empty() || comType == ComType::All_to_All || flow_model.conn_type == "RING") {
       ehd->flowTag.tag_id =
-          //layer_num * flow_model.chunk_count * m_channels +
+          layer_num * flow_model.chunk_count * m_channels +
           flow_model.chunk_count * flow_model.channel_id +
           flow_model.chunk_id;
     } else {
       ehd->flowTag.tag_id =
-          //layer_num * flow_model.chunk_count * m_channels +
+          layer_num * flow_model.chunk_count * m_channels +
           flow_model.chunk_count * flow_model.channel_id +
           flow_model.chunk_id + 1;
     }
@@ -750,7 +750,7 @@ bool NcclTreeFlowModel::phy_ready(int channel_id, int flow_id) {
   snd_req.reqCount = flow.flow_size;
   MockNccl::SingleFlow flow_model = this->_flow_models[std::make_pair(channel_id, flow_id)];
   snd_req.flowTag.tag_id =
-      //layer_num * flow_model.chunk_count * m_channels +
+      layer_num * flow_model.chunk_count * m_channels +
       flow_model.channel_id * flow_model.chunk_count +
       flow_model.chunk_id;
   snd_req.flowTag.channel_id = channel_id;
