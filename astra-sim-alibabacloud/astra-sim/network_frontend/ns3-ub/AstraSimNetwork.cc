@@ -1,193 +1,277 @@
+/* astra-sim/network_frontend/ns3-ub/AstraSimNetwork.cc
+ *
+ * Main entry point for SimAI-UB (Unified Bus) simulation mode.
+ *
+ * Topology input:  standard SimAI topology file (gen_Topo_Template.py output)
+ * Config input:    astra-sim system config (same as RDMA mode)
+ * Network backend: UbSwitch / UbPort / UbLink — NO UbUtils CSV pipeline\
+ */
 #include "AstraSimNetwork.h"
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/system/RecvPacketEventHadndlerData.hh"
 #include "astra-sim/system/SendPacketEventHandlerData.hh"
 #include "entry.h"
 #include "ns3/core-module.h"
+#include <iomanip>
 #include <iostream>
+#ifdef NS3_MTP
+#include "ns3/mtp-interface.h"
+#endif
+
+#define RESULT_PATH "./csv_files/ncclFlowModel_"
 
 using namespace std;
 using namespace ns3;
 
-int ASTRASimUbNetwork::sim_finish() {
-  std::cout << "Waiting for any pending UB message..." << std::endl;
-  Simulator::Schedule(Time(0), &check_sim_finish); // Wait for UB events to drain
-  return 0;
+// =============================================================================
+// ASTRASimNetwork — AstraNetworkAPI implementation for the UB backend
+// =============================================================================
+
+int ASTRASimNetwork::sim_finish() {
+    // Signal that all Sys workloads are done; drain remaining UB events.
+    waiting_sim_finish = true;
+    std::cout << "[UB] sim_finish: waiting for pending UB messages to drain..." << std::endl;
+    Simulator::Schedule(Time(0), &check_sim_finish);
+    return 0;
 }
 
-AstraSim::timespec_t ASTRASimUbNetwork::sim_get_time() {
-  AstraSim::timespec_t timeSpec;
-  timeSpec.time_val = Simulator::Now().GetNanoSeconds(); // Same as original implementation
-  return timeSpec;
+AstraSim::timespec_t ASTRASimNetwork::sim_get_time() {
+    AstraSim::timespec_t ts;
+    ts.time_val = Simulator::Now().GetNanoSeconds();
+    return ts;
 }
 
-void ASTRASimUbNetwork::sim_schedule(AstraSim::timespec_t delta, void (*fun_ptr)(void* fun_arg), void* fun_arg) {
-  // Schedule a generic event in ns-3
-  Simulator::ScheduleWithContext(rank, NanoSeconds(delta.time_val), fun_ptr, fun_arg);
+void ASTRASimNetwork::sim_schedule(AstraSim::timespec_t delta,
+                                   void (*fun_ptr)(void* fun_arg),
+                                   void* fun_arg) {
+    Simulator::ScheduleWithContext(rank, NanoSeconds(delta.time_val), fun_ptr, fun_arg);
 }
 
-int ASTRASimUbNetwork::sim_send(void* buffer, uint64_t count, int type, int dst, int tag,
-                                AstraSim::sim_request* request, void (*msg_handler)(void* fun_arg), void* fun_arg) {
-  dst += npu_offset;
+int ASTRASimNetwork::sim_send(void* /*buffer*/, uint64_t message_size, int /*type*/,
+                               int dst, int tag,
+                               AstraSim::sim_request* /*request*/,
+                               void (*msg_handler)(void* fun_arg), void* fun_arg) {
+    int actual_dst = dst + npu_offset;
 
-  task1 t;
-  t.src = rank;
-  t.dest = dst;
-  t.count = count;
-  t.type = 0;
-  t.fun_arg = fun_arg;
-  t.msg_handler = msg_handler;
-
-  // Store task to track completion
-  sentHash[make_pair(tag, make_pair(t.src, t.dest))] = t;
-
-  // Trigger the flow in the Unified Bus backend
-  // You need to implement ub_send_flow in entry.h to call your UbApp::Send
-  ub_send_flow(rank, dst, count, tag, msg_handler, fun_arg);
-
-  return 0;
-}
-
-int ASTRASimUbNetwork::sim_recv(void* buffer, uint64_t count, int type, int src, int tag,
-                                AstraSim::sim_request* request, void (*msg_handler)(void* fun_arg), void* fun_arg) {
-  src += npu_offset;
-
-  task1 t;
-  t.src = src;
-  t.dest = rank;
-  t.count = count;
-  t.type = 1;
-  t.fun_arg = fun_arg;
-  t.msg_handler = msg_handler;
-
-  // Check if the data has already arrived (early arrival)
-  if (recvHash.find(make_pair(tag, make_pair(t.src, t.dest))) != recvHash.end()) {
-    uint64_t received_count = recvHash[make_pair(tag, make_pair(t.src, t.dest))];
-    
-    if (received_count == t.count) {
-      // Exact match: Clean up and trigger callback
-      recvHash.erase(make_pair(tag, make_pair(t.src, t.dest)));
-      t.msg_handler(t.fun_arg);
-    } else if (received_count > t.count) {
-      // Received more than expected: Decrement and trigger callback
-      recvHash[make_pair(tag, make_pair(t.src, t.dest))] = received_count - t.count;
-      t.msg_handler(t.fun_arg);
-    } else {
-      // Received less than expected: Consume what we have and wait for the rest
-      recvHash.erase(make_pair(tag, make_pair(t.src, t.dest)));
-      t.count -= received_count;
-      expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))] = t;
+    {
+#ifdef NS3_MTP
+        MtpInterface::CriticalSection cs;
+#endif
+        MsgEvent send_event(rank, actual_dst, 0, message_size, msg_handler, fun_arg, tag);
+        sentHash[MsgEventKey{tag, {send_event.src, send_event.dst}}] = send_event;
     }
-  } else {
-    // Data hasn't arrived yet: Register expectation
-    if (expeRecvHash.find(make_pair(tag, make_pair(t.src, t.dest))) == expeRecvHash.end()) {
-      expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))] = t;
-    } else {
-      // Should not happen in standard operation, but handle gracefully
-      // expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))].count += t.count;
-    }
-  }
 
-  return 0;
+    ub_send_flow(rank, actual_dst, message_size, tag, msg_handler, fun_arg);
+    return 0;
 }
 
-static int user_param_prase(const int argc, char* argv[], user_param* user_param) {
-  int opt;
-  while ((opt = getopt(argc,argv,"ht:w:f:g:s:n:o:p:a:r:c:"))!=-1) {
-    switch (opt) {
-    case 'h':
-      std::cout<<"-- SimAI with ns3 frontend using Unified Bus backend" <<std::endl;
-      std::cout<<"-t    number of threads,default 1" <<std::endl;
-      std::cout<<"-w    workloads default none " <<std::endl;
-      std::cout<<"-n    network topo" <<std::endl;
-      std::cout<<"-c    network conf" <<std::endl;
-      std::cout<<"-o    node conf" <<std::endl;
-      std::cout<<"-p    transport protocol conf" <<std::endl;
-      std::cout<<"-a    routing conf" <<std::endl;
-      std::cout<<"-f    Conf folder" <<std::endl; 
-      std::cout<<"-r    run name" <<std::endl;
+int ASTRASimNetwork::sim_recv(void* /*buffer*/, uint64_t count, int /*type*/,
+                               int src, int tag,
+                               AstraSim::sim_request* /*request*/,
+                               void (*msg_handler)(void* fun_arg), void* fun_arg) {
+    int actual_src = src + npu_offset;
 
-      return 1;
-    case 't':
-      user_param->thread = stoi(optarg);
-      break;
-    case 'f':
-      user_param->folder = optarg;
-      break;
-    case 'w':
-      user_param->workload = optarg;
-      break;
-    case 'n':
-      user_param->network_topo = optarg;
-      break;
-    case 'c':
-      user_param->network_conf = optarg;
-      break;
-    case 'o':
-      user_param->node_conf = optarg;
-      break;
-    case 'p':
-      user_param->transport_conf = optarg;
-      break;
-    case 'a':
-      user_param->routing_conf = optarg;
-      break;
-    case 'r':
-      user_param->run_name = optarg;
-      break;
-    default:
-      std::cerr<<"-h    help message"<<std::endl;
-      return 1;
+    MsgEvent t(actual_src, rank, 1, count, msg_handler, fun_arg, tag);
+
+    MsgEventKey key = {tag, {actual_src, rank}};
+
+    {
+#ifdef NS3_MTP
+        MtpInterface::ExplicitCriticalSection ecs;
+#endif
+        if (recvHash.count(key)) {
+            uint64_t arrived = recvHash[key];
+            if (arrived == count) {
+                recvHash.erase(key);
+#ifdef NS3_MTP
+                ecs.ExitSection();
+#endif
+                msg_handler(fun_arg);
+            } else if (arrived > count) {
+                recvHash[key] = arrived - count;
+#ifdef NS3_MTP
+                ecs.ExitSection();
+#endif
+                msg_handler(fun_arg);
+            } else {
+                // Partial arrival — consume and keep waiting for remainder
+                recvHash.erase(key);
+                t.remaining_bytes -= arrived;
+                expeRecvHash[key] = t;
+            }
+        } else {
+            if (!expeRecvHash.count(key)) {
+                expeRecvHash[key] = t;
+            } else {
+                expeRecvHash[key].remaining_bytes += count;
+            }
+        }
     }
-  }
-  return 0 ;
+
+    return 0;
+}
+
+static int parse_user_params(int argc, char* argv[], user_param* p) {
+    int opt;
+    while ((opt = getopt(argc, argv, "ht:w:n:s:r:c:")) != -1) {
+        switch (opt) {
+        case 'h':
+            std::cout << "SimAI-UB: SimAI with Unified Bus network backend\n"
+                      << "  -t  threads (default 1)\n"
+                      << "  -w  workload file\n"
+                      << "  -n  SimAI topology file (same format as RDMA mode)\n"
+                      << "  -c  network conf\n"
+                      << "  -s  system config file\n"
+                      << "  -r  run name\n";
+            return 1;
+        case 't': p->thread       = std::stoi(optarg); break;
+        case 'w': p->workload     = optarg; break;
+        case 'n': p->network_topo = optarg; break;
+        case 's': p->system_conf  = optarg; break;
+        case 'r': p->run_name     = optarg; break;
+        case 'c': p->network_conf     = optarg; break;
+        default:
+            std::cerr << "Unknown option. Use -h for help.\n";
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int main(int argc, char* argv[]) {
-  user_param user_param;
-  if(user_param_prase(argc,argv,&user_param)){
-    return 0;
-  }
-  MockNcclLog::set_log_name("SimAI" + (user_param.run_name.empty() ? "" : "." + user_param.run_name) +".log");
-  MockNcclLog* NcclLog = MockNcclLog::getInstance();
-  NcclLog->writeLog(NcclLogLevel::INFO," init SimAI.log ");
+    user_param param;
+    if (parse_user_params(argc, argv, &param)) return 0;
 
-  #ifdef NS3_MTP
-    MtpInterface::Enable(user_param.thread);
-  #endif
+    MockNcclLog::set_log_name("SimAI" + (param.run_name.empty() ? "" : "." + param.run_name) + ".log");
+    MockNcclLog* NcclLog = MockNcclLog::getInstance();
+    NcclLog->writeLog(NcclLogLevel::INFO, "init SimAI-UB log");
 
-  if (!user_param.folder.empty()){
-    user_param.network_conf = user_param.folder + "/network_attribute.txt";
-    user_param.node_conf = user_param.folder + "/node.csv";
-    user_param.network_topo = user_param.folder + "/topology.csv";
-    user_param.routing_conf = user_param.folder + "/routing_table.csv";
-    user_param.transport_conf = user_param.folder + "/transport_channel.csv";
-  }
-  
-  setup_ns3_simulation(user_param);
+#ifdef NS3_MTP
+    MtpInterface::Enable(param.thread);
+#endif
+
+    // --- Build UB network from SimAI topology file (no UbUtils) ---
+    int gpu_count = setup_ns3_ub_simulation(param);
+    if (gpu_count <= 0) {
+        std::cerr << "[UB] ERROR: Network setup failed or zero GPU nodes found.\n";
+        return 1;
+    }
+
+    // --- Derive Sys parameters from the parsed topology ---
+    //
+    // In the UB model, ALL inter-accelerator connectivity (both intra-host
+    // scale-up and inter-host scale-out) goes over Unified Bus links.
+    // There are NO NVSwitches and NO NVLink in the UB topology:
+    //   - node.csv / SimAI topology only have DEVICE and SWITCH node types
+    //   - the unified-bus module has zero references to nvswitch/nvlink
+    //
+    // However, MockNcclGroup::MockNcclGroup() indexes _NVSwitch[node_idx]
+    // for every server node_idx (0..nNodes-1) when building TP/DP/EP groups.
+    // It uses the NVSwitch ID to set GroupIndex membership.  When there are
+    // no physical NVSwitches we use a self-mapping:
+    //     server_i  ──►  server_i   (each GPU server acts as its own "switch")
+    // This is equivalent to what the RDMA frontend does for flat (no-NVSwitch)
+    // topologies.
+    int nodes_num      = gpu_count;                 // one Sys per GPU host
+    GPUType gpu_type   = ub_gpu_type;
+    int gpus_per_server = static_cast<int>(ub_gpus_per_server);
+    int n_servers      = nodes_num / gpus_per_server;  // physical server count
+
+    // Build NVSwitch offset-mapping: nv_map[server_idx] = nodes_num + server_idx
+    // MockNcclGroup uses _NVSwitch[node_idx] to populate GroupIndex entries
+    // for NVSwitch nodes (lines 83, 104, 151, 178). These IDs MUST NOT overlap
+    // with GPU rank IDs (0..nodes_num-1), otherwise GroupIndex entries for GPU
+    // ranks get overwritten, corrupting ring generation and causing the
+    // simulation to hang. Placing them at nodes_num+ matches the RDMA
+    // frontend convention (NVSwitch IDs = gpu_num + server_idx).
+    std::vector<int> nv_map;       // length = n_servers, indexed by server idx
+    for (int s = 0; s < n_servers; s++)
+        nv_map.push_back(nodes_num + s);   // offset: IDs after all GPU ranks
+
+    std::cout << "--- UB Topology Summary ---\n"
+              << "  Total nodes   : " << ub_node_num      << "\n"
+              << "  GPU nodes     : " << nodes_num         << "\n"
+              << "  GPUs/server   : " << gpus_per_server   << "\n"
+              << "  Servers       : " << n_servers          << "\n"
+              << "  Switches      : " << ub_switch_num     << "\n"
+              << "  NVSwitches    : none (UB uses Unified Bus for all links)\n"
+              << "  GPU type      : " << static_cast<int>(gpu_type) << "\n"
+              << "---------------------------\n";
+
+    // --- Instantiate ASTRASimNetwork + Sys for each GPU node ---
+    std::vector<ASTRASimNetwork*>  networks(nodes_num, nullptr);
+    std::vector<AstraSim::Sys*>    systems(nodes_num,  nullptr);
+
+    // Map GPU host index → ns-3 node index
+    // Host nodes are the ones with type==0; collect them in order.
+    std::vector<uint32_t> host_node_ids;
+    for (uint32_t i = 0; i < ub_node_num; i++)
+        if (ub_node_type_vec[i] == 0) host_node_ids.push_back(i);
+
+    for (int j = 0; j < nodes_num; j++) {
+        networks[j] = new ASTRASimNetwork(j, /*npu_offset=*/0);
+
+        systems[j] = new AstraSim::Sys(
+            param.system_conf,   // system_conf
+            networks[j],         // network
+            nullptr,             // memory (unused)
+            j,                   // id
+            0,                   // npu_offset
+            1,                   // num_passes
+            {nodes_num},         // dims   — flat 1-D collective domain
+            {1},                 // queues_per_dim
+            "",                  // sys_string
+            param.workload,      // workload
+            1,                   // comm_scale
+            1,                   // compute_scale
+            1,                   // injection_scale
+            1,                   // total_stat_rows
+            0,                   // stat_row
+            RESULT_PATH,         // path
+            param.run_name,      // run_name
+            true,                // separate_log
+            false,               // rendezvous_enabled
+            gpu_type,            // _gpu_type
+            {gpu_count},         // _all_gpus
+            nv_map,              // _NVSwitchs — self-mapping (no physical NVSwitches)
+            gpus_per_server      // _ngpus_per_node
+        );
+        // These must be set after construction (RDMA frontend does the same).
+        // nvswitch_id: MockNcclGroup uses this for per-GPU group membership.
+        //   With UB self-mapping, GPU j maps to "switch" j.
+        systems[j]->nvswitch_id = nv_map[j / gpus_per_server];
+        // num_gpus: Sys::~Sys() iterates all_generators[0..num_gpus-1] to decide
+        //   when to exit the simulation loop. Must equal total GPU count.
+        systems[j]->num_gpus = nodes_num;
+    }
     
+    // --- Manual connectivity test
+    // ns3::Simulator::Schedule(ns3::NanoSeconds(100), []() {
+    //     std::cout << "[DEBUG] Injecting a 4096-byte flow from GPU 0 to GPU 1..." << std::endl;
 
-    // /Setup ASTRA-sim
-    // std::vector<ASTRASimUbNetwork*> networks(nodes_num, nullptr);
-    // std::vector<AstraSim::Sys*> systems(nodes_num, nullptr);
+    //     auto completion_cb = [](void* arg) {
+    //         std::cout << "[DEBUG] Transmission SUCCESS! Received at "
+    //                   << ns3::Simulator::Now().GetNanoSeconds() << " ns." << std::endl;
+    //         ns3::Simulator::Stop();
+    //     };
 
-    // for (uint32_t j = 0; j < nodes_num; j++) {
-    //     networks[j] = new ASTRASimUbNetwork(j, 0);
-    //     // Initialize systems[j] with your specific topology parameters (gpus_per_server, etc.)
-    //     // systems[j] = new AstraSim::Sys(...);
-    // }
+    //     ub_send_flow(/*src=*/0, /*dst=*/127, /*count=*/8192, /*tag=*/999, completion_cb, nullptr);
+    // });
 
-    // for (uint32_t i = 0; i < nodes_num; i++) {
-    //     // Trigger ASTRA-sim workloads
-    //     // systems[i]->workload->fire();
-    // }
+    // ns3::Simulator::Schedule(ns3::MilliSeconds(100), []() {
+    //     std::cout << "[DEBUG] Timeout reached. Transmission hung or routing failed!" << std::endl;
+    //     ns3::Simulator::Stop();
+    // });
 
-    // // 4. Run the simulator
-    UbUtils::Get()->PrintTimestamp("Running Simulator.");
+
+    // --- Fire workloads ---
+    // for (int i = 0; i < nodes_num; i++)
+    //     systems[i]->workload->fire();
+
+    std::cout << "[UB] Running simulation..." << std::endl;
+    Simulator::Stop(Seconds(simulator_stop_time));
     Simulator::Run();
-    
-    UbUtils::Get()->Destroy();
     Simulator::Destroy();
-    
+
     return 0;
 }

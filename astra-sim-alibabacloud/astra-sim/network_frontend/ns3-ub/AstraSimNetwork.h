@@ -4,17 +4,16 @@
 #include <iostream>
 #include <queue>
 #include "astra-sim/system/AstraNetworkAPI.hh"
-#include "ns3/ub-utils.h"
 
 using namespace std;
 
-class ASTRASimUbNetwork final : public AstraSim::AstraNetworkAPI {
+class ASTRASimNetwork final : public AstraSim::AstraNetworkAPI {
 private:
   int npu_offset;
 
 public:
-  explicit ASTRASimUbNetwork(const int rank, int npu_offset) : AstraNetworkAPI(rank), npu_offset(npu_offset) {}
-  ~ASTRASimUbNetwork() override {}
+  explicit ASTRASimNetwork(const int rank, int npu_offset) : AstraNetworkAPI(rank), npu_offset(npu_offset) {}
+  ~ASTRASimNetwork() override {}
   
   int sim_comm_size(AstraSim::sim_comm comm, int* size) override { return 0; }
   int sim_finish() override;
