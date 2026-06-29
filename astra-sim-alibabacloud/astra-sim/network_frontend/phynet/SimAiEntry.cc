@@ -15,9 +15,10 @@
 
 #include"astra-sim/system/MockNcclLog.h"
 #ifdef PHY_RDMA
-#include"astra-sim/system/SimAiFlowModelRdma.hh"
+#include"astra-sim/system/phy-common/SimAiFlowModelRdma.hh"
 #endif
-#include"astra-sim/system/PhyMultiThread.hh"
+#include"astra-sim/system/phy-common/PhyMultiThread.hh"
+#include"astra-sim/system/phy-common/FlowTag.hh"
 #include"astra-sim/system/RecvPacketEventHadndlerData.hh"
 #include"astra-sim/system/Common.hh"
 #include"astra-sim/system/BaseStream.hh"

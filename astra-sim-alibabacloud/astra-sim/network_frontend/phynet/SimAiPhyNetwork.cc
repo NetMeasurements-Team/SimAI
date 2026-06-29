@@ -14,7 +14,7 @@
 */
 
 #include"astra-sim/system/MockNcclLog.h"
-#include"astra-sim/system/PhyMultiThread.hh"
+#include"astra-sim/system/phy-common/PhyMultiThread.hh"
 
 #include"SimAiPhyNetwork.h"
 #include"SimAiEntry.h"

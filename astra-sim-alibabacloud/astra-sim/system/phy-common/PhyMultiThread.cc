@@ -16,9 +16,9 @@
 #include <chrono>
 #include <atomic>
 
-#include "PhyMultiThread.hh"
-#include "MockNcclLog.h"
-#include "SimAiFlowModelRdma.hh"
+#include "../MockNcclLog.h"
+#include "../PhyMultiThread.hh"
+#include "../SimAiFlowModelRdma.hh"
 
 extern FlowPhyRdma flow_rdma; 
 

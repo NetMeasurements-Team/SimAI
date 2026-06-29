@@ -21,7 +21,8 @@
 
 #include"astra-sim/system/RecvPacketEventHadndlerData.hh"
 #include"astra-sim/system/AstraNetworkAPI.hh"
-#include"astra-sim/system/SimAiPhyCommon.hh"
+#include"astra-sim/system/phy-common/MockNcclQps.hh"
+#include"astra-sim/system/phy-common/SimAiPhyCommon.hh"
 
 using namespace std;
 

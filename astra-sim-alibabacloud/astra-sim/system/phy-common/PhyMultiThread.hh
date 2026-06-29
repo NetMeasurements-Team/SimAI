@@ -16,7 +16,13 @@
 #ifndef __PHYMULTITHREAD_HH__
 #define __PHYMULTITHREAD_HH__
 
-#include"AstraNetworkAPI.hh"
+#include "../AstraNetworkAPI.hh"
+#include "../MockNcclLog.h"
+#include "SimAiPhyCommon.hh"
+#include "FlowTag.hh"
+#ifdef PHY_RDMA
+#include "SimAiFlowModelRdma.hh"
+#endif
 
 enum WORK_TYPE{SENDFINISHED,RECEIVEFINISHED};
 

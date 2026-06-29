@@ -36,7 +36,11 @@ public:
   // flow model
   int child_flow_id;
   int channel_id;
-  AstraSim::ncclFlowTag flowTag;
+  /** FIXME this field is here just as a workaround to pass it to the network frontend;
+   *   however this is supposed to be an handler, not a way to pass parameters to be used right away.
+   *   Need to find a better way.
+   */
+  bool nvls_on;
   SendPacketEventHandlerData(Sys *node, int senderNodeId, int receiverNodeId, int tag);
   SendPacketEventHandlerData(BaseStream* owner, int senderNodeId, int receiverNodeId, int tag, EventType event);
 };

@@ -105,6 +105,12 @@ public:
       const uint64_t message_size,
       int type,
       int dst,
+      /**
+       * This field is used to uniquely identify a flow at the network frontend layer. Once a flow is received, the tag is
+       * used to associate it with the correct event handler, and this is triggered with its arguments (which include the
+       * flow id).
+       * TODO: there is no reason for not using directly the flow_id as tag instead of creating a new value.
+       */
       int tag,
       [[maybe_unused]] AstraSim::sim_request* request,
       void (*msg_handler)(void *fun_arg),
@@ -116,7 +122,7 @@ public:
         NcclLogLevel::DEBUG,
         "[Send event registration] dst %d sim_send on rank %d tag %u channel id %d (flow_id %u)",
         dst, rank, tag, ehd->channel_id, ehd->flow_id);
-    send_flow(rank, dst, message_size, msg_handler, fun_arg, tag, ehd->flow_id, ehd->flowTag.nvls_on);
+    send_flow(rank, dst, message_size, msg_handler, fun_arg, tag, ehd->flow_id, ehd->nvls_on);
     return 0;
   }
 
@@ -134,7 +140,6 @@ public:
     MtpInterface::ExplicitCriticalSection ecs;
     #endif
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
-    AstraSim::ncclFlowTag flowTag = request->flowTag;
     src += npu_offset;
     auto recv_event = MsgEvent(src, rank, 1, message_size, msg_handler, fun_arg);
     const auto ehd = static_cast<AstraSim::RecvPacketEventHadndlerData*>(recv_event.fun_arg);

@@ -18,12 +18,11 @@
 #include <linux/if.h>
 #include <mpi.h>
 
-#include"SimAiFlowModelRdma.hh"
-#include"PhyMultiThread.hh"
-#include"MockNcclLog.h"
-#include"BootStrapnet.hh"
-#include"AstraNetworkAPI.hh"
-#include"MockNcclLog.h"
+#include "../AstraNetworkAPI.hh"
+#include "../MockNcclLog.h"
+#include "../SimAiFlowModelRdma.hh"
+#include "BootStrapnet.hh"
+#include "PhyMultiThread.hh"
 
 #define IB_PORT 1
 

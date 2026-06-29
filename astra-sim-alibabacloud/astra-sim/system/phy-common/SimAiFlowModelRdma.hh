@@ -36,8 +36,7 @@
 #include<string>
 #include <infiniband/verbs.h>
 
-#include"SimAiPhyCommon.hh"
-#include"AstraNetworkAPI.hh"
+#include "SimAiPhyCommon.hh"
 
 #define assert_non_null(x) assert((x) != NULL)
 

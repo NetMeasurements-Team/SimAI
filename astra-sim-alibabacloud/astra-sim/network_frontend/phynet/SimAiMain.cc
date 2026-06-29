@@ -24,11 +24,11 @@
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/system/RecvPacketEventHadndlerData.hh"
 #include "astra-sim/system/MockNcclLog.h"
-#include "astra-sim/system/BootStrapnet.hh"
-#include "astra-sim/system/PhyMultiThread.hh"
+#include "astra-sim/system/phy-common/BootStrapnet.hh"
+#include "astra-sim/system/phy-common/PhyMultiThread.hh"
 #include "astra-sim/system/Common.hh"
 #ifdef PHY_RDMA
-#include "astra-sim/system/SimAiFlowModelRdma.hh"
+#include "astra-sim/system/phy-common/SimAiFlowModelRdma.hh"
 #endif
 #define RESULT_PATH "/etc/astra-sim/results/ncclFlowModel_"
 

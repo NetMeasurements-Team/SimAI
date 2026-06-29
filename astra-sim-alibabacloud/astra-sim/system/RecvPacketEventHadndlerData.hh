@@ -32,7 +32,6 @@ public:
   // flow model
   int channel_id;
   int child_flow_id;
-  AstraSim::ncclFlowTag flowTag;
   int vnet;
   int stream_num;
   bool message_end;

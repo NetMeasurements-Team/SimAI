@@ -217,7 +217,6 @@ inline std::vector<Ptr<RdmaClient>> get_clients(
   if (appCon[hashKey].GetN() == 0) {
     for (int i = 0; i < n_clients; i++) {
       const uint32_t port = portNumber[src][dst]++; // get a new port number
-      // FIXME we are passing msg_handler and fun_arg down to rdma, but these are never used
       RdmaClientHelper clientHelper(
           pg,
           serverAddress[src],

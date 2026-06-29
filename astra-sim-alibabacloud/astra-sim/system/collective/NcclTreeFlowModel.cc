@@ -15,7 +15,7 @@
 
 #ifdef PHY_MTP
   #include <mpi.h>
-  #include "astra-sim/system/PhyMultiThread.hh"
+  #include "astra-sim/system/phy-common/PhyMultiThread.hh"
 #endif
 #include <chrono>
 
@@ -24,7 +24,7 @@
 #include "astra-sim/system/PacketBundle.hh"
 #include "astra-sim/system/RecvPacketEventHadndlerData.hh"
 #ifdef PHY_RDMA
-  #include "astra-sim/system/SimAiFlowModelRdma.hh"
+  #include "astra-sim/system/phy-common/SimAiFlowModelRdma.hh"
   extern FlowPhyRdma flow_rdma;
 #endif
 
@@ -423,16 +423,6 @@ bool NcclTreeFlowModel::recv_ready(int channel_id, int flow_id) {
         1);
     rcv_ehd->flow_id = source_flow.flow_id;
     rcv_ehd->channel_id = channel_id;
-    rcv_ehd->flowTag.tag_id = rcv_ehd->tag;
-    rcv_ehd->flowTag.channel_id = channel_id;
-    rcv_ehd->flowTag.flow_size = source_flow.flow_size;
-    rcv_ehd->flowTag.chunk_id = source_flow.chunk_id;
-    rcv_ehd->flowTag.sender_node = data_source;
-    rcv_ehd->flowTag.receiver_node = id;
-    if (this->comType == ComType::All_Reduce_NVLS)
-      rcv_ehd->flowTag.nvls_on = true;
-    else
-      rcv_ehd->flowTag.nvls_on = false;
 
     stream->owner->front_end_sim_recv(
         0,
@@ -651,13 +641,6 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
 
     ehd->flow_id = source_flow.flow_id;
     ehd->channel_id = channel_id;
-    ehd->flowTag.tag_id = ehd->tag;
-    ehd->flowTag.channel_id = channel_id;
-    ehd->flowTag.flow_size = source_flow.flow_size;
-    ehd->flowTag.chunk_id = source_flow.chunk_id;
-    ehd->flowTag.sender_node = data_source;
-    ehd->flowTag.receiver_node = id;
-    ehd->flowTag.nvls_on = comType == ComType::All_Reduce_NVLS;
 
     if (free_packets[std::make_pair(channel_id, data_source)] > 0) {
       stream->owner->front_end_sim_recv(
@@ -676,36 +659,28 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
     return true;
   }
 
-  // TODO is this needed? It is used only by the physical frontend
-  sim_request snd_req;
-  snd_req.srcRank = id;
-  snd_req.dstRank = flow_model.dest;
-  snd_req.reqType = UINT8;
-  snd_req.vnet = stream->current_queue_id;
-  snd_req.layerNum = layer_num;
-  snd_req.reqCount = flow_model.flow_size;
-  snd_req.flowTag.tag_id =
-      layer_num * flow_model.chunk_count * m_channels +
-      flow_model.channel_id * flow_model.chunk_count +
-      flow_model.chunk_id;
-  snd_req.flowTag.channel_id = channel_id;
-  snd_req.flowTag.flow_size = flow_model.flow_size;
-  snd_req.flowTag.current_flow_id = flow_id;
-  snd_req.flowTag.chunk_id = flow_model.chunk_id;
-  snd_req.flowTag.sender_node = id;
-  snd_req.flowTag.receiver_node = flow_model.dest;
-  snd_req.flowTag.nvls_on = comType == ComType::All_Reduce_NVLS;
-
   // init the event handler
   auto* snd_ehd = new SendPacketEventHandlerData(
       stream,
       id,
       flow_model.dest,
-      snd_req.flowTag.tag_id,
+      layer_num * flow_model.chunk_count * m_channels
+      + flow_model.channel_id * flow_model.chunk_count
+      + flow_model.chunk_id,
       EventType::PacketSentFinshed);
   snd_ehd->flow_id = flow_id;
   snd_ehd->channel_id = channel_id;
-  snd_ehd->flowTag = snd_req.flowTag;
+  snd_ehd->nvls_on = comType == ComType::All_Reduce_NVLS;
+
+  // TODO This is used only by the physical frontend
+  sim_request snd_req;
+  snd_req.srcRank = id;
+  snd_req.dstRank = flow_model.dest;
+  snd_req.tag = snd_ehd->tag;
+  snd_req.reqType = UINT8;
+  snd_req.vnet = stream->current_queue_id;
+  snd_req.layerNum = layer_num;
+  snd_req.reqCount = flow_model.flow_size;
 
   stream->owner->front_end_sim_send(
       0,
