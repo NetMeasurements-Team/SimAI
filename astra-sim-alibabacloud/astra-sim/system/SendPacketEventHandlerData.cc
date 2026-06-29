@@ -11,7 +11,7 @@ SendPacketEventHandlerData::SendPacketEventHandlerData(
     int receiverNodeId,
     int tag)
     : BasicEventHandlerData(node, EventType::PacketSent) {
-  this->senderNodeId=senderNodeId;
+  this->senderNodeId = senderNodeId;
   this->receiverNodeId = receiverNodeId;
   this->tag = tag;
   this->child_flow_id = -2;

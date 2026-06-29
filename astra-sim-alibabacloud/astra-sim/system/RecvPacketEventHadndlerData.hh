@@ -24,24 +24,34 @@ LICENSE file in the root directory of this source tree.
 namespace AstraSim {
 class RecvPacketEventHadndlerData : public BasicEventHandlerData,
                                     public MetaData {
- public:
+public:
   BaseStream* owner;
+  int senderNodeId;
+  int receiverNodeId;
+  int tag;
+  // flow model
+  int channel_id;
+  int child_flow_id;
+  AstraSim::ncclFlowTag flowTag;
   int vnet;
   int stream_num;
   bool message_end;
   Tick ready_time;
-  // flow model
-  int flow_id;
-  int channel_id;
-  int child_flow_id;
-  AstraSim::ncclFlowTag flowTag;
   RecvPacketEventHadndlerData(
       BaseStream* owner,
-      int nodeId,
+      int senderNodeId,
+      int receiverNodeId,
+      int tag,
       EventType event,
       int vnet,
       int stream_num);
-  RecvPacketEventHadndlerData(BaseStream*owner,EventType _event,AstraSim::ncclFlowTag _flowTag);
+  RecvPacketEventHadndlerData(
+    BaseStream* owner,
+    int senderNodeId,
+    int receiverNodeId,
+    int tag,
+    int vnet,
+    int stream_num);
 };
 } // namespace AstraSim
 #endif

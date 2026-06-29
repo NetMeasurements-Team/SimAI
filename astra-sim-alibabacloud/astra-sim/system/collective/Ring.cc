@@ -260,7 +260,9 @@ bool Ring::ready() {
   rcv_req.layerNum = layer_num;
   RecvPacketEventHadndlerData* ehd = new RecvPacketEventHadndlerData(
       stream,
+      packet.preferred_src,
       stream->owner->id,
+      stream->stream_num,
       EventType::PacketReceived,
       packet.preferred_vnet,
       packet.stream_num);

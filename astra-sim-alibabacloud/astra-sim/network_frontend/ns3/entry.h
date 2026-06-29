@@ -90,7 +90,7 @@ public:
   /**
    * Invoke the callback handler associated with this MsgEvent.
    */
-  void callHandler() {
+  void callHandler() const {
     msg_handler(fun_arg);
   }
 };
@@ -199,26 +199,26 @@ inline std::string get_hash_key(uint32_t src, uint32_t dst, uint32_t pg, uint32_
 }
 
 inline std::vector<Ptr<RdmaClient>> get_clients(
-    uint32_t src,
-    uint32_t dst,
-    uint32_t pg,
-    uint32_t dport,
+    const uint32_t src,
+    const uint32_t dst,
+    const uint32_t pg,
+    const uint32_t dport,
     void (*msg_handler)(void* fun_arg),
     void* fun_arg,
-    int channel_id,
-    int sendLat,
-    bool nvls_on,
-    size_t n_clients) {
+    const int channel_id,
+    const int send_lat,
+    const bool nvls_on,
+    const size_t n_clients) {
   std::vector<Ptr<RdmaClient>> clients;
-  // in same server; not enable multi-qp
-  const bool reuse = reuse_qps; //src/gpus_per_server != dst/gpus_per_server;
-  std::string hashKey = get_hash_key(src, dst, pg, dport, channel_id);
-#ifdef NS3_MTP
+  const bool reuse = reuse_qps;
+  // Each channel gets a different QP
+  const std::string hashKey = get_hash_key(src, dst, pg, dport, channel_id);
+  #ifdef NS3_MTP
   MtpInterface::CriticalSection cs;
-#endif
+  #endif
   if (appCon[hashKey].GetN() == 0) {
     for (int i = 0; i < n_clients; i++) {
-      uint32_t port = portNumber[src][dst]++; // get a new port number
+      const uint32_t port = portNumber[src][dst]++; // get a new port number
       // FIXME we are passing msg_handler and fun_arg down to rdma, but these are never used
       RdmaClientHelper clientHelper(
           pg,
@@ -240,7 +240,7 @@ inline std::vector<Ptr<RdmaClient>> get_clients(
       }
       appCon[hashKey].Add(clientHelper.Install(n.Get(src)));
     }
-    appCon[hashKey].Start(Time(sendLat));
+    appCon[hashKey].Start(Time(send_lat));
   }
   for (int i = 0; i < n_clients; i++) {
     Ptr<RdmaClient> qp = DynamicCast<RdmaClient>(appCon[hashKey].Get(i));
@@ -557,7 +557,6 @@ inline void message_finish(FILE* fout, Ptr<RdmaQueuePair> q, const RdmaQueuePair
 inline void qp_finish(FILE* fout, Ptr<RdmaQueuePair> q) {
   uint32_t sid = ip_to_node_id(q->sip), did = ip_to_node_id(q->dip);
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
-  AstraSim::ncclFlowTag flowTag;
   {
 #ifdef NS3_MTP
     MtpInterface::CriticalSection cs;
@@ -603,7 +602,6 @@ inline void send_finish(FILE* fout, Ptr<RdmaQueuePair> q, const RdmaQueuePair::R
 inline void recv_finish(FILE* fout, Ptr<RdmaRxQueuePair> rx_q, const RdmaRxQueuePair::RdmaMessage& msg) {
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
   const uint32_t sip = rx_q->dip, dip = rx_q->sip;
-  uint16_t sport = rx_q->dport;
   uint32_t sid = ip_to_node_id(Ipv4Address(sip)), did = ip_to_node_id(Ipv4Address(dip));
   NcclLog->writeLog(
       NcclLogLevel::INFO,
@@ -616,7 +614,7 @@ inline void recv_finish(FILE* fout, Ptr<RdmaRxQueuePair> rx_q, const RdmaRxQueue
     MtpInterface::CriticalSection cs;
     #endif
     received_chunksize[FlowIdKey{msg.m_flow_id, {sid, did}}] += msg.m_size;
-    if (!is_receive_finished(sid,did,msg.m_tag)) {
+    if (!is_receive_finished(sid,did,msg.m_flow_id)) {
       return;
     }
     notify_size = received_chunksize[FlowIdKey{msg.m_flow_id, {sid, did}}];

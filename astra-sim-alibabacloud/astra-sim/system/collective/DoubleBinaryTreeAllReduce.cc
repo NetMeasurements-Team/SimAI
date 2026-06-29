@@ -68,8 +68,9 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
     rcv_req.layerNum = layer_num;
     RecvPacketEventHadndlerData* ehd = new RecvPacketEventHadndlerData(
         stream,
+        parent,
         stream->owner->id,
-        EventType::PacketReceived,
+        stream->stream_num,
         stream->current_queue_id,
         stream->stream_num);
     stream->owner->front_end_sim_recv(
@@ -110,7 +111,9 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
     rcv_req.layerNum = layer_num;
     RecvPacketEventHadndlerData* ehd = new RecvPacketEventHadndlerData(
         stream,
+        left_child,
         stream->owner->id,
+        stream->stream_num,
         EventType::PacketReceived,
         stream->current_queue_id,
         stream->stream_num);
@@ -129,7 +132,9 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
     rcv_req2.layerNum = layer_num;
     RecvPacketEventHadndlerData* ehd2 = new RecvPacketEventHadndlerData(
         stream,
+        right_child,
         stream->owner->id,
+        stream->stream_num,
         EventType::PacketReceived,
         stream->current_queue_id,
         stream->stream_num);
@@ -203,7 +208,9 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
     rcv_req.layerNum = layer_num;
     RecvPacketEventHadndlerData* ehd = new RecvPacketEventHadndlerData(
         stream,
+        parent,
         stream->owner->id,
+        stream->stream_num,
         EventType::PacketReceived,
         stream->current_queue_id,
         stream->stream_num);
@@ -280,7 +287,9 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
     rcv_req.layerNum = layer_num;
     RecvPacketEventHadndlerData* ehd = new RecvPacketEventHadndlerData(
         stream,
+        only_child_id,
         stream->owner->id,
+        stream->stream_num,
         EventType::PacketReceived,
         stream->current_queue_id,
         stream->stream_num);

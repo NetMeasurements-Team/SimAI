@@ -1091,7 +1091,7 @@ CollectivePhase Sys::generate_collective_phase(
           }
           NcclLog->writeLog(
               NcclLogLevel::DEBUG,
-              " %d,  %d,  %d to  %d current_flow_id %d prev rank:  %d parent_flow_id:  %d child_flow_id:  %d chunk_id: "
+              " %d,  %d,  %d to  %d flow_id %d prev rank:  %d parent_flow_id:  %d child_flow_id:  %d chunk_id: "
               " %d flow_size: %lu chunk_count:  %d ",
               flow.first.first,
               flow.first.second,
@@ -1182,7 +1182,7 @@ CollectivePhase Sys::generate_collective_phase(
           }
           NcclLog->writeLog(
               NcclLogLevel::DEBUG,
-              " %d,  %d,  %d to  %d current_flow_id %d prev rank:  %d parent_flow_id:  %d child_flow_id:  %d chunk_id: "
+              " %d,  %d,  %d to  %d flow_id %d prev rank:  %d parent_flow_id:  %d child_flow_id:  %d chunk_id: "
               " %d flow_size: %lu chunk_count:  %d ",
               flow.first.first,
               flow.first.second,

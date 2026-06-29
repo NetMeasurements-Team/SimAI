@@ -89,7 +89,7 @@ NcclTreeFlowModel::NcclTreeFlowModel(
       }
     }
   }
-  for (int channel_id = 0; channel_id < m_channels; channel_id++) {
+  for (uint32_t channel_id = 0; channel_id < m_channels; channel_id++) {
     assert(zero_latency_packets->find(channel_id) == zero_latency_packets->end());
     (*zero_latency_packets)[channel_id] = 0;
     assert(non_zero_latency_packets->find(channel_id) == non_zero_latency_packets->end());
@@ -134,11 +134,10 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
     int flow_id = ehd->flow_id;
     ready(channel_id, flow_id);
   } else if (event == EventType::PacketReceived) {
-    auto* rcv_ehd = static_cast<RecvPacketEventHadndlerData*>(ehd);
-    ncclFlowTag flowTag = rcv_ehd->flowTag;
-    int received_flow_id = flowTag.current_flow_id;
-    int channel_id = flowTag.channel_id;
-    std::vector<int> next_flow_list =  _flow_models[std::make_pair(channel_id, received_flow_id)].child_flow_id;
+    auto rcv_ehd = static_cast<RecvPacketEventHadndlerData*>(ehd);
+    auto& received_flow = _flow_models[std::make_pair(rcv_ehd->channel_id, rcv_ehd->flow_id)];
+    std::vector<int> next_flow_list =  received_flow.child_flow_id;
+
 #ifdef PHY_MTP
     recv_packets--;
     if (!phy_iteratable(channel_id)) {
@@ -148,7 +147,7 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
     bool flow_exist = next_flow_list.empty();
     for (size_t i = 0; i < next_flow_list.size(); ++i) {
       int next_flow_id = next_flow_list[i];
-      if (next_flow_id == -1 || _flow_models.count(std::make_pair(channel_id, next_flow_id)) != 0) {
+      if (next_flow_id == -1 || _flow_models.count(std::make_pair(rcv_ehd->channel_id, next_flow_id)) != 0) {
         flow_exist = true;
       } else {
         flow_exist = false;
@@ -161,8 +160,8 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
     bool all_packets_freed = true;
     {
       FlowCriticalSection cs;
-      free_packets[std::make_pair(channel_id, flowTag.sender_node)]--;
-      for (int i = 0; i < m_channels; ++i) {
+      free_packets[std::make_pair(received_flow.channel_id, received_flow.src)]--;
+      for (uint32_t i = 0; i < m_channels; ++i) {
         if (_stream_count.count(i) != 0 && _stream_count[i] != 0) {
           all_channel_finished = false;
           break;
@@ -179,7 +178,7 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
     }
 
     if (all_channel_finished) {
-      ready(channel_id, -1);
+      ready(received_flow.channel_id, -1);
       if (all_packets_freed) {
         exit();
       }
@@ -190,13 +189,16 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
         NcclLogLevel::DEBUG,
         "PacketReceived sender: %d, receiver: %d, current_flow_id: %d, channel_id: %d, tag_id: %d,"
         " free_packets: %d, next_flow_list.size: %d",
-        flowTag.sender_node,
-        flowTag.receiver_node,
-        flowTag.current_flow_id,
-        flowTag.channel_id,
-        flowTag.tag_id,
-        free_packets[std::make_pair(channel_id, flowTag.sender_node)],
+        received_flow.src,
+        received_flow.dest,
+        received_flow.flow_id,
+        received_flow.channel_id,
+        rcv_ehd->tag,
+        free_packets.count(std::make_pair(received_flow.channel_id, received_flow.src))
+            ? free_packets[std::make_pair(received_flow.channel_id, received_flow.src)]
+            : -1,
         next_flow_list.size());
+
 #ifdef PHY_MTP
     for (int next_flow_id : next_flow_list) {
       if (--indegree_mapping[next_flow_id] == 0) {
@@ -223,9 +225,9 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
         break;
       }
       if (--indegree_mapping[next_flow_id] == 0) {
-        MockNccl::SingleFlow cur_flow = _flow_models[std::make_pair(channel_id, next_flow_id)];
+        MockNccl::SingleFlow cur_flow = _flow_models[std::make_pair(received_flow.channel_id, next_flow_id)];
         ecs.ExitSection();
-        insert_packets(channel_id, next_flow_id);
+        insert_packets(received_flow.channel_id, next_flow_id);
       } else {
         ecs.ExitSection();
       }
@@ -234,8 +236,8 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
     NcclLog->writeLog(
         NcclLogLevel::DEBUG,
         "NcclTreeFlowModel::run PacketReceived END. Channel ID: %d, Flow ID: %d",
-        channel_id,
-        received_flow_id);
+        received_flow.channel_id,
+        received_flow.flow_id);
 #endif
   } else if (event == EventType::StreamInit) {
     NcclLog->writeLog(NcclLogLevel::INFO, "NcclTreeFlowModel::run StreamInit ID: %d", id);
@@ -267,7 +269,7 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
       init_recv_ready();
 #endif
       for (int j = 0; j < m_channels; j++) {
-        for (const auto flow_model : _flow_models) {
+        for (const auto& flow_model : _flow_models) {
           if (flow_model.second.src != id
               && (comType != ComType::All_to_All || flow_model.second.dest != id)) {
             continue;
@@ -290,25 +292,24 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
 #endif
     }
   } else if (event == EventType::PacketSentFinshed) {
-    auto* snd_ehd = static_cast<SendPacketEventHandlerData*>(ehd);
-    ncclFlowTag flowTag = snd_ehd->flowTag;
-    int sent_flow_id = flowTag.current_flow_id;
-    int channel_id = flowTag.channel_id;
-    std::vector<int> next_flow_list = _flow_models[std::make_pair(channel_id, sent_flow_id)].child_flow_id;
+    const auto snd_ehd = static_cast<SendPacketEventHandlerData*>(ehd);
+    const auto& sent_flow = _flow_models[std::make_pair(snd_ehd->channel_id, snd_ehd->flow_id)];
+    std::vector<int> next_flow_list = sent_flow.child_flow_id;
     NcclLog->writeLog(
         NcclLogLevel::DEBUG,
         "PacketSentFinshed src %d dst %d channel_id %d flow_id %d",
-        flowTag.sender_node,
-        flowTag.receiver_node,
-        flowTag.channel_id,
-        flowTag.current_flow_id);
-    reduce(channel_id, sent_flow_id);
-#ifndef PHY_MTP
+        sent_flow.src,
+        sent_flow.dest,
+        sent_flow.channel_id,
+        sent_flow.flow_id);
+    reduce(sent_flow.channel_id, sent_flow.flow_id);
+
+    #ifndef PHY_MTP
     bool all_channel_finished = true;
     bool all_packets_freed = true;
     {
       FlowCriticalSection cs;
-      for (int i = 0; i < m_channels; ++i) {
+      for (uint32_t i = 0; i < m_channels; ++i) {
         if (_stream_count.count(i) != 0 && _stream_count[i] != 0) {
           all_channel_finished = false;
           break;
@@ -326,9 +327,9 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
     if (all_channel_finished && all_packets_freed) {
       exit();
     }
-#else
+    #else
     phy_iteratable(channel_id);
-#endif
+    #endif
   }
 }
 
@@ -410,14 +411,21 @@ bool NcclTreeFlowModel::recv_ready(int channel_id, int flow_id) {
     sim_request rcv_req;
 
     // init the event handler
-    auto* rcv_ehd = new RecvPacketEventHadndlerData(stream, stream->owner->id, EventType::PacketReceived, data_source, 1);
-    rcv_ehd->flowTag.tag_id =
+    auto* rcv_ehd = new RecvPacketEventHadndlerData(
+        stream,
+        source_flow.src,
+        id,
         layer_num * flow_model.chunk_count * m_channels +
-        flow_model.chunk_count * flow_model.channel_id +
-        flow_model.chunk_id;
+        flow_model.chunk_count * flow_model.channel_id
+          + flow_model.chunk_id,
+        EventType::PacketReceived,
+        data_source,
+        1);
+    rcv_ehd->flow_id = source_flow.flow_id;
+    rcv_ehd->channel_id = channel_id;
+    rcv_ehd->flowTag.tag_id = rcv_ehd->tag;
     rcv_ehd->flowTag.channel_id = channel_id;
     rcv_ehd->flowTag.flow_size = source_flow.flow_size;
-    rcv_ehd->flowTag.current_flow_id = source_flow.flow_id;
     rcv_ehd->flowTag.chunk_id = source_flow.chunk_id;
     rcv_ehd->flowTag.sender_node = data_source;
     rcv_ehd->flowTag.receiver_node = id;
@@ -432,7 +440,7 @@ bool NcclTreeFlowModel::recv_ready(int channel_id, int flow_id) {
         source_flow.flow_size,
         UINT8,
         data_source,
-        rcv_ehd->flowTag.tag_id,
+        rcv_ehd->tag,
         &rcv_req,
         &Sys::handleEvent,
         rcv_ehd);
@@ -627,7 +635,11 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
     // init the event handler
     auto* ehd = new RecvPacketEventHadndlerData(
         stream,
-        stream->owner->id,
+        source_flow.src,
+        id,
+        layer_num * flow_model.chunk_count * m_channels +
+        source_flow.chunk_count * source_flow.channel_id
+          + source_flow.chunk_id,
         EventType::PacketReceived,
         #ifndef PHY_RDMA
         packet.preferred_vnet,
@@ -637,13 +649,11 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
         1);
         #endif
 
-    ehd->flowTag.tag_id =
-        layer_num * source_flow.chunk_count * m_channels +
-        source_flow.chunk_count * source_flow.channel_id +
-        source_flow.chunk_id;
+    ehd->flow_id = source_flow.flow_id;
+    ehd->channel_id = channel_id;
+    ehd->flowTag.tag_id = ehd->tag;
     ehd->flowTag.channel_id = channel_id;
     ehd->flowTag.flow_size = source_flow.flow_size;
-    ehd->flowTag.current_flow_id = source_flow.flow_id;
     ehd->flowTag.chunk_id = source_flow.chunk_id;
     ehd->flowTag.sender_node = data_source;
     ehd->flowTag.receiver_node = id;
@@ -656,7 +666,7 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
           source_flow.flow_size,
           UINT8,
           data_source,
-          ehd->flowTag.tag_id,
+          ehd->tag,
           &rcv_req,
           &Sys::handleEvent,
           ehd);
@@ -691,8 +701,10 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
       stream,
       id,
       flow_model.dest,
-      channel_id,
+      snd_req.flowTag.tag_id,
       EventType::PacketSentFinshed);
+  snd_ehd->flow_id = flow_id;
+  snd_ehd->channel_id = channel_id;
   snd_ehd->flowTag = snd_req.flowTag;
 
   stream->owner->front_end_sim_send(
@@ -701,7 +713,7 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
       snd_req.reqCount,
       UINT8,
       flow_model.dest,
-      snd_ehd->flowTag.tag_id,
+      snd_ehd->tag,
       &snd_req,
       &Sys::handleEvent,
       snd_ehd);

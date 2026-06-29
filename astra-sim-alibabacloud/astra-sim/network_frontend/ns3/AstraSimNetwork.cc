@@ -115,8 +115,8 @@ public:
     NcclLog->writeLog(
         NcclLogLevel::DEBUG,
         "[Send event registration] dst %d sim_send on rank %d tag %u channel id %d (flow_id %u)",
-        dst, rank, tag, ehd->flowTag.channel_id, ehd->flowTag.current_flow_id);
-    send_flow(rank, dst, message_size, msg_handler, fun_arg, tag, ehd->flowTag.current_flow_id, ehd->flowTag.nvls_on);
+        dst, rank, tag, ehd->channel_id, ehd->flow_id);
+    send_flow(rank, dst, message_size, msg_handler, fun_arg, tag, ehd->flow_id, ehd->flowTag.nvls_on);
     return 0;
   }
 
@@ -141,7 +141,7 @@ public:
     NcclLog->writeLog(
         NcclLogLevel::DEBUG,
         "[Receive event registration] src %d sim_recv on rank %d tag %u channel id %d (flow_id %u)",
-        src, rank, tag, ehd->flowTag.channel_id, ehd->flowTag.current_flow_id);
+        src, rank, tag, ehd->channel_id, ehd->flow_id);
 
     if (recvHash.find(MsgEventKey{tag, {recv_event.src, recv_event.dst}}) != recvHash.end()) {
       // 1) ns3 has already received some message before sim_recv is called.
@@ -155,8 +155,8 @@ public:
         NcclLog->writeLog(
             NcclLogLevel::DEBUG,
             " [Message arrived early, skip registering] recvHash already had the expected bytes for src %d, dst %d,"
-            " tag %u; directly invoke handler: t.count %llu, tag %u, current_flow_id %d",
-            recv_event.src, recv_event.dst, tag, message_size, ehd->flowTag.current_flow_id);
+            " tag %u; directly invoke handler: t.count %llu, tag %u, flow_id %d",
+            recv_event.src, recv_event.dst, tag, message_size, ehd->flow_id);
         recv_event.callHandler();
         goto sim_recv_end_section;
       } else if (already_received_size > message_size) {
@@ -170,8 +170,8 @@ public:
         NcclLog->writeLog(
             NcclLogLevel::DEBUG,
             " [Message arrived early (more left), skip registering] recvHash had more bytes (%u) than expected for "
-            "src %d, dst %d, tag %u, directly invoke handler for them: t.count %llu, tag %u, current_flow_id %d",
-            already_received_size, recv_event.src, recv_event.dst, tag, message_size, ehd->flowTag.current_flow_id);
+            "src %d, dst %d, tag %u, directly invoke handler for them: t.count %llu, tag %u, flow_id %d",
+            already_received_size, recv_event.src, recv_event.dst, tag, message_size, ehd->flow_id);
         recv_event.callHandler();
         goto sim_recv_end_section;
       } else {
@@ -183,8 +183,8 @@ public:
         NcclLog->writeLog(
             NcclLogLevel::DEBUG,
             " [Message arrived early (not enough), registering partial] recvHash had less bytes (%u) than expected"
-            " for src %d, dest %d, tag %u; register the difference in expeRecvHash: t.count: %llu, current_flow_id %d",
-            recv_event.src, recv_event.dst, tag, recv_event.remaining_bytes, ehd->flowTag.current_flow_id);
+            " for src %d, dest %d, tag %u; register the difference in expeRecvHash: t.count: %llu, flow_id %d",
+            recv_event.src, recv_event.dst, tag, recv_event.remaining_bytes, ehd->flow_id);
       }
     } else {
       // 2) ns3 has not yet received anything.
@@ -194,8 +194,8 @@ public:
         NcclLog->writeLog(
             NcclLogLevel::DEBUG,
             " [Message not arrived yet, registering] recvHash had no entry for src %d, dst %d, tag %u; register the"
-            " message in expeRecvHash: t.count %llu, current_flow_id %d",
-            recv_event.src, recv_event.dst, tag, message_size, ehd->flowTag.current_flow_id);
+            " message in expeRecvHash: t.count %llu, flow_id %d",
+            recv_event.src, recv_event.dst, tag, message_size, ehd->flow_id);
       } else {
         // 2.2) We have already been expecting something. Increment the number of bytes we are waiting to receive.
         const uint64_t c = expeRecvHash[MsgEventKey{tag, {recv_event.src, recv_event.dst}}].remaining_bytes;
@@ -203,7 +203,7 @@ public:
             NcclLogLevel::DEBUG,
             " [Message not arrived yet, re-registering] recvHash had no entry for src %d, dst %d, tag %u, but we "
             "were already waiting %u bytes for it; updating the entry in expeRecvHash with %u additional bytes: "
-            "current_flow_id %d", recv_event.src, recv_event.dst, tag, c, message_size, ehd->flowTag.current_flow_id);
+            "flow_id %d", recv_event.src, recv_event.dst, tag, c, message_size, ehd->flow_id);
         expeRecvHash[MsgEventKey{tag, {recv_event.src, recv_event.dst}}].remaining_bytes += message_size;
       }
     }

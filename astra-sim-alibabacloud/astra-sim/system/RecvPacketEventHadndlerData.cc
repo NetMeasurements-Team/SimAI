@@ -7,7 +7,9 @@ LICENSE file in the root directory of this source tree.
 namespace AstraSim {
 RecvPacketEventHadndlerData::RecvPacketEventHadndlerData(
     BaseStream* owner,
-    int nodeId,
+    int senderNodeId,
+    int receiverNodeId,
+    int tag,
     EventType event,
     int vnet,
     int stream_num)
@@ -16,16 +18,31 @@ RecvPacketEventHadndlerData::RecvPacketEventHadndlerData(
   this->vnet = vnet;
   this->stream_num = stream_num;
   this->message_end = true;
+  this->senderNodeId = senderNodeId;
+  this->receiverNodeId = receiverNodeId;
+  this->tag = tag;
   ready_time = Sys::boostedTick();
   flow_id = -2;
   child_flow_id = -1;
 }
 RecvPacketEventHadndlerData::RecvPacketEventHadndlerData(
     BaseStream* owner,
-    EventType event,
-    AstraSim::ncclFlowTag _flowTag)
-    : BasicEventHandlerData(owner->owner, event) {
-  this->flowTag = _flowTag;
+    int senderNodeId,
+    int receiverNodeId,
+    int tag,
+    int vnet,
+    int stream_num)
+    : BasicEventHandlerData(owner->owner, EventType::PacketReceived) {
+  this->owner = owner;
+  this->vnet = vnet;
+  this->stream_num = stream_num;
+  this->message_end = true;
+  this->senderNodeId = senderNodeId;
+  this->receiverNodeId = receiverNodeId;
+  this->tag = tag;
+  ready_time = Sys::boostedTick();
+  flow_id = -2;
+  child_flow_id = -1;
 }
 
 } // namespace AstraSim
