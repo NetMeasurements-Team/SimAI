@@ -203,8 +203,6 @@ inline std::vector<Ptr<RdmaClient>> get_clients(
     const uint32_t dst,
     const uint32_t pg,
     const uint32_t dport,
-    void (*msg_handler)(void* fun_arg),
-    void* fun_arg,
     const int channel_id,
     const int send_lat,
     const bool nvls_on,
@@ -230,8 +228,6 @@ inline std::vector<Ptr<RdmaClient>> get_clients(
           has_win ? (global_t == 1 ? maxBdp : pairBdp[n.Get(src)][n.Get(dst)]) : 0,
           global_t == 1 ? maxRtt : pairRtt[src][dst],
           packet_spraying && src/gpus_per_server != dst/gpus_per_server,
-          msg_handler,
-          fun_arg,
           src,
           dst,
           !reuse);
@@ -310,7 +306,7 @@ inline void send_flow(
     qps_per_flow = next_hops*4;
   }
   std::vector<Ptr<RdmaClient>> clients =
-      get_clients(src, dst, pg, dport, msg_handler, fun_arg, ehd->channel_id, send_lat, nvls_on, qps_per_flow);
+      get_clients(src, dst, pg, dport, ehd->channel_id, send_lat, nvls_on, qps_per_flow);
 
   // Schedule the flow within the ns3 simulator
   const uint64_t base_size = maxPacketCount / qps_per_flow;
