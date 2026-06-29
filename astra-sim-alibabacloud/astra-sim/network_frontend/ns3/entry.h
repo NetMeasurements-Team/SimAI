@@ -55,14 +55,44 @@ using namespace std;
  */
 inline std::unordered_map<std::string, ApplicationContainer> appCon;
 
-struct task1 {
+class MsgEvent {
+public:
   int src;
-  int dest;
+  int dst;
   int type;
-  /** Indicates the number of bytes remaining to be sent or received. */
-  uint64_t count;
-  void* fun_arg;
-  void (*msg_handler)(void* fun_arg);
+  /**
+   * Number of bytes remaining to be sent or received.
+   * Initialized with the original size of the message and
+   * incremented/decremented based on sent/received bytes.
+   * Eventually, this value will reach zero when the event completes.
+   */
+  uint64_t remaining_bytes;
+  void (*msg_handler)(void *fun_arg);
+  void *fun_arg;
+
+  MsgEvent(
+      const int _src,
+      const int _dst,
+      const int _type,
+      const int _remaining_msg_bytes,
+      void (*_msg_handler)(void* fun_arg),
+      void* _fun_arg) :
+      src(_src), dst(_dst), type(_type), remaining_bytes(_remaining_msg_bytes),
+      msg_handler(_msg_handler), fun_arg(_fun_arg) {}
+
+  /**
+   * Default constructor only declared to prevent compile errors.
+   * When looking up MsgEvents from maps such as sentHash, we should always check that a MsgEvent exists
+   * for the given key (i.e., this default constructor should not be called in runtime).
+   */
+  MsgEvent() : src(0), dst(0), type(0), remaining_bytes(0), msg_handler(nullptr), fun_arg(nullptr) {}
+
+  /**
+   * Invoke the callback handler associated with this MsgEvent.
+   */
+  void callHandler() {
+    msg_handler(fun_arg);
+  }
 };
 
 /**
@@ -85,7 +115,7 @@ typedef pair<int, pair<int, int>> FlowIdKey;
  *   - key: A MsgEventKey instance
  *   - value: A MsgEvent instance that indicates that Sys layer is waiting for a "receive" event to finish
  */
-inline map<MsgEventKey, task1> expeRecvHash;
+inline map<MsgEventKey, MsgEvent> expeRecvHash;
 
 /**
  * This is a helper structure that holds messages which ns3 has simulated the arrival,
@@ -101,7 +131,7 @@ inline std::map<MsgEventKey, uint64_t> recvHash;
  *   - key: A MsgEventKey instance
  *   - value: A MsgEvent instance that indicates that Sys layer is waiting for a "send" event to finish
  */
-inline std::map<MsgEventKey, task1> sentHash;
+inline map<MsgEventKey, MsgEvent> sentHash;
 
 /**
  *  Used to count how many bytes were sent/received by this node.
@@ -264,18 +294,12 @@ inline void send_flow(
   }
 
   // Create a MsgEvent instance and register callback function.
-  task1 send_event;
-  send_event.src = src;
-  send_event.dest = dst;
-  send_event.count = maxPacketCount;
-  send_event.type = 0;
-  send_event.fun_arg = fun_arg;
-  send_event.msg_handler = msg_handler;
+  auto send_event = MsgEvent(src, dst, 0, maxPacketCount, msg_handler, fun_arg);
   {
     #ifdef NS3_MTP
     MtpInterface::CriticalSection cs;
     #endif
-    sentHash[MsgEventKey{tag, {send_event.src, send_event.dest}}] = send_event;
+    sentHash[MsgEventKey{tag, {send_event.src, send_event.dst}}] = send_event;
   }
 
   // Create (or reuse) one or more QPs for this flow
@@ -339,12 +363,12 @@ inline void notify_receiver_receive_data(
       sender_node, receiver_node, tag, message_size);
   if (expeRecvHash.find(MsgEventKey{tag, {sender_node, receiver_node}}) != expeRecvHash.end()) {
     // The Sys object is waiting for packets to arrive.
-    task1 recv_event = expeRecvHash[MsgEventKey{tag, {sender_node, receiver_node}}];
+    MsgEvent recv_event = expeRecvHash[MsgEventKey{tag, {sender_node, receiver_node}}];
     NcclLog->writeLog(
         NcclLogLevel::DEBUG,
         " %d notify receiver %d, tag %u, message size %llu, t2.count %llu",
-        sender_node, receiver_node, tag, message_size, recv_event.count);
-    if (message_size == recv_event.count) {
+        sender_node, receiver_node, tag, message_size, recv_event.remaining_bytes);
+    if (message_size == recv_event.remaining_bytes) {
       // We received exactly the amount of data what Sys object was expecting.
       NcclLog->writeLog(
           NcclLogLevel::DEBUG,
@@ -354,13 +378,13 @@ inline void notify_receiver_receive_data(
       #ifdef NS3_MTP
       ecs.ExitSection();
       #endif
-      recv_event.msg_handler(recv_event.fun_arg);
+      recv_event.callHandler();
       goto receiver_end_1st_section;
-    } else if (message_size > recv_event.count) {
+    } else if (message_size > recv_event.remaining_bytes) {
       // We received more packets than the Sys object is expecting.
       // Place the task in recvHash and wait for Sys object to issue more sim_recv calls.
       // Call the callback handler for the amount Sys object was waiting for.
-      recvHash[MsgEventKey{tag, {sender_node, receiver_node}}] = message_size - recv_event.count;
+      recvHash[MsgEventKey{tag, {sender_node, receiver_node}}] = message_size - recv_event.remaining_bytes;
       NcclLog->writeLog(
           NcclLogLevel::DEBUG,
           "message_size > t2.count expeRecvHash.erase, %d notify receiver %d, tag %u, message size %llu",
@@ -369,7 +393,7 @@ inline void notify_receiver_receive_data(
       #ifdef NS3_MTP
       ecs.ExitSection();
       #endif
-      recv_event.msg_handler(recv_event.fun_arg);
+      recv_event.callHandler();
       goto receiver_end_1st_section;
     } else {
       // There are still packets to arrive.
@@ -378,7 +402,7 @@ inline void notify_receiver_receive_data(
           NcclLogLevel::DEBUG,
           "message_size < t2.count expeRecvHash.decrease, %d notify receiver %d, tag %u, message size %llu",
           sender_node, receiver_node, tag, message_size);
-      recv_event.count -= message_size;
+      recv_event.remaining_bytes -= message_size;
       expeRecvHash[MsgEventKey{tag, {sender_node, receiver_node}}] = recv_event;
     }
   } else {
@@ -422,9 +446,9 @@ inline void notify_sender_sending_finished(
   #endif
   // Lookup the send_event registered at send_flow().
   if (sentHash.find(MsgEventKey{tag, {sender_node, receiver_node}}) != sentHash.end()) {
-    task1 send_event = sentHash[MsgEventKey{tag, {sender_node, receiver_node}}];
+    MsgEvent send_event  = sentHash[MsgEventKey{tag, {sender_node, receiver_node}}];
     // Verify that the (ns3 identified) sent message size matches what was expected by the system layer.
-    if (send_event.count == message_size) {
+    if (send_event.remaining_bytes == message_size) {
       sentHash.erase(MsgEventKey{tag, {sender_node, receiver_node}});
       // Add to the number of total bytes sent.
       if (nodeHash.find(make_pair(sender_node, 0)) == nodeHash.end()) {
@@ -435,15 +459,16 @@ inline void notify_sender_sending_finished(
       #ifdef NS3_MTP
       ecs.ExitSection();
       #endif
-      send_event.msg_handler(send_event.fun_arg);
+      send_event.callHandler();
       return;
     } else {
       NcclLog->writeLog(NcclLogLevel::ERROR,
           "sentHash: msg size %u != expected bytes %u, %d -> %d, tag %u",
-          message_size, send_event.count, sender_node, receiver_node, tag);
+          message_size, send_event.remaining_bytes, sender_node, receiver_node, tag);
       cerr << "The message size does not match what is expected. Something is wrong. "
            << "tag, src_id, dst_id, expected msg_bytes, actual msg_bytes: "
-           << tag << ", " << sender_node << ", " << receiver_node << ", " << send_event.count << ", " << message_size
+           << tag << ", " << sender_node << ", " << receiver_node << ", " << send_event.remaining_bytes << ", "
+           << message_size
            << endl;
       exit(1);
     }
