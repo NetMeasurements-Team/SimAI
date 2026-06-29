@@ -13,34 +13,25 @@
 *limitations under the License.
 */
 
-#include "astra-sim/system/AstraNetworkAPI.hh"
-#include "astra-sim/system/Sys.hh"
-#include "astra-sim/system/RecvPacketEventHadndlerData.hh"
-#include "astra-sim/system/Common.hh"
-#include "astra-sim/system/MockNcclLog.h"
-#include "ns3/applications-module.h"
-#include "ns3/core-module.h"
-#include "ns3/csma-module.h"
-#include "ns3/internet-module.h"
-#include "ns3/network-module.h"
-#include "entry.h"
-#include <execinfo.h>
 #include <fstream>
 #include <iostream>
-#include <queue>
-#include <stdio.h>
 #include <string>
-#include <atomic>
-#include <thread>
 #include <unistd.h>
 #include <vector>
+
+#include <ns3/core-module.h>
 #ifdef NS3_MTP
-#include "ns3/mtp-interface.h"
+#include <ns3/mtp-interface.h>
 #endif
 #ifdef NS3_MPI
-#include "ns3/mpi-interface.h"
 #include <mpi.h>
+#include "ns3/mpi-interface.h"
 #endif
+
+#include "astra-sim/system/AstraNetworkAPI.hh"
+#include "astra-sim/system/RecvPacketEventHadndlerData.hh"
+#include "astra-sim/system/Sys.hh"
+#include "entry.h"
 
 #define RESULT_PATH "./ncclFlowModel_"
 
@@ -52,21 +43,10 @@ extern GPUType gpu_type;
 extern std::vector<int>NVswitchs;
 extern std::atomic<bool> waiting_sim_finish;
 
-struct sim_event {
-  void *buffer;
-  uint64_t count;
-  int type;
-  int dst;
-  int tag;
-  string fnType;
-};
-
 class ASTRASimNetwork : public AstraSim::AstraNetworkAPI {
-private:
   int npu_offset;
 
 public:
-  queue<sim_event> sim_event_queue;
   ASTRASimNetwork(int rank, int npu_offset) : AstraNetworkAPI(rank) {
     this->npu_offset = npu_offset;
   }
@@ -95,14 +75,16 @@ public:
   AstraSim::timespec_t sim_get_time() override {
     AstraSim::timespec_t timeSpec;
     timeSpec.time_val = Simulator::Now().GetNanoSeconds();
+    timeSpec.time_res = AstraSim::NS;
     return timeSpec;
   }
   void sim_schedule(AstraSim::timespec_t delta, void (*fun_ptr)(void* fun_arg), void* fun_arg) override {
     Simulator::Schedule(NanoSeconds(delta.time_val), fun_ptr, fun_arg);
   }
+
   int sim_send(
       void *buffer,
-      const uint64_t message_size,
+      uint64_t message_size,
       int type,
       int dst,
       /**
@@ -122,7 +104,68 @@ public:
         NcclLogLevel::DEBUG,
         "[Send event registration] dst %d sim_send on rank %d tag %u channel id %d (flow_id %u)",
         dst, rank, tag, ehd->channel_id, ehd->flow_id);
-    send_flow(rank, dst, message_size, msg_handler, fun_arg, tag, ehd->flow_id, ehd->nvls_on);
+
+    constexpr int pg = 3, dport = 100;
+    int send_lat = 6;
+    if (const char* send_lat_env = std::getenv("AS_SEND_LAT")) {
+      try {
+        send_lat = std::stoi(send_lat_env);
+      } catch (const std::invalid_argument&) {
+        NcclLog->writeLog(NcclLogLevel::ERROR, "send_lat set error");
+        exit(-1);
+      }
+    }
+    send_lat *= 1000;
+
+    if (message_size == 0) {
+      message_size = 1;
+    }
+
+    // Create a MsgEvent instance and register callback function.
+    auto send_event = MsgEvent(rank, dst, 0, message_size, msg_handler, fun_arg);
+    {
+      #ifdef NS3_MTP
+      MtpInterface::CriticalSection cs;
+      #endif
+      sentHash[MsgEventKey{tag, {send_event.src, send_event.dst}}] = send_event;
+    }
+
+    // Create (or reuse) one or more QPs for this flow
+    uint16_t qps_per_flow = 1;
+    if (flow_stripping && send_event.src/gpus_per_server != dst/gpus_per_server) {
+      const size_t next_hops = nextHop[n.Get(send_event.src)][n.Get(send_event.dst)].size();
+      // use four qps per each next hop to increase the chances of distributing them across all the interfaces
+      qps_per_flow = next_hops*4;
+    }
+    std::vector<Ptr<RdmaClient>> clients =
+        get_clients(rank, dst, pg, dport, ehd->channel_id, send_lat, ehd->nvls_on, qps_per_flow);
+
+    // Schedule the flow within the ns3 simulator
+    const uint64_t base_size = message_size / qps_per_flow;
+    const uint64_t last_size = base_size + message_size % qps_per_flow;
+    for (int qp_index = 0; qp_index < qps_per_flow; qp_index++) {
+      uint64_t size = qp_index == qps_per_flow - 1 ? last_size : base_size;
+      uint32_t port = clients[qp_index]->GetSourcePort();
+
+      NcclLog->writeLog(
+          NcclLogLevel::DEBUG,
+          "[SendFlow Event] %d -> %d on ch %d, port %u, flow_id %d, NVLink %d, size %llu, tick %ld",
+          rank, dst, ehd->channel_id, port, ehd->flow_id, tag, ehd->nvls_on, size, AstraSim::Sys::boostedTick());
+
+      {
+        #ifdef NS3_MTP
+        MtpInterface::CriticalSection cs;
+        #endif
+        waiting_to_sent_callback[FlowIdKey{ehd->flow_id, {send_event.src, send_event.dst}}]++;
+        waiting_to_notify_receiver[FlowIdKey{ehd->flow_id, {send_event.src, send_event.dst}}]++;
+        waiting_to_message_finish[FlowIdKey{ehd->flow_id, {send_event.src, send_event.dst}}]++;
+      }
+
+      Simulator::ScheduleWithContext(
+          n.Get(rank)->GetId(), Time(send_lat + 1), push_msg_to_client, clients[qp_index], size, ehd->flow_id, tag);
+    }
+    flow_input.idx++;
+
     return 0;
   }
 
@@ -135,7 +178,6 @@ public:
       [[maybe_unused]] AstraSim::sim_request* request,
       void (*msg_handler)(void* fun_arg),
       void* fun_arg) override {
-    // TODO move this code into entry.h in a new function recv_flow (for symmetry with sim_send -> send_flow)
     #ifdef NS3_MTP
     MtpInterface::ExplicitCriticalSection ecs;
     #endif
@@ -239,7 +281,7 @@ struct user_param {
 
 static int user_param_prase(const int argc, char* argv[], user_param* user_param) {
   int opt;
-  while ((opt = getopt(argc,argv,"ht:w:g:s:n:r:c:"))!=-1) {
+  while ((opt = getopt(argc, argv, "ht:w:g:s:n:r:c:")) != -1) {
     switch (opt) {
     case 'h':
       std::cout<<"-t    number of threads,default 1"<<std::endl;
@@ -271,7 +313,7 @@ static int user_param_prase(const int argc, char* argv[], user_param* user_param
   return 0 ;
 }
 
-int main(int argc, char* argv[]) {
+int main(const int argc, char* argv[]) {
   user_param user_param;
   if(user_param_prase(argc, argv, &user_param)) {
     return 0;

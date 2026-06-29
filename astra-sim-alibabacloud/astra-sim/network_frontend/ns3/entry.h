@@ -19,17 +19,6 @@
 #undef PGO_TRAINING
 #define PATH_TO_PGO_CONFIG "path_to_pgo_config"
 
-#include "astra-sim/system/MockNcclLog.h"
-#include "astra-sim/system/AstraNetworkAPI.hh"
-#include "common.h"
-
-#include <ns3/applications-module.h>
-#include <ns3/core-module.h>
-#include <ns3/point-to-point-helper.h>
-#include <ns3/rdma-client-helper.h>
-#include <ns3/rdma-driver.h>
-#include <ns3/sim-setting.h>
-
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -37,9 +26,20 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include <ns3/applications-module.h>
+#include <ns3/core-module.h>
+#include <ns3/point-to-point-helper.h>
+#include <ns3/rdma-client-helper.h>
+#include <ns3/rdma-driver.h>
+#include <ns3/sim-setting.h>
 #ifdef NS3_MTP
   #include <ns3/mtp-interface.h>
 #endif
+
+#include "astra-sim/system/MockNcclLog.h"
+#include "astra-sim/system/AstraNetworkAPI.hh"
+#include "common.h"
 
 using namespace ns3;
 using namespace std;
@@ -193,7 +193,12 @@ inline bool is_message_finished(int src, int dst, int flow_id) {
   return false;
 }
 
-inline std::string get_hash_key(uint32_t src, uint32_t dst, uint32_t pg, uint32_t dport, uint64_t channel_id) {
+inline std::string get_hash_key(
+    const uint32_t src,
+    const uint32_t dst,
+    const uint32_t pg,
+    const uint32_t dport,
+    const uint64_t channel_id) {
   return std::to_string(src) + '_' + std::to_string(dst) + '_' + std::to_string(pg) + '_' + std::to_string(dport) +
       '_' + std::to_string(channel_id);
 }
@@ -247,7 +252,11 @@ inline std::vector<Ptr<RdmaClient>> get_clients(
   return clients;
 }
 
-inline void push_msg_to_client(Ptr<RdmaClient> client, uint64_t size, uint64_t flow_id, uint64_t tag) {
+inline void push_msg_to_client(
+    Ptr<RdmaClient> client,
+    const uint64_t size,
+    const uint64_t flow_id,
+    const uint64_t tag) {
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
   NcclLog->writeLog(
       NcclLogLevel::INFO,
@@ -272,66 +281,7 @@ inline void send_flow(
     bool nvls_on) {
   const auto ehd = static_cast<AstraSim::SendPacketEventHandlerData*>(fun_arg);
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
-  constexpr int pg = 3, dport = 100;
-  int send_lat = 6;
-  if (const char* send_lat_env = std::getenv("AS_SEND_LAT")) {
-    try {
-      send_lat = std::stoi(send_lat_env);
-    } catch (const std::invalid_argument&) {
-      NcclLog->writeLog(NcclLogLevel::ERROR, "send_lat set error");
-      exit(-1);
-    }
-  }
-  send_lat *= 1000;
 
-  if (maxPacketCount == 0) {
-    maxPacketCount = 1;
-  }
-
-  // Create a MsgEvent instance and register callback function.
-  auto send_event = MsgEvent(src, dst, 0, maxPacketCount, msg_handler, fun_arg);
-  {
-    #ifdef NS3_MTP
-    MtpInterface::CriticalSection cs;
-    #endif
-    sentHash[MsgEventKey{tag, {send_event.src, send_event.dst}}] = send_event;
-  }
-
-  // Create (or reuse) one or more QPs for this flow
-  uint16_t qps_per_flow = 1;
-  if (flow_stripping && src/gpus_per_server != dst/gpus_per_server) {
-    const size_t next_hops = nextHop[n.Get(src)][n.Get(dst)].size();
-    // use four qps per each next hop to increase the chances of distributing them across all the interfaces
-    qps_per_flow = next_hops*4;
-  }
-  std::vector<Ptr<RdmaClient>> clients =
-      get_clients(src, dst, pg, dport, ehd->channel_id, send_lat, nvls_on, qps_per_flow);
-
-  // Schedule the flow within the ns3 simulator
-  const uint64_t base_size = maxPacketCount / qps_per_flow;
-  const uint64_t last_size = base_size + maxPacketCount % qps_per_flow;
-  for (int qp_index = 0; qp_index < qps_per_flow; qp_index++) {
-    uint64_t size = qp_index == qps_per_flow - 1 ? last_size : base_size;
-    uint32_t port = clients[qp_index]->GetSourcePort();
-
-    NcclLog->writeLog(
-        NcclLogLevel::DEBUG,
-        "[SendFlow Event] %d -> %d on ch %d, port %u, flow_id %d, NVLink %d, size %llu, tick %ld",
-        src, dst, ehd->channel_id, port, flow_id, nvls_on, size, AstraSim::Sys::boostedTick());
-
-    {
-      #ifdef NS3_MTP
-      MtpInterface::CriticalSection cs;
-      #endif
-      waiting_to_sent_callback[FlowIdKey{flow_id, {src, dst}}]++;
-      waiting_to_notify_receiver[FlowIdKey{flow_id, {src, dst}}]++;
-      waiting_to_message_finish[FlowIdKey{flow_id, {src, dst}}]++;
-    }
-
-    Simulator::ScheduleWithContext(
-        n.Get(src)->GetId(), Time(send_lat + 1), push_msg_to_client, clients[qp_index], size, flow_id, tag);
-  }
-  flow_input.idx++;
 }
 
 /**
@@ -346,7 +296,7 @@ inline void send_flow(
 inline void notify_receiver_receive_data(
     int sender_node,
     int receiver_node,
-    uint64_t message_size,
+    const uint64_t message_size,
     int tag) {
   #ifdef NS3_MTP
   MtpInterface::ExplicitCriticalSection ecs;
@@ -433,13 +383,13 @@ receiver_end_1st_section:
 inline void notify_sender_sending_finished(
     int sender_node,
     int receiver_node,
-    uint64_t message_size,
+    const uint64_t message_size,
     int tag) {
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
   #ifdef NS3_MTP
   MtpInterface::ExplicitCriticalSection ecs;
   #endif
-  // Lookup the send_event registered at send_flow().
+  // Find the send_event registered at sim_send.
   if (sentHash.find(MsgEventKey{tag, {sender_node, receiver_node}}) != sentHash.end()) {
     MsgEvent send_event  = sentHash[MsgEventKey{tag, {sender_node, receiver_node}}];
     // Verify that the (ns3 identified) sent message size matches what was expected by the system layer.
@@ -455,7 +405,6 @@ inline void notify_sender_sending_finished(
       ecs.ExitSection();
       #endif
       send_event.callHandler();
-      return;
     } else {
       NcclLog->writeLog(NcclLogLevel::ERROR,
           "sentHash: msg size %u != expected bytes %u, %d -> %d, tag %u",
@@ -476,9 +425,6 @@ inline void notify_sender_sending_finished(
          << endl;
     exit(1);
   }
-  #ifdef NS3_MTP
-  ecs.ExitSection();
-  #endif
 }
 
 inline void finish() {
@@ -507,14 +453,14 @@ inline void check_sim_finish() {
 }
 
 inline void print_fct_entry(FILE *fout, Ptr<RdmaQueuePair> q, const uint64_t msg_size) {
-  uint32_t sid = ip_to_node_id(q->sip), did = ip_to_node_id(q->dip);
-  uint64_t base_rtt = pairRtt[sid][did], b = pairBw[sid][did];
-  uint64_t size = msg_size;
-  uint32_t total_bytes = size +
+  const uint32_t sid = ip_to_node_id(q->sip), did = ip_to_node_id(q->dip);
+  const uint64_t base_rtt = pairRtt[sid][did], b = pairBw[sid][did];
+  const uint64_t size = msg_size;
+  const uint32_t total_bytes = size +
       ((size - 1) / packet_payload_size + 1) *
       (CustomHeader::GetStaticWholeHeaderSize() - IntHeader::GetStaticSize()); // translate to the minimum bytes
                                                                                // required (with header but no INT)
-  uint64_t standalone_fct = base_rtt + total_bytes * 8000000000lu / b;
+  const uint64_t standalone_fct = base_rtt + total_bytes * 8000000000lu / b;
   // sip, dip, sport, dport, size (B), start_time, fct (ns), standalone_fct (ns)
   fprintf(fout, "%08x %08x %u %u %lu %lu %lu %lu\n", q->sip.Get(), q->dip.Get(),
           q->sport, q->dport, size, q->startTime.GetTimeStep(),
@@ -531,7 +477,7 @@ inline void message_finish(FILE* fout, Ptr<RdmaQueuePair> q, const RdmaQueuePair
       NcclLogLevel::INFO,
       "message_finish, %u -> %u, flow_id %u, tag %u, %u flows left in qp, at the tick %u",
       q->m_src, q->m_dest, msg.m_flow_id, msg.m_tag, q->m_messages.size(), AstraSim::Sys::boostedTick());
-  uint32_t sid = ip_to_node_id(q->sip), did = ip_to_node_id(q->dip);
+  const uint32_t sid = ip_to_node_id(q->sip), did = ip_to_node_id(q->dip);
   print_fct_entry(fout, q, msg.m_size);
 
   {
@@ -550,7 +496,7 @@ inline void message_finish(FILE* fout, Ptr<RdmaQueuePair> q, const RdmaQueuePair
  * Since QPs are reused for multiple flows, this is only invoked at the end of the simulation.
  */
 inline void qp_finish(FILE* fout, Ptr<RdmaQueuePair> q) {
-  uint32_t sid = ip_to_node_id(q->sip), did = ip_to_node_id(q->dip);
+  const uint32_t sid = ip_to_node_id(q->sip), did = ip_to_node_id(q->dip);
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
   {
 #ifdef NS3_MTP
@@ -618,9 +564,7 @@ inline void recv_finish(FILE* fout, Ptr<RdmaRxQueuePair> rx_q, const RdmaRxQueue
   notify_receiver_receive_data(sid, did, notify_size, msg.m_tag);
 }
 
-int setup_ns3_simulation(const string& network_topo, const string& network_conf, const string& run_name) {
-  clock_t begint, endt;
-  begint = clock();
+inline int setup_ns3_simulation(const string& network_topo, const string& network_conf, const string& run_name) {
 
   if (!ReadConf(network_topo, network_conf, run_name)) {
     std::cerr << "Unable to open configuration file: " << network_conf << std::endl;
@@ -634,7 +578,6 @@ int setup_ns3_simulation(const string& network_topo, const string& network_conf,
   fflush(stdout);
   NS_LOG_INFO("Run Simulation.");
 
-  endt = clock();
   return 0;
 }
 #endif
