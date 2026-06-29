@@ -47,7 +47,6 @@
 using namespace std;
 using namespace ns3;
 
-extern std::map<std::pair<std::pair<int, int>,int>, AstraSim::ncclFlowTag> receiver_pending_queue;
 extern uint32_t node_num, switch_num, link_num, trace_num, nvswitch_num, gpus_per_server;
 extern GPUType gpu_type;
 extern std::vector<int>NVswitchs;
@@ -71,9 +70,9 @@ public:
   ASTRASimNetwork(int rank, int npu_offset) : AstraNetworkAPI(rank) {
     this->npu_offset = npu_offset;
   }
-  ~ASTRASimNetwork() {}
-  int sim_comm_size(AstraSim::sim_comm comm, int *size) { return 0; }
-  int sim_finish() {
+  ~ASTRASimNetwork() override {}
+  int sim_comm_size(AstraSim::sim_comm comm, int *size) override { return 0; }
+  int sim_finish() override {
     for (auto it = nodeHash.begin(); it != nodeHash.end(); ++it) {
       pair<int, int> p = it->first;
       if (p.second == 0) {
@@ -91,75 +90,71 @@ public:
     Simulator::Schedule(Time(0), &check_sim_finish);
     return 0;
   }
-  double sim_time_resolution() { return 0; }
-  int sim_init(AstraSim::AstraMemoryAPI *MEM) { return 0; }
-  AstraSim::timespec_t sim_get_time() {
+  double sim_time_resolution() override { return 0; }
+  int sim_init(AstraSim::AstraMemoryAPI *MEM) override { return 0; }
+  AstraSim::timespec_t sim_get_time() override {
     AstraSim::timespec_t timeSpec;
     timeSpec.time_val = Simulator::Now().GetNanoSeconds();
     return timeSpec;
   }
-  virtual void sim_schedule(AstraSim::timespec_t delta,
-                            void (*fun_ptr)(void *fun_arg), void *fun_arg) {
-    task1 t;
-    t.type = 2;
-    t.fun_arg = fun_arg;
-    t.msg_handler = fun_ptr;
-    t.schTime = delta.time_val;
-    Simulator::Schedule(NanoSeconds(t.schTime), t.msg_handler, t.fun_arg);
+  void sim_schedule(AstraSim::timespec_t delta, void (*fun_ptr)(void* fun_arg), void* fun_arg) override {
+    Simulator::Schedule(NanoSeconds(delta.time_val), fun_ptr, fun_arg);
   }
-  virtual int sim_send(void *buffer,   
-                       uint64_t count, 
-                       int type,       
-                       int dst,
-                       int tag,                       
-                       AstraSim::sim_request *request, 
-                       void (*msg_handler)(void *fun_arg), void *fun_arg) {
+  int sim_send(
+      void *buffer,
+      uint64_t count,
+      int type,
+      int dst,
+      int tag,
+      [[maybe_unused]] AstraSim::sim_request* request,
+      void (*msg_handler)(void *fun_arg),
+      void *fun_arg) override {
     dst += npu_offset;
     const auto ehd = static_cast<AstraSim::SendPacketEventHandlerData*>(fun_arg);
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
     NcclLog->writeLog(
         NcclLogLevel::DEBUG,
-        "[Send event registration] dst %d sim_send on rank %d tag %u channel id %d",
-        dst, rank, tag, ehd->flowTag.channel_id);
-    send_flow(rank, dst, count, msg_handler, fun_arg, tag, request);
+        "[Send event registration] dst %d sim_send on rank %d tag %u channel id %d (flow_id %u)",
+        dst, rank, tag, ehd->flowTag.channel_id, ehd->flowTag.current_flow_id);
+    send_flow(rank, dst, count, msg_handler, fun_arg, tag, ehd->flowTag.current_flow_id, ehd->flowTag.nvls_on);
     return 0;
   }
-  virtual int sim_recv(void *buffer, uint64_t count, int type, int src, int tag,
-                       AstraSim::sim_request *request,
-                       void (*msg_handler)(void *fun_arg), void *fun_arg) {
+
+  int sim_recv(
+      void* buffer,
+      uint64_t count,
+      int type,
+      int src,
+      int tag,
+      [[maybe_unused]] AstraSim::sim_request* request,
+      void (*msg_handler)(void* fun_arg),
+      void* fun_arg) override {
+    // TODO move this code into entry.h in a new function recv_flow (for symmetry with sim_send -> send_flow)
     #ifdef NS3_MTP
     MtpInterface::ExplicitCriticalSection ecs;
     #endif
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
     AstraSim::ncclFlowTag flowTag = request->flowTag;
     src += npu_offset;
-    task1 t;
-    t.src = src;
-    t.dest = rank;
-    t.count = count;
-    t.type = 1;
-    t.fun_arg = fun_arg;
-    t.msg_handler = msg_handler;
-    const auto ehd = static_cast<AstraSim::RecvPacketEventHadndlerData*>(t.fun_arg);
-    AstraSim::EventType event = ehd->event;
-    tag = ehd->flowTag.tag_id;
+    task1 recv_event;
+    recv_event.src = src;
+    recv_event.dest = rank;
+    recv_event.count = count;
+    recv_event.type = 1;
+    recv_event.fun_arg = fun_arg;
+    recv_event.msg_handler = msg_handler;
+    const auto ehd = static_cast<AstraSim::RecvPacketEventHadndlerData*>(recv_event.fun_arg);
     NcclLog->writeLog(
         NcclLogLevel::DEBUG,
-        "[Receive event registration] src %d sim_recv on rank %d tag %u channel id %d",
-        src, rank, tag, ehd->flowTag.channel_id);
+        "[Receive event registration] src %d sim_recv on rank %d tag %u channel id %d (flow_id %u)",
+        src, rank, tag, ehd->flowTag.channel_id, ehd->flowTag.current_flow_id);
 
-    if (recvHash.find(make_pair(tag, make_pair(t.src, t.dest))) != recvHash.end()) {
+    if (recvHash.find(MsgEventKey{tag, {recv_event.src, recv_event.dest}}) != recvHash.end()) {
       // 1) ns3 has already received some message before sim_recv is called.
-      const uint64_t already_received_size = recvHash[make_pair(tag, make_pair(t.src, t.dest))];
-      if (already_received_size == t.count) {
+      const uint64_t already_received_size = recvHash[MsgEventKey{tag, {recv_event.src, recv_event.dest}}];
+      if (already_received_size == recv_event.count) {
         // 1.1) The received message size is the same as what we expect. Exit.
-        recvHash.erase(make_pair(tag, make_pair(t.src, t.dest)));
-        assert(ehd->flowTag.child_flow_id == -1 && ehd->flowTag.current_flow_id == -1);
-        if(receiver_pending_queue.count(std::make_pair(std::make_pair(rank, src),tag))!= 0) {
-          AstraSim::ncclFlowTag pending_tag = receiver_pending_queue[std::make_pair(std::make_pair(rank, src),tag)];
-          receiver_pending_queue.erase(std::make_pair(std::make_pair(rank,src),tag));
-          ehd->flowTag = pending_tag;
-        }
+        recvHash.erase(MsgEventKey{tag, {recv_event.src, recv_event.dest}});
         #ifdef NS3_MTP
         ecs.ExitSection();
         #endif
@@ -167,19 +162,14 @@ public:
             NcclLogLevel::DEBUG,
             " [Message arrived early, skip registering] recvHash already had the expected bytes for src %d, dst %d,"
             " tag %u; directly invoke handler: t.count %llu, tag %u, current_flow_id %d",
-            t.src, t.dest, tag, t.count, flowTag.current_flow_id);
-        t.msg_handler(t.fun_arg);
+            recv_event.src, recv_event.dest, tag, recv_event.count, ehd->flowTag.current_flow_id);
+        recv_event.msg_handler(recv_event.fun_arg);
         goto sim_recv_end_section;
-      } else if (already_received_size > t.count) {
-        // 1.2) The node received more than expected. Do trigger the callback handler for this message, but also wait
+      } else if (already_received_size > recv_event.count) {
+        // 1.2) The node received more than expected. Do trigger the callback handler for this message,
         //      for the Sys layer to call sim_recv for more messages.
-        recvHash[make_pair(tag, make_pair(t.src, t.dest))] = already_received_size - t.count;
-        assert(ehd->flowTag.child_flow_id == -1 && ehd->flowTag.current_flow_id == -1);
-        if(receiver_pending_queue.count(std::make_pair(std::make_pair(rank, src),tag))!= 0) {
-          AstraSim::ncclFlowTag pending_tag = receiver_pending_queue[std::make_pair(std::make_pair(rank, src),tag)];
-          receiver_pending_queue.erase(std::make_pair(std::make_pair(rank,src),tag));
-          ehd->flowTag = pending_tag;
-        }
+        //      but also wait for the Sys layer to call sim_recv for more messages.
+        recvHash[MsgEventKey{tag, {recv_event.src, recv_event.dest}}] = already_received_size - recv_event.count;
         #ifdef NS3_MTP
         ecs.ExitSection();
         #endif
@@ -187,40 +177,40 @@ public:
             NcclLogLevel::DEBUG,
             " [Message arrived early (more left), skip registering] recvHash had more bytes (%u) than expected for "
             "src %d, dst %d, tag %u, directly invoke handler for them: t.count %llu, tag %u, current_flow_id %d",
-            already_received_size, t.src, t.dest, tag, t.count, flowTag.current_flow_id);
-        t.msg_handler(t.fun_arg);
+            already_received_size, recv_event.src, recv_event.dest, tag, recv_event.count, ehd->flowTag.current_flow_id);
+        recv_event.msg_handler(recv_event.fun_arg);
         goto sim_recv_end_section;
       } else {
-        // 1.3) The node received less than what we expected. Reduce the number of bytes we are waiting to receive.
-        recvHash.erase(make_pair(tag, make_pair(t.src, t.dest)));
-        t.count -= already_received_size;
-        expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))] = t;
+        // 1.3) The node received less than what we expected.
+        //      Reduce the number of bytes we are waiting to receive and store the callback.
+        recvHash.erase(MsgEventKey{tag, {recv_event.src, recv_event.dest}});
+        recv_event.count -= already_received_size;
+        expeRecvHash[MsgEventKey{tag, {recv_event.src, recv_event.dest}}] = recv_event;
         NcclLog->writeLog(
             NcclLogLevel::DEBUG,
             " [Message arrived early (not enough), registering partial] recvHash had less bytes (%u) than expected"
             " for src %d, dest %d, tag %u; register the difference in expeRecvHash: t.count: %llu, current_flow_id %d",
-            t.src, t.dest, tag,
-            t.count, flowTag.current_flow_id);
+            recv_event.src, recv_event.dest, tag, recv_event.count, ehd->flowTag.current_flow_id);
       }
     } else {
       // 2) ns3 has not yet received anything.
-      if (expeRecvHash.find(make_pair(tag, make_pair(t.src, t.dest))) == expeRecvHash.end()) {
+      if (expeRecvHash.find(MsgEventKey{tag, {recv_event.src, recv_event.dest}}) == expeRecvHash.end()) {
         // 2.1) We have not been expecting anything so far.
-        expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))] = t;
+        expeRecvHash[MsgEventKey{tag, {recv_event.src, recv_event.dest}}] = recv_event;
         NcclLog->writeLog(
             NcclLogLevel::DEBUG,
             " [Message not arrived yet, registering] recvHash had no entry for src %d, dst %d, tag %u; register the"
             " message in expeRecvHash: t.count %llu, current_flow_id %d",
-            t.src, t.dest, tag, t.count, flowTag.current_flow_id);
+            recv_event.src, recv_event.dest, tag, recv_event.count, ehd->flowTag.current_flow_id);
       } else {
         // 2.2) We have already been expecting something. Increment the number of bytes we are waiting to receive.
-        uint64_t expecount = expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))].count;
+        uint64_t expecount = expeRecvHash[MsgEventKey{tag, {recv_event.src, recv_event.dest}}].count;
         NcclLog->writeLog(
             NcclLogLevel::DEBUG,
             " [Message not arrived yet, re-registering] recvHash had no entry for src %d, dst %d, tag %u, but we "
             "were already waiting %u bytes for it; updating the entry in expeRecvHash with %u additional bytes: "
-            "current_flow_id %d", t.src, t.dest, tag, expecount, t.count, flowTag.current_flow_id);
-        expeRecvHash[make_pair(tag, make_pair(t.src, t.dest))].count += t.count;
+            "current_flow_id %d", recv_event.src, recv_event.dest, tag, expecount, recv_event.count, ehd->flowTag.current_flow_id);
+        expeRecvHash[MsgEventKey{tag, {recv_event.src, recv_event.dest}}].count += recv_event.count;
       }
     }
     #ifdef NS3_MTP
@@ -229,8 +219,6 @@ public:
 
 sim_recv_end_section:
     return 0;
-  }
-  void handleEvent(int dst, int cnt) {
   }
 };
 
@@ -284,9 +272,9 @@ static int user_param_prase(const int argc, char* argv[], user_param* user_param
   return 0 ;
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
   user_param user_param;
-  if(user_param_prase(argc,argv,&user_param)){
+  if(user_param_prase(argc, argv, &user_param)) {
     return 0;
   }
   MockNcclLog::set_log_name("SimAI" + (user_param.run_name.empty() ? "" : "." + user_param.run_name) +".log");
@@ -307,7 +295,7 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < gpu_num; ++ i) {
     node2nvswitch[i] = gpu_num + i / gpus_per_server;
   }
-  for (int i = gpu_num; i < gpu_num + (int) nvswitch_num; ++ i) {
+  for (int i = gpu_num; i < gpu_num + nvswitch_num; ++ i) {
     node2nvswitch[i] = i;
     NVswitchs.push_back(i);
   } 
