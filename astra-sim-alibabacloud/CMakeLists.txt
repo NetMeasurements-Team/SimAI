@@ -25,18 +25,27 @@ file(GLOB ASTRA_SIM_HEADERS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/*.h"
 )
 
-if(SIMAI_MODE STREQUAL "analytical")
-    list(FILTER ASTRA_SIM_HEADERS EXCLUDE REGEX ".*SimAiFlowModelRdma\\.hh$")
-    list(FILTER ASTRA_SIM_SOURCES EXCLUDE REGEX ".*SimAiFlowModelRdma\\.cc$")
-    list(FILTER ASTRA_SIM_HEADERS EXCLUDE REGEX ".*BootStrapnet\\.hh$")
-    list(FILTER ASTRA_SIM_SOURCES EXCLUDE REGEX ".*BootStrapnet\\.cc$")
-    list(FILTER ASTRA_SIM_HEADERS EXCLUDE REGEX ".*PhyMultiThread\\.hh$")
-    list(FILTER ASTRA_SIM_SOURCES EXCLUDE REGEX ".*PhyMultiThread\\.cc$")
+if(SIMAI_MODE STREQUAL "phy")
+    file(GLOB PHY_COMMON_SOURCES CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/phy-common/*.cc"
+    )
+    file(GLOB PHY_COMMON_HEADERS CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/phy-common/*.hh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/phy-common/*.h"
+    )
+    list(APPEND ASTRA_SIM_SOURCES ${PHY_COMMON_SOURCES})
+    list(APPEND ASTRA_SIM_HEADERS ${PHY_COMMON_HEADERS})
 endif()
 
 add_library(AstraSim ${ASTRA_SIM_SOURCES} ${ASTRA_SIM_HEADERS})
 target_compile_features(AstraSim PUBLIC cxx_std_17)
 target_include_directories(AstraSim PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+
+if(NOT SIMAI_MODE STREQUAL "ns3")
+    find_package(LibXml2 REQUIRED)
+    include_directories(${LIBXML2_INCLUDE_DIR})
+    target_link_libraries(AstraSim PRIVATE LibXml2::LibXml2)
+endif()
 
 if(USE_RDMA)
     target_compile_definitions(AstraSim PRIVATE PHY_RDMA PHY_MTP)
@@ -48,3 +57,4 @@ endif()
 if(SIMAI_MODE STREQUAL "analytical")
     target_compile_definitions(AstraSim PRIVATE ANALYTI)
 endif()
+

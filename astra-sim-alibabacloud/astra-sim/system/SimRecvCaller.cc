@@ -13,7 +13,7 @@ SimRecvCaller::SimRecvCaller(
     int type,
     int src,
     int tag,
-    sim_request request,
+    sim_request* request,
     void (*msg_handler)(void* fun_arg),
     void* fun_arg) {
   this->generator = generator;
@@ -33,7 +33,7 @@ void SimRecvCaller::call(EventType type, CallData* data) {
       this->type,
       this->src,
       this->tag,
-      &this->request,
+      this->request,
       this->msg_handler,
       this->fun_arg);
   delete this;

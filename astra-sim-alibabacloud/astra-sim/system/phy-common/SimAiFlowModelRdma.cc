@@ -20,7 +20,7 @@
 
 #include "../AstraNetworkAPI.hh"
 #include "../MockNcclLog.h"
-#include "../SimAiFlowModelRdma.hh"
+#include "SimAiFlowModelRdma.hh"
 #include "BootStrapnet.hh"
 #include "PhyMultiThread.hh"
 

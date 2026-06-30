@@ -538,12 +538,12 @@ LayerData Layer::report(
   return layerData;
 }
 std::string getFileName(const std::string& path) {
-    size_t pos = path.find_last_of("/"); 
+    size_t pos = path.find_last_of("/");
     if (pos != std::string::npos) {
 
         return path.substr(pos + 1, path.length() - pos - 1);
     }
-    return path; 
+    return path;
 }
 LayerData Layer::report(
     std::string run_name,
@@ -580,34 +580,29 @@ LayerData Layer::report(
     weight_grad_group_size =
         weight_grad_group_type == MockNccl::GroupType::DP_EP ? DP_size / EP_size
                                                              : DP_size;
-  if(param->mode == ModeType::ANALYTICAL){
-    
+  if (param->mode == ModeType::ANALYTICAL) {
     total_fwd_comm = compute_time(fwd_pass_comm_type,TP_size,fwd_pass_group_size,fwd_pass_comm_size,fwd_pass_group_type,workload->all_gpus/PP_size,EP_size);
     total_weight_grad_comm = compute_time(weight_grad_comm_type,TP_size,weight_grad_group_size,weight_grad_comm_size,weight_grad_group_type,workload->all_gpus/PP_size,EP_size);
     total_input_grad_comm = compute_time(input_grad_comm_type,TP_size,input_grad_group_size,input_grad_comm_size,input_grad_group_type,workload->all_gpus/PP_size,EP_size);
     total_waiting_for_fwd_comm = total_fwd_comm; //tp forward
     total_waiting_for_ig_comm = total_input_grad_comm;  //tp backward
     total_waiting_for_wg_comm = total_weight_grad_comm;
-    
-
   }
   if (id != "embedding_layer"){
       pre_bubble_time += ((total_waiting_for_fwd_comm + total_forward_pass_compute + total_weight_grad_compute + total_input_grad_compute + total_waiting_for_ig_comm) / FREQ);
     }
-  if(weight_grad_group_type == MockNccl::GroupType::DP_EP){
+  if (weight_grad_group_type == MockNccl::GroupType::DP_EP) {
     total_waiting_for_wg_comm *= (1-param->net_work_param.dp_overlap_ratio);
     DP_EP_comm += (total_waiting_for_wg_comm / FREQ);
-  }
-  else{
+  } else {
     total_waiting_for_wg_comm *= (1-param->net_work_param.dp_overlap_ratio);
     DP_comm += (total_waiting_for_wg_comm / FREQ);
   }
-  if(fwd_pass_group_type == MockNccl::GroupType::EP){
+  if (fwd_pass_group_type == MockNccl::GroupType::EP) {
     total_waiting_for_fwd_comm *= (1-param->net_work_param.ep_overlap_ratio);
     total_waiting_for_ig_comm *= (1-param->net_work_param.ep_overlap_ratio);
     Expose_EP_comm += ((total_waiting_for_fwd_comm + total_waiting_for_ig_comm) / FREQ);
-  }
-  else{
+  } else {
     total_waiting_for_fwd_comm *= (1-param->net_work_param.tp_overlap_ratio);
     total_waiting_for_ig_comm *= (1-param->net_work_param.tp_overlap_ratio);
     Expose_TP_comm += ((total_waiting_for_fwd_comm + total_waiting_for_ig_comm) / FREQ);
@@ -640,7 +635,7 @@ LayerData Layer::report(
   #ifdef NS3_MPI
   if (seprate_log)
   #else
-  if (seprate_log) 
+  if (seprate_log)
   #endif
   {
     std::string data;
@@ -788,14 +783,14 @@ LayerData Layer::report(
 
       std::string chart_path = EndToEnd->path;
       std::ofstream htmlFile(chart_path + "chart.html");
-      std::string file_name = getFileName(chart_path); 
+      std::string file_name = getFileName(chart_path);
       htmlFile << "<!DOCTYPE html>\n";
       htmlFile << "<html>\n<head>\n";
       htmlFile << "<script src=\"https://cdn.jsdelivr.net/npm/chart.js\"></script>\n";
       htmlFile << "<style>\n";
       htmlFile << "body { display: flex; flex-direction: column; justify-content: center; align-items: center; height: 50vh; margin: 0; padding-top: 10%; }\n";
-      htmlFile << "canvas { width: 50%; max-width: 400px; height: auto; }\n"; 
-      htmlFile << "h2 { margin: 5px 0; }\n"; 
+      htmlFile << "canvas { width: 50%; max-width: 400px; height: auto; }\n";
+      htmlFile << "h2 { margin: 5px 0; }\n";
       htmlFile << "</style>\n";
       htmlFile << "</head>\n<body>\n";
       htmlFile << "<canvas id=\"myPieChart\"></canvas>\n";
@@ -846,8 +841,6 @@ LayerData Layer::report(
       htmlFile.close();
       std::cout << "HTML file created" << std::endl;
     }
-
-      
     }
   } 
 
@@ -950,7 +943,6 @@ Tick Layer::compute_time(
   if (comtype == ComType::None) {
     return 0;
   }
-
 
     int n_ranks;
     int nnics;
@@ -1232,7 +1224,7 @@ void Layer::issue_forward_pass_comm(
 void Layer::issue_input_grad_comm(
     SchedulingPolicy pref_scheduling,
     CollectiveBarrier barrier) {
-  MockNcclLog* NcclLog = MockNcclLog::getInstance();  
+  MockNcclLog* NcclLog = MockNcclLog::getInstance();
   #ifdef ANALYTI
   ig_barrier = barrier;
   if (generator->id == 0){
@@ -1245,7 +1237,7 @@ void Layer::issue_input_grad_comm(
         "input grad collective for layer-id %d is analytical ",
         layer_num);
   }
-    
+
   if (barrier == CollectiveBarrier::Blocking) {
     workload->call(EventType::General, NULL);
   }

@@ -35,7 +35,18 @@ static void
 notify_receiver_receive_data(int sender_node, int receiver_node,
                                   uint64_t message_size, AstraSim::ncclFlowTag flowTag) {
   AstraSim::StreamBaseline* owner = global_sys->running_list.front();
-  AstraSim::RecvPacketEventHadndlerData *ehd = new AstraSim::RecvPacketEventHadndlerData(owner, AstraSim::EventType::PacketReceived, flowTag);
+  AstraSim::RecvPacketEventHadndlerData *ehd = new AstraSim::RecvPacketEventHadndlerData(
+      owner,
+      flowTag.sender_node,
+      flowTag.receiver_node,
+      flowTag.tag_id,
+      AstraSim::EventType::PacketReceived,
+      0, // vnet
+      1  // stream_num
+  );
+  ehd->channel_id = flowTag.channel_id;
+  ehd->flow_id = flowTag.current_flow_id;
+  ehd->child_flow_id = flowTag.child_flow_id;
   owner->consume(ehd);
 }
 
@@ -48,11 +59,15 @@ notify_sender_sending_finished(int sender_node, int receiver_node,
     owner,
     flowTag.sender_node,
     flowTag.receiver_node,
-    flowTag.channel_id,
+    flowTag.tag_id,
     AstraSim::EventType::PacketSentFinshed);
-    send_ehd->flowTag = flowTag;
+  send_ehd->channel_id = flowTag.channel_id;
+  send_ehd->flow_id = flowTag.current_flow_id;
+  send_ehd->child_flow_id = flowTag.child_flow_id;
+  send_ehd->chunk_id = flowTag.chunk_id;
+  send_ehd->nvls_on = flowTag.nvls_on;
   NcclLog->writeLog(NcclLogLevel::DEBUG,"notify_sender_sending_finished_test src %d dst %d channe_id %d flow_id %d",flowTag.sender_node,flowTag.receiver_node,flowTag.channel_id,flowTag.channel_id);
-  owner->sendcallback(send_ehd);                       
+  owner->sendcallback(send_ehd);
 }
 
 static void 
@@ -86,30 +101,26 @@ void set_simai_network_callback(){
 void send_flow(int src, int dst, uint64_t maxPacketCount,
               void (*msg_handler)(void *fun_arg), void *fun_arg, int tag, AstraSim::sim_request *request) {
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
-  AstraSim::ncclFlowTag flowtag = request->flowTag;
+  AstraSim::SendPacketEventHandlerData* snd_ehd = static_cast<AstraSim::SendPacketEventHandlerData*>(fun_arg);
   TransportData send_data = TransportData(
-      flowtag.channel_id,
-      flowtag.chunk_id,
-      flowtag.current_flow_id,
-      flowtag.child_flow_id,
-      flowtag.sender_node,
-      flowtag.receiver_node,
-      flowtag.flow_size,
-      flowtag.tag_id,
-      flowtag.nvls_on);
-  send_data.child_flow_size = flowtag.tree_flow_list.size();
-  for (int i = 0; i < flowtag.tree_flow_list.size(); i++) {
-    send_data.child_flow_list[i] = flowtag.tree_flow_list[i];
-  }
+      snd_ehd->channel_id,
+      snd_ehd->chunk_id,
+      snd_ehd->flow_id,
+      snd_ehd->child_flow_id,
+      snd_ehd->senderNodeId,
+      snd_ehd->receiverNodeId,
+      maxPacketCount,
+      tag,
+      snd_ehd->nvls_on);
   NcclLog->writeLog(
       NcclLogLevel::DEBUG,
       "SendPackets %d SendFlow to %d channelid: %d flow_id: %d size: %lu tag_id %d",
       src,
       dst,
       tag,
-      flowtag.current_flow_id,
+      snd_ehd->flow_id,
       maxPacketCount,
-      request->flowTag.tag_id);
+      tag);
   #ifdef PHY_RDMA
   flow_rdma.simai_ibv_post_send(
       tag,
@@ -118,7 +129,7 @@ void send_flow(int src, int dst, uint64_t maxPacketCount,
       &send_data,
       sizeof(struct TransportData),
       maxPacketCount,
-      flowtag.chunk_id);
+      snd_ehd->chunk_id);
   #endif
 }
 

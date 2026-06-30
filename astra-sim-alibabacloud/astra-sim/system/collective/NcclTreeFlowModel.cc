@@ -136,11 +136,11 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
   } else if (event == EventType::PacketReceived) {
     auto rcv_ehd = static_cast<RecvPacketEventHadndlerData*>(ehd);
     auto& received_flow = _flow_models[std::make_pair(rcv_ehd->channel_id, rcv_ehd->flow_id)];
-    std::vector<int> next_flow_list =  received_flow.child_flow_id;
+    std::vector<int> next_flow_list = received_flow.child_flow_id;
 
 #ifdef PHY_MTP
     recv_packets--;
-    if (!phy_iteratable(channel_id)) {
+    if (!phy_iteratable(received_flow.channel_id)) {
       return;
     }
 #else
@@ -202,7 +202,7 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
 #ifdef PHY_MTP
     for (int next_flow_id : next_flow_list) {
       if (--indegree_mapping[next_flow_id] == 0) {
-       ready(channel_id, next_flow_id);
+       ready(received_flow.channel_id, next_flow_id);
       }
     }
 #else
@@ -328,7 +328,7 @@ void NcclTreeFlowModel::run(EventType event, CallData* data) {
       exit();
     }
     #else
-    phy_iteratable(channel_id);
+    phy_iteratable(sent_flow.channel_id);
     #endif
   }
 }
@@ -407,9 +407,6 @@ bool NcclTreeFlowModel::recv_ready(int channel_id, int flow_id) {
       source_flow = flow_model;
     }
 
-    // FIXME this is never used
-    sim_request rcv_req;
-
     // init the event handler
     auto* rcv_ehd = new RecvPacketEventHadndlerData(
         stream,
@@ -431,7 +428,7 @@ bool NcclTreeFlowModel::recv_ready(int channel_id, int flow_id) {
         UINT8,
         data_source,
         rcv_ehd->tag,
-        &rcv_req,
+        nullptr,
         &Sys::handleEvent,
         rcv_ehd);
   }
@@ -619,9 +616,6 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
       source_flow = flow_model;
     }
 
-    // FIXME this is never used
-    sim_request rcv_req;
-
     // init the event handler
     auto* ehd = new RecvPacketEventHadndlerData(
         stream,
@@ -650,7 +644,7 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
           UINT8,
           data_source,
           ehd->tag,
-          &rcv_req,
+          nullptr,
           &Sys::handleEvent,
           ehd);
     }
@@ -673,24 +667,14 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
   snd_ehd->chunk_id = flow_model.chunk_id;
   snd_ehd->nvls_on = comType == ComType::All_Reduce_NVLS;
 
-  // TODO This is used only by the physical frontend
-  sim_request snd_req;
-  snd_req.srcRank = id;
-  snd_req.dstRank = flow_model.dest;
-  snd_req.tag = snd_ehd->tag;
-  snd_req.reqType = UINT8;
-  snd_req.vnet = stream->current_queue_id;
-  snd_req.layerNum = layer_num;
-  snd_req.reqCount = flow_model.flow_size;
-
   stream->owner->front_end_sim_send(
       0,
       Sys::dummy_data,
-      snd_req.reqCount,
+      flow_model.flow_size,
       UINT8,
       flow_model.dest,
       snd_ehd->tag,
-      &snd_req,
+      nullptr,
       &Sys::handleEvent,
       snd_ehd);
   return true;

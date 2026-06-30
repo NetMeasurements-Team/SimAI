@@ -17,8 +17,8 @@
 #include <atomic>
 
 #include "../MockNcclLog.h"
-#include "../PhyMultiThread.hh"
-#include "../SimAiFlowModelRdma.hh"
+#include "PhyMultiThread.hh"
+#include "SimAiFlowModelRdma.hh"
 
 extern FlowPhyRdma flow_rdma; 
 
@@ -54,10 +54,6 @@ insert_recv_cqe(void* buff) {
       ptrrecvdata->tag_id,
       ptrrecvdata->nvls_on);
     NcclLog->writeLog(NcclLogLevel::DEBUG,"PhyMultiThread.cc::insert_recv_cqe src_id %d dst_id %d flow_id %d channel_id %d",flowTag.sender_node,flowTag.receiver_node,flowTag.current_flow_id,flowTag.channel_id);
-    flowTag.tree_flow_list.clear();
-    for(int i =0;i<ptrrecvdata->child_flow_size;i++){
-        flowTag.tree_flow_list.push_back(ptrrecvdata->child_flow_list[i]);
-    }
     receive_finished_callback(flowTag);
 }
 
@@ -76,10 +72,6 @@ insert_send_cqe(void* buff) {
       ptrrecvdata->tag_id,
       ptrrecvdata->nvls_on);
     NcclLog->writeLog(NcclLogLevel::DEBUG,"PhyMultiThread.cc::insert_send_cqe src_id %d dst_id %d flow_id %d channel_id %d",flowTag.sender_node,flowTag.receiver_node,flowTag.current_flow_id,flowTag.channel_id);
-    flowTag.tree_flow_list.clear();
-    for(int i =0;i<ptrrecvdata->child_flow_size;i++){
-        flowTag.tree_flow_list.push_back(ptrrecvdata->child_flow_list[i]);
-    }
     send_finished_callback(flowTag);
 }
 

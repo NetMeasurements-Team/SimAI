@@ -31,7 +31,6 @@
 
 using namespace std;
 
-extern std::map<std::pair<std::pair<int, int>,int>, AstraSim::ncclFlowTag> receiver_pending_queue;
 extern uint32_t node_num, switch_num, link_num, trace_num, nvswitch_num, gpus_per_server;
 extern std::string gpu_type;
 extern std::vector<int>NVswitchs;

@@ -14,7 +14,7 @@ RendezvousSendData::RendezvousSendData(
     int type,
     int dst,
     int tag,
-    sim_request request,
+    sim_request* request,
     void (*msg_handler)(void* fun_arg),
     void* fun_arg)
     : BasicEventHandlerData(generator, EventType::RendezvousSend) {

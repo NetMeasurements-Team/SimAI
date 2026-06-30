@@ -18,7 +18,6 @@ struct ncclFlowTag {
   int sender_node;
   int receiver_node;
   uint64_t flow_size;
-  void* pQps;
   size_t tag_id;
   [[deprecated("children are read directly from _flow_models, no need to set this")]]
   std::vector<int> tree_flow_list;
@@ -31,7 +30,6 @@ struct ncclFlowTag {
   sender_node(-1),
   receiver_node(-1),
   flow_size(-1),
-  pQps(nullptr),
   tag_id(-1),
   nvls_on(false){};
   ncclFlowTag(
@@ -42,7 +40,6 @@ struct ncclFlowTag {
       int _sender_node,
       int _receiver_node,
       uint64_t _flow_size,
-      void* _pQps,
       int _tag_id,
       bool _nvls_on)
       : channel_id(_channel_id),
@@ -52,7 +49,6 @@ struct ncclFlowTag {
         sender_node(_sender_node),
         receiver_node(_receiver_node),
         flow_size(_flow_size),
-        pQps(_pQps),
         tag_id(_tag_id),
         nvls_on(_nvls_on) {};
   ~ncclFlowTag() {};

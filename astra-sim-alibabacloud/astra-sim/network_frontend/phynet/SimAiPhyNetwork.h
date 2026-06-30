@@ -19,7 +19,7 @@
 
 using namespace std;
 
-class SimAiPhyNetWork: public AstraSim::AstraNetworkAPI{
+class SimAiPhyNetWork : public AstraSim::AstraNetworkAPI {
 private:
   int npu_offset;
 public:
