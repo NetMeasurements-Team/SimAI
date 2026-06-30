@@ -415,8 +415,8 @@ bool NcclTreeFlowModel::recv_ready(int channel_id, int flow_id) {
         stream,
         source_flow.src,
         id,
-        layer_num * flow_model.chunk_count * m_channels +
-        flow_model.chunk_count * flow_model.channel_id
+        layer_num * flow_model.chunk_count * m_channels
+          + flow_model.chunk_count * flow_model.channel_id
           + flow_model.chunk_id,
         EventType::PacketReceived,
         data_source,
@@ -627,8 +627,8 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
         stream,
         source_flow.src,
         id,
-        layer_num * flow_model.chunk_count * m_channels +
-        source_flow.chunk_count * source_flow.channel_id
+        layer_num * flow_model.chunk_count * m_channels
+          + source_flow.chunk_count * source_flow.channel_id
           + source_flow.chunk_id,
         EventType::PacketReceived,
         #ifndef PHY_RDMA
@@ -665,11 +665,12 @@ bool NcclTreeFlowModel::ready(int channel_id, int flow_id) {
       id,
       flow_model.dest,
       layer_num * flow_model.chunk_count * m_channels
-      + flow_model.channel_id * flow_model.chunk_count
-      + flow_model.chunk_id,
+        + flow_model.channel_id * flow_model.chunk_count
+        + flow_model.chunk_id,
       EventType::PacketSentFinshed);
-  snd_ehd->flow_id = flow_id;
+  snd_ehd->flow_id = flow_model.flow_id;
   snd_ehd->channel_id = channel_id;
+  snd_ehd->chunk_id = flow_model.chunk_id;
   snd_ehd->nvls_on = comType == ComType::All_Reduce_NVLS;
 
   // TODO This is used only by the physical frontend

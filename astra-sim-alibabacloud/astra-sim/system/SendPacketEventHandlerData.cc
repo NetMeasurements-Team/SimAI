@@ -15,6 +15,7 @@ SendPacketEventHandlerData::SendPacketEventHandlerData(
   this->receiverNodeId = receiverNodeId;
   this->tag = tag;
   this->child_flow_id = -2;
+  this->chunk_id = -1;
 };
 
 SendPacketEventHandlerData::SendPacketEventHandlerData(
@@ -30,6 +31,7 @@ SendPacketEventHandlerData::SendPacketEventHandlerData(
   this->tag = tag;
   this->channel_id = -1;
   this->child_flow_id = -1;
+  this->chunk_id = -1;
 }
 
 } // namespace AstraSim
