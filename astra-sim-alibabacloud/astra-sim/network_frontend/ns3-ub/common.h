@@ -197,8 +197,7 @@ inline int SetupUBNetwork(
             
             // Attach UbApp to GPU (DEVICE) nodes for AstraSim traffic injection
             Ptr<UbApp> app = CreateObject<UbApp>();
-            // app->TraceConnectWithoutContext("WqeTaskCompletesNotify", MakeCallback(ub_task_completed_callback));
-            app->TraceConnectWithoutContext("WqeTaskCompletesNotify", MakeBoundCallback(ub_task_completed_callback, fct_output)); //TODO, does not work
+            app->TraceConnectWithoutContext("WqeTaskCompletesNotify", MakeBoundCallback(ub_task_completed_callback, fct_output));
 
             node->AddApplication(app);
 

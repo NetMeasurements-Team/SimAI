@@ -165,7 +165,9 @@ inline void ub_task_completed_callback(FILE* fout, uint32_t nodeId, uint32_t jet
                 auto cb = r.msg_handler;
                 auto arg = r.fun_arg;
                 expeRecvHash.erase(key);
-                if (cb) cb(arg);
+                if (cb) {
+                    Simulator::ScheduleWithContext(ctx.dst, NanoSeconds(0), cb, arg);
+                }
             } else {
                 r.remaining_bytes -= ctx.remaining_bytes;
             }

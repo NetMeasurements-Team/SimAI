@@ -52,6 +52,8 @@ int ASTRASimNetwork::sim_send(void* /*buffer*/, uint64_t message_size, int /*typ
                                AstraSim::sim_request* /*request*/,
                                void (*msg_handler)(void* fun_arg), void* fun_arg) {
     int actual_dst = dst + npu_offset;
+    MockNcclLog* NcclLog = MockNcclLog::getInstance();
+    NcclLog->writeLog(NcclLogLevel::DEBUG, " sim_send to %d  from %d", dst, rank);
 
     {
 #ifdef NS3_MTP
@@ -60,54 +62,79 @@ int ASTRASimNetwork::sim_send(void* /*buffer*/, uint64_t message_size, int /*typ
         MsgEvent send_event(rank, actual_dst, 0, message_size, msg_handler, fun_arg, tag);
         sentHash[MsgEventKey{tag, {send_event.src, send_event.dst}}] = send_event;
     }
-
-    ub_send_flow(rank, actual_dst, message_size, tag, msg_handler, fun_arg);
+    
+    int send_lat = 2;
+    Simulator::ScheduleWithContext(rank, Time(send_lat+1), ub_send_flow, rank, actual_dst, message_size, tag, msg_handler, fun_arg);
+    
     return 0;
 }
 
-int ASTRASimNetwork::sim_recv(void* /*buffer*/, uint64_t count, int /*type*/,
+int ASTRASimNetwork::sim_recv(void* /*buffer*/, uint64_t message_size, int /*type*/,
                                int src, int tag,
                                AstraSim::sim_request* /*request*/,
                                void (*msg_handler)(void* fun_arg), void* fun_arg) {
     int actual_src = src + npu_offset;
 
-    MsgEvent t(actual_src, rank, 1, count, msg_handler, fun_arg, tag);
-
+    MsgEvent recv_event(actual_src, rank, 1, message_size, msg_handler, fun_arg, tag);
+    const auto ehd = static_cast<AstraSim::RecvPacketEventHadndlerData*>(recv_event.fun_arg);
     MsgEventKey key = {tag, {actual_src, rank}};
 
-    {
-#ifdef NS3_MTP
-        MtpInterface::ExplicitCriticalSection ecs;
-#endif
-        if (recvHash.count(key)) {
-            uint64_t arrived = recvHash[key];
-            if (arrived == count) {
-                recvHash.erase(key);
-#ifdef NS3_MTP
-                ecs.ExitSection();
-#endif
-                msg_handler(fun_arg);
-            } else if (arrived > count) {
-                recvHash[key] = arrived - count;
-#ifdef NS3_MTP
-                ecs.ExitSection();
-#endif
-                msg_handler(fun_arg);
-            } else {
-                // Partial arrival — consume and keep waiting for remainder
-                recvHash.erase(key);
-                t.remaining_bytes -= arrived;
-                expeRecvHash[key] = t;
-            }
-        } else {
-            if (!expeRecvHash.count(key)) {
-                expeRecvHash[key] = t;
-            } else {
-                expeRecvHash[key].remaining_bytes += count;
-            }
-        }
-    }
+    MockNcclLog* NcclLog = MockNcclLog::getInstance();
+    NcclLog->writeLog(
+        NcclLogLevel::DEBUG,
+        "[Receive event registration] src %d sim_recv on rank %d tag %u channel id %d (flow_id %u)",
+        actual_src, rank, tag, ehd->channel_id, ehd->flow_id);
 
+
+#ifdef NS3_MTP
+    MtpInterface::ExplicitCriticalSection ecs;
+#endif
+    if (recvHash.count(key)) {
+        uint64_t arrived = recvHash[key];
+        if (arrived == message_size) {
+            recvHash.erase(key);
+#ifdef NS3_MTP
+            ecs.ExitSection();
+#endif
+            NcclLog->writeLog(
+            NcclLogLevel::DEBUG,
+                " [Message arrived early, skip registering] recvHash already had the expected bytes for src %d, dst %d,"
+                " tag %u; directly invoke handler: t.message_size %llu, tag %u, flow_id %d",
+                recv_event.src, recv_event.dst, tag, message_size, ehd->flow_id);
+            recv_event.callHandler();
+            return 0;
+        } else if (arrived > message_size) {
+            recvHash[key] = arrived - message_size;
+#ifdef NS3_MTP
+            ecs.ExitSection();
+#endif
+            NcclLog->writeLog(
+            NcclLogLevel::DEBUG,
+                " [Message arrived early (more left), skip registering] recvHash had more bytes (%u) than expected for "
+                "src %d, dst %d, tag %u, directly invoke handler for them: t.message_size %llu, tag %u, flow_id %d",
+                arrived, recv_event.src, recv_event.dst, tag, message_size, ehd->flow_id);
+            recv_event.callHandler();
+            return 0;
+        } else {
+            // Partial arrival — consume and keep waiting for remainder
+            recvHash.erase(key);
+            recv_event.remaining_bytes -= arrived;
+            expeRecvHash[key] = recv_event;
+        }
+    } else if (!expeRecvHash.count(key)){ 
+        expeRecvHash[key] = recv_event;
+        NcclLog->writeLog(
+            NcclLogLevel::DEBUG,
+            " [Message not arrived yet, registering] recvHash had no entry for src %d, dst %d, tag %u; register the"
+            " message in expeRecvHash: t.message_size %llu, flow_id %d",
+            recv_event.src, recv_event.dst, tag, message_size, ehd->flow_id);
+    }
+    else 
+            expeRecvHash[key].remaining_bytes += message_size;
+
+#ifdef NS3_MTP
+    ecs.ExitSection();
+#endif
     return 0;
 }
 
@@ -148,6 +175,8 @@ int main(int argc, char* argv[]) {
 
 #ifdef NS3_MTP
     MtpInterface::Enable(param.thread);
+    if (param.thread == 1) 
+        GlobalValue::Bind("PartitionSchedulingMethod", StringValue ("ByPendingEventCount"));
 #endif
 
     // --- Build UB network from SimAI topology file (no UbUtils) ---
@@ -156,6 +185,11 @@ int main(int argc, char* argv[]) {
         std::cerr << "[UB] ERROR: Network setup failed or zero GPU nodes found.\n";
         return 1;
     }
+
+    LogComponentEnable("SIMAI_UB_SIMULATION", LOG_LEVEL_INFO);
+    LogComponentEnable("UbApp", LOG_LEVEL_INFO);
+    LogComponentEnable("UbTrafficGen", LOG_LEVEL_INFO);
+    LogComponentEnable("UbTransportChannel", LOG_LEVEL_INFO);
 
     // --- Derive Sys parameters from the parsed topology ---
     //
@@ -245,7 +279,7 @@ int main(int argc, char* argv[]) {
         systems[j]->num_gpus = nodes_num;
     }
     
-    // --- Manual connectivity test
+    // --- Uncomment the following for a Manual connectivity test 
     // ns3::Simulator::Schedule(ns3::NanoSeconds(100), []() {
     //     std::cout << "[DEBUG] Injecting a 4096-byte flow from GPU 0 to GPU 1..." << std::endl;
 
@@ -255,7 +289,7 @@ int main(int argc, char* argv[]) {
     //         ns3::Simulator::Stop();
     //     };
 
-    //     ub_send_flow(/*src=*/0, /*dst=*/127, /*count=*/8192, /*tag=*/999, completion_cb, nullptr);
+    //     ub_send_flow(/*src=*/0, /*dst=*/127, /*count=*/4096, /*tag=*/999, completion_cb, nullptr);
     // });
 
     // ns3::Simulator::Schedule(ns3::MilliSeconds(100), []() {
@@ -265,13 +299,16 @@ int main(int argc, char* argv[]) {
 
 
     // --- Fire workloads ---
-    // for (int i = 0; i < nodes_num; i++)
-    //     systems[i]->workload->fire();
+    for (int i = 0; i < nodes_num; i++)
+        systems[i]->workload->fire();
 
     std::cout << "[UB] Running simulation..." << std::endl;
     Simulator::Stop(Seconds(simulator_stop_time));
     Simulator::Run();
     Simulator::Destroy();
 
+    #ifdef NS3_MPI
+    MpiInterface::Disable();
+    #endif
     return 0;
 }
