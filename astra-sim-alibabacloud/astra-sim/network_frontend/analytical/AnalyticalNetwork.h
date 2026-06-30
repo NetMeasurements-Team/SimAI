@@ -19,7 +19,7 @@
 
 using namespace std;
 
-class AnalyticalNetWork: public AstraSim::AstraNetworkAPI{
+class AnalyticalNetWork : public AstraSim::AstraNetworkAPI {
 private:
   int npu_offset;
 public:

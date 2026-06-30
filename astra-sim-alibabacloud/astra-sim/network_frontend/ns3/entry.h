@@ -22,23 +22,18 @@
 #include <fstream>
 #include <iostream>
 #include <map>
-#include <time.h>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include <ns3/applications-module.h>
 #include <ns3/core-module.h>
-#include <ns3/point-to-point-helper.h>
 #include <ns3/rdma-client-helper.h>
-#include <ns3/rdma-driver.h>
-#include <ns3/sim-setting.h>
 #ifdef NS3_MTP
   #include <ns3/mtp-interface.h>
 #endif
 
 #include "astra-sim/system/MockNcclLog.h"
-#include "astra-sim/system/AstraNetworkAPI.hh"
 #include "common.h"
 
 using namespace ns3;
