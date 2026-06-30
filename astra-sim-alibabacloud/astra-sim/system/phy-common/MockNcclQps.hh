@@ -15,8 +15,8 @@
 #ifndef __MOCKNCCLQPS_H__
 #define __MOCKNCCLQPS_H__
 
-#include<map>
-#include<queue>
+#include <map>
+#include <queue>
 
 namespace MockNccl {
 typedef std::map<std::pair<int, std::pair<int, int>>, std::queue<int>>
@@ -26,7 +26,8 @@ typedef std::map<std::pair<int, std::pair<int, int>>, int>
 
 /**
  * TODO: this was mocked inside NcclTreeFlowModel before, but it should be done by the network backend instead
- *  (like the ns3 backend does after introducing qp reuse)
+ *  (like the ns3 backend does after introducing qp reuse).
+ *  Check if physical and analytical work as expected.
  */
 class NcclQps {
 public:

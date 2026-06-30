@@ -16,9 +16,7 @@
 #ifndef __PHYSIMAI_HH__
 #define __PHYSIMAI_HH__
 
-#include<iostream>
-#include<queue>
-#include<list>
+#include <queue>
 
 using namespace std;
 

@@ -1,4 +1,4 @@
-/* 
+/*
 *Copyright (c) 2024, Alibaba Group;
 *Licensed under the Apache License, Version 2.0 (the "License");
 *you may not use this file except in compliance with the License.
@@ -12,16 +12,17 @@
 *See the License for the specific language governing permissions and
 *limitations under the License.
 */
-#include<thread>
-#include<sys/socket.h>
-#include<sys/ioctl.h>
+#include <arpa/inet.h>
 #include <linux/if.h>
 #include <mpi.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <thread>
+#include <unistd.h>
 
 #include "../AstraNetworkAPI.hh"
 #include "../MockNcclLog.h"
 #include "SimAiFlowModelRdma.hh"
-#include "BootStrapnet.hh"
 #include "PhyMultiThread.hh"
 
 #define IB_PORT 1

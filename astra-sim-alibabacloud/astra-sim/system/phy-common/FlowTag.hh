@@ -1,7 +1,8 @@
 #ifndef __SIMAI_FLOWTAG_HH__
 #define __SIMAI_FLOWTAG_HH__
-#include <stddef.h>
-#include <stdint.h>
+
+#include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace AstraSim {

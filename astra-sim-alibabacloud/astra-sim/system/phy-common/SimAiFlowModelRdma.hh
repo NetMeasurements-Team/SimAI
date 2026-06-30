@@ -14,26 +14,10 @@
 */
 #ifndef __SIMAI_FLOWMODELIBV_HH__
 #define __SIMAI_FLOWMODELIBV_HH__
-#include <stdio.h>
-#include <errno.h>
-#include <stdarg.h>
-#include <string.h>
-#include <stddef.h>
-#include <setjmp.h>
-#include <stdlib.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <sys/stat.h>
+
 #include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <assert.h>
-#include <getopt.h>
-#include<map>
-#include<vector>
-#include<string>
+#include <map>
+#include <vector>
 #include <infiniband/verbs.h>
 
 #include "SimAiPhyCommon.hh"

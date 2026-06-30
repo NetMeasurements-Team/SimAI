@@ -25,6 +25,7 @@
 #include"astra-sim/system/StreamBaseline.hh"
 
 #include"SimAiEntry.h"
+
 using namespace std;
 
 extern FlowPhyRdma flow_rdma;

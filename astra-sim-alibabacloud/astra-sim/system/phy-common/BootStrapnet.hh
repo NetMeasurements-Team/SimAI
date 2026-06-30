@@ -15,9 +15,6 @@
 
 #ifndef __SIMAI_BOOTSTRAPNET_HH__
 #define __SIMAI_BOOTSTRAPNET_HH__
-#include<map>
-#include<string>
-#include <mpi.h>
 
 using namespace std;
 
