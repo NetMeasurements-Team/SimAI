@@ -306,6 +306,13 @@ inline void ComputeAndInstallRouting() {
         q.push(src);
         while (!q.empty()) {
             uint32_t u = q.front(); q.pop();
+
+            // End-hosts (DEVICE nodes) should not act as transit routers,
+            // do not expand neighbors of a DEVICE node unless it is the source node.
+            if (ub_node_type_vec[u] == 0 /*DEVICE*/ && u != src) {
+                continue;
+            }
+
             for (auto& adj : ub_adj[u]) {
                 if (dist[src][adj.neighbor] == UINT32_MAX) {
                     dist[src][adj.neighbor] = dist[src][u] + 1;
@@ -342,11 +349,45 @@ inline void ComputeAndInstallRouting() {
             uint32_t destNodeIp  = NodeIdToIp(dst).Get();
             rt->AddShortestRoute(destNodeIp, shortest_outports);
 
-            // Also install per-port entries for each port on the destination node
+            // Also install per-port entries for each port on the destination node.
+            // NOTE: A specific port p on the destination node dst is only reachable if the path
+            // ends at the specific neighbor (last-hop switch) connected to that port.
             uint32_t n_dst_ports = NodeList::GetNode(dst)->GetNDevices();
             for (uint32_t p = 0; p < n_dst_ports; p++) {
                 uint32_t destPortIp = NodeIdToIp(dst, p).Get();
-                rt->AddShortestRoute(destPortIp, shortest_outports);
+                
+                // Find the neighbor of dst connected to port p
+                uint32_t last_hop = UINT32_MAX;
+                for (auto& adj : ub_adj[dst]) {
+                    if (adj.outport == p) {
+                        last_hop = adj.neighbor;
+                        break;
+                    }
+                }
+                
+                if (last_hop == UINT32_MAX) continue;
+                // Collect next-hop outports from src toward last_hop
+                std::vector<uint16_t> port_shortest_outports;
+                if (src == last_hop) {
+                    // Next-hop is dst, find the outport on src towards dst
+                    for (auto& adj : ub_adj[src]) {
+                        if (adj.neighbor == dst) {
+                            std::cout << src << ":" << adj.outport << std::endl;
+                            port_shortest_outports.push_back(adj.outport);
+                        }
+                    }
+                } else {
+                    for (auto& adj : ub_adj[src]) {
+                        uint32_t nbr = adj.neighbor;
+                        if (dist[nbr][last_hop] != UINT32_MAX && dist[nbr][last_hop] == dist[src][last_hop] - 1) {
+                            port_shortest_outports.push_back(adj.outport);
+                        }
+                    }
+                }
+                
+                if (!port_shortest_outports.empty()) {
+                    rt->AddShortestRoute(destPortIp, port_shortest_outports);
+                }
             }
             route_count++;
         }

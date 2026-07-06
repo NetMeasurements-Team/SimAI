@@ -37,6 +37,7 @@ public:
   void (*msg_handler)(void *fun_arg);
   void *fun_arg;
   int tag;
+  int flow_id;
   double schTime;
 
   MsgEvent(
@@ -47,11 +48,12 @@ public:
       void (*_msg_handler)(void* fun_arg),
       void* _fun_arg,
       const int _tag = 0,
+      const int _flow_id = 0,
       const double _schTime = 0) :
       src(_src), dst(_dst), type(_type), remaining_bytes(_remaining_msg_bytes),
-      msg_handler(_msg_handler), fun_arg(_fun_arg), tag(_tag), schTime(_schTime) {}
+      msg_handler(_msg_handler), fun_arg(_fun_arg), tag(_tag), flow_id(_flow_id), schTime(_schTime) {}
 
-  MsgEvent() : src(0), dst(0), type(0), remaining_bytes(0), msg_handler(nullptr), fun_arg(nullptr), tag(0), schTime(0) {}
+  MsgEvent() : src(0), dst(0), type(0), remaining_bytes(0), msg_handler(nullptr), fun_arg(nullptr), tag(0), flow_id(0), schTime(0) {}
 
   void callHandler() const {
     if (msg_handler) msg_handler(fun_arg);
@@ -64,6 +66,12 @@ public:
  */
 typedef pair<int, pair<int, int>> MsgEventKey;
 
+/**
+ * FlowIdKey is a key to uniquely identify a flow
+ *  - Pair <flow_id, Pair <src_id, dst_id>>
+ */
+typedef pair<int, pair<int, int>> FlowIdKey;
+
 // Pending UB send tasks: taskId → task context
 inline std::map<uint32_t, MsgEvent> pending_ub_tasks;
 inline uint32_t global_ub_task_id = 1;
@@ -71,6 +79,44 @@ inline uint32_t global_ub_task_id = 1;
 inline std::map<MsgEventKey, MsgEvent>    expeRecvHash;    // waiting for data to arrive
 inline std::map<MsgEventKey, uint64_t>    recvHash;        // data arrived before sim_recv
 inline std::map<MsgEventKey, MsgEvent>    sentHash;        // outstanding sends
+
+inline std::map<FlowIdKey, int> waiting_to_sent_callback;
+inline std::map<FlowIdKey, int> waiting_to_notify_receiver;
+inline std::map<FlowIdKey, int> waiting_to_message_finish;
+
+inline std::map<FlowIdKey, uint64_t> received_chunksize;
+inline std::map<FlowIdKey, uint64_t> sent_chunksize;
+inline std::map<std::pair<int, bool>, uint64_t> nodeHash;
+
+inline bool is_sending_finished(int src, int dst, int flow_id) {
+  if (waiting_to_sent_callback.count(FlowIdKey{flow_id, {src, dst}})) {
+    if (--waiting_to_sent_callback[FlowIdKey{flow_id, {src, dst}}] == 0) {
+      waiting_to_sent_callback.erase(FlowIdKey{flow_id, {src, dst}});
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool is_receive_finished(int src, int dst, int flow_id) {
+  if (waiting_to_notify_receiver.count(FlowIdKey{flow_id, {src, dst}})) {
+    if (--waiting_to_notify_receiver[FlowIdKey{flow_id, {src, dst}}] == 0) {
+      waiting_to_notify_receiver.erase(FlowIdKey{flow_id, {src, dst}});
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool is_message_finished(int src, int dst, int flow_id) {
+  if (waiting_to_message_finish.count(FlowIdKey{flow_id, {src, dst}})) {
+    if (--waiting_to_message_finish[FlowIdKey{flow_id, {src, dst}}] == 0) {
+      waiting_to_message_finish.erase(FlowIdKey{flow_id, {src, dst}});
+      return true;
+    }
+  }
+  return false;
+}
 
 
 struct user_param {
@@ -94,12 +140,11 @@ struct user_param {
 static std::once_flag    sim_finished;
 inline std::atomic<bool> waiting_sim_finish(false);
 
-inline void ub_send_flow(int src, int dst, uint64_t count, int tag,
-                          void (*msg_handler)(void*), void* fun_arg) {
-    Ptr<Node> sourceNode = NodeList::GetNode(src);
+inline void ub_send_flow(MsgEvent send_event){
+    Ptr<Node> sourceNode = NodeList::GetNode(send_event.src);
     Ptr<UbApp> app = DynamicCast<UbApp>(sourceNode->GetApplication(0));
     if (!app) {
-        std::cerr << "[UB] ERROR: no UbApp on node " << src << std::endl;
+        std::cerr << "[UB] ERROR: no UbApp on node " << send_event.src << std::endl;
         return;
     }
 
@@ -108,24 +153,40 @@ inline void ub_send_flow(int src, int dst, uint64_t count, int tag,
 #ifdef NS3_MTP
         MtpInterface::CriticalSection cs;
 #endif
-        MsgEvent t(src, dst, 0, count, msg_handler, fun_arg, tag, ns3::Simulator::Now().GetNanoSeconds());
+        MsgEvent t(send_event.src, send_event.dst, 0, send_event.remaining_bytes, send_event.msg_handler, send_event.fun_arg, send_event.tag, send_event.flow_id, ns3::Simulator::Now().GetNanoSeconds());
         taskId = global_ub_task_id++;
         pending_ub_tasks[taskId] = t;
     }
 
     utils::TrafficRecord record;
     record.taskId       = static_cast<int>(taskId);
-    record.sourceNode   = src;
-    record.destNode     = dst;
-    record.dataSize     = static_cast<int>(count > INT32_MAX ? INT32_MAX : count);
+    record.sourceNode   = send_event.src;
+    record.destNode     = send_event.dst;
+    record.dataSize     = static_cast<int>(send_event.remaining_bytes > INT32_MAX ? INT32_MAX : send_event.remaining_bytes);
     record.opType       = "URMA_WRITE";
     record.priority     = 1;
     record.delay        = "1ns";
-    record.phaseId      = tag;
+    record.phaseId      = send_event.tag;
     // Register with UbTrafficGen singleton (required by UbApp::OnTaskCompleted cleanup)
     ns3::UbTrafficGen::Get()->AddTask(record);
 
     app->SendTraffic(record);
+}
+
+inline void check_sim_finish() {
+    if (waiting_sim_finish && pending_ub_tasks.empty() && expeRecvHash.empty() && waiting_to_message_finish.empty()) {
+        std::call_once(sim_finished, [] {
+            {
+                #ifdef NS3_MTP
+                MtpInterface::CriticalSection cs;
+                #endif
+                std::cout   << "[UB] All messages finished. Stopping simulation at "
+                            << AstraSim::Sys::boostedTick() << " ns." 
+                            << std::endl;
+            }
+        });
+        Simulator::Stop();
+    }
 }
 
 inline void ub_task_completed_callback(FILE* fout, uint32_t nodeId, uint32_t jettyNum, uint32_t taskId) {
@@ -143,59 +204,92 @@ inline void ub_task_completed_callback(FILE* fout, uint32_t nodeId, uint32_t jet
     uint64_t fct = static_cast<uint64_t>(ns3::Simulator::Now().GetNanoSeconds() - start_time);
     uint64_t standalone_fct = 0;
 
-    // sip, dip, sport, dport, size (B), start_time, fct (ns), standalone_fct (ns)
-    fprintf(fout, "%08x %08x %u %u %lu %lu %lu %lu\n", sip, dip, 0, 0, size, start_time, fct, standalone_fct);
-    fflush(fout);
+    MockNcclLog* NcclLog = MockNcclLog::getInstance();
+    NcclLog->writeLog(
+      NcclLogLevel::INFO,
+      "task_completed, %d -> %d, flow_id %d, tag %u, total bytes %llu, at the tick %d",
+      ctx.src,  ctx.dst, ctx.flow_id, ctx.tag, ctx.remaining_bytes, AstraSim::Sys::boostedTick());
 
-    // Notify sender callback
-    ctx.callHandler();
-
-    // Notify receiver (if sim_recv already posted)
-    MsgEventKey key = {ctx.tag, {ctx.src, ctx.dst}};
     {
 #ifdef NS3_MTP
         MtpInterface::CriticalSection cs;
 #endif
-        sentHash.erase(key);
-        if (expeRecvHash.count(key)) {
-            MsgEvent& r = expeRecvHash[key];
-            if (ctx.remaining_bytes >= r.remaining_bytes) {
-                if (ctx.remaining_bytes > r.remaining_bytes)
-                    recvHash[key] += ctx.remaining_bytes - r.remaining_bytes;
-                auto cb = r.msg_handler;
-                auto arg = r.fun_arg;
-                expeRecvHash.erase(key);
-                if (cb) {
-                    Simulator::ScheduleWithContext(ctx.dst, NanoSeconds(0), cb, arg);
+        nodeHash[make_pair((int)ctx.src, 0)] += size;
+        nodeHash[make_pair((int)ctx.dst, 1)] += size;
+    }
+
+    // sip, dip, sport, dport, size (B), start_time, fct (ns), standalone_fct (ns)
+    fprintf(fout, "%08x %08x %u %u %lu %lu %lu %lu\n", sip, dip, 0, 0, size, start_time, fct, standalone_fct);
+    fflush(fout);
+
+    uint64_t notify_size_send;
+    {
+#ifdef NS3_MTP
+        MtpInterface::CriticalSection cs;
+#endif
+        sent_chunksize[FlowIdKey{ctx.flow_id, {ctx.src, ctx.dst}}] += size;
+        if (is_sending_finished(ctx.src, ctx.dst, ctx.flow_id)) {
+            notify_size_send = sent_chunksize[FlowIdKey{ctx.flow_id, {ctx.src, ctx.dst}}];
+            sent_chunksize.erase(FlowIdKey{ctx.flow_id, {ctx.src, ctx.dst}});
+            MsgEventKey key = {ctx.tag, {ctx.src, ctx.dst}};
+            if (sentHash.count(key)) {
+                MsgEvent send_event = sentHash[key];
+                if (send_event.remaining_bytes == notify_size_send) {
+                    sentHash.erase(key);
+                    send_event.callHandler();
+                } else {
+                    std::cerr << "Size mismatch in sentHash!" << std::endl;
+                    exit(1);
+                }
+            }
+        }
+    }
+
+    // NOTE For the moment use the task completed callback to signal the receiver it has finished 
+    uint64_t notify_size_recv;
+    {
+#ifdef NS3_MTP
+        MtpInterface::CriticalSection cs;
+#endif
+        received_chunksize[FlowIdKey{ctx.flow_id, {ctx.src, ctx.dst}}] += size;
+        NcclLog->writeLog(NcclLogLevel::DEBUG,
+      "received, %d -> %d, flow_id %d, tag %u, total bytes %llu, at the tick %d",
+      ctx.src,  ctx.dst, ctx.flow_id, ctx.tag, received_chunksize[FlowIdKey{ctx.flow_id, {ctx.src, ctx.dst}}], AstraSim::Sys::boostedTick());
+        
+        if (is_receive_finished(ctx.src, ctx.dst, ctx.flow_id)) {
+            notify_size_recv = received_chunksize[FlowIdKey{ctx.flow_id, {ctx.src, ctx.dst}}];
+            received_chunksize.erase(FlowIdKey{ctx.flow_id, {ctx.src, ctx.dst}});
+            
+            MsgEventKey key = {ctx.tag, {ctx.src, ctx.dst}};
+            if (expeRecvHash.count(key)) {
+                MsgEvent& r = expeRecvHash[key];
+                if (notify_size_recv >= r.remaining_bytes) {
+                    if (notify_size_recv > r.remaining_bytes)
+                        recvHash[key] += notify_size_recv - r.remaining_bytes;
+                    auto cb = r.msg_handler;
+                    auto arg = r.fun_arg;
+                    expeRecvHash.erase(key);
+                    if (cb) {
+                        Simulator::ScheduleWithContext(ctx.dst, NanoSeconds(0), cb, arg);
+                    }
+                } else {
+                    r.remaining_bytes -= notify_size_recv;
                 }
             } else {
-                r.remaining_bytes -= ctx.remaining_bytes;
+                recvHash[key] += notify_size_recv;
             }
-        } else {
-            recvHash[key] += ctx.remaining_bytes;
         }
     }
 
-    // Reschedule drain check
-    Simulator::Schedule(Time(0), []() {
-        if (waiting_sim_finish && pending_ub_tasks.empty() && expeRecvHash.empty()) {
-            std::call_once(sim_finished, []() {
-                std::cout << "[UB] All messages finished. Stopping simulation at "
-                          << AstraSim::Sys::boostedTick() << " ns." << std::endl;
-                Simulator::Stop();
-            });
+    {
+#ifdef NS3_MTP
+        MtpInterface::CriticalSection cs;
+#endif
+        if (!is_message_finished(ctx.src, ctx.dst, ctx.flow_id)) {
+            return;
         }
-    });
-}
-
-inline void check_sim_finish() {
-    if (waiting_sim_finish && pending_ub_tasks.empty() && expeRecvHash.empty()) {
-        std::call_once(sim_finished, []() {
-            std::cout << "[UB] All messages finished. Stopping simulation at "
-                      << AstraSim::Sys::boostedTick() << " ns." << std::endl;
-            Simulator::Stop();
-        });
     }
+    Simulator::Schedule(Time(0), &check_sim_finish);
 }
 
 inline int setup_ns3_ub_simulation(const user_param& param) {

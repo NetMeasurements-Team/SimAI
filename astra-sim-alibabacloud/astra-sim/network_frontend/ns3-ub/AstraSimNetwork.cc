@@ -29,6 +29,21 @@ using namespace ns3;
 
 int ASTRASimNetwork::sim_finish() {
     // Signal that all Sys workloads are done; drain remaining UB events.
+    #ifdef NS3_MTP
+        MtpInterface::CriticalSection cs;
+    #endif
+    for (auto it = nodeHash.begin(); it != nodeHash.end(); ++it) {
+        pair<int, int> p = it->first;
+        if (p.second == 0) {
+            std::cout << "sim_finish on sent, " << " Thread id: " << pthread_self() << std::endl;
+            cout << "All data sent from node " << p.first << " is " << it->second
+                << "\n";
+        } else {
+            std::cout << "sim_finish on received, " << " Thread id: " << pthread_self() << std::endl;
+            cout << "All data received by node " << p.first << " is " << it->second
+                << "\n";
+        }
+    }
     waiting_sim_finish = true;
     std::cout << "[UB] sim_finish: waiting for pending UB messages to drain..." << std::endl;
     Simulator::Schedule(Time(0), &check_sim_finish);
@@ -38,6 +53,7 @@ int ASTRASimNetwork::sim_finish() {
 AstraSim::timespec_t ASTRASimNetwork::sim_get_time() {
     AstraSim::timespec_t ts;
     ts.time_val = Simulator::Now().GetNanoSeconds();
+    ts.time_res = AstraSim::NS;
     return ts;
 }
 
@@ -52,19 +68,48 @@ int ASTRASimNetwork::sim_send(void* /*buffer*/, uint64_t message_size, int /*typ
                                AstraSim::sim_request* /*request*/,
                                void (*msg_handler)(void* fun_arg), void* fun_arg) {
     int actual_dst = dst + npu_offset;
+    const auto ehd = static_cast<AstraSim::SendPacketEventHandlerData*>(fun_arg);
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
-    NcclLog->writeLog(NcclLogLevel::DEBUG, " sim_send to %d  from %d", dst, rank);
+    NcclLog->writeLog(NcclLogLevel::DEBUG, " sim_send to %d  from %d flow_id %d", dst, rank, ehd->flow_id);
 
     {
 #ifdef NS3_MTP
         MtpInterface::CriticalSection cs;
 #endif
-        MsgEvent send_event(rank, actual_dst, 0, message_size, msg_handler, fun_arg, tag);
+        MsgEvent send_event(rank, actual_dst, 0, message_size, msg_handler, fun_arg, tag, ehd->flow_id);
         sentHash[MsgEventKey{tag, {send_event.src, send_event.dst}}] = send_event;
     }
     
-    int send_lat = 2;
-    Simulator::ScheduleWithContext(rank, Time(send_lat+1), ub_send_flow, rank, actual_dst, message_size, tag, msg_handler, fun_arg);
+    // Force the usage of multiple Jettys (equivalent of QP), based on the maximum segment size accepted by the UB's Tasks
+    uint64_t max_chunk_size = 2000000000;
+    int num_chunks = (message_size + max_chunk_size - 1) / max_chunk_size;
+    
+    for (int i = 0; i < num_chunks; i++) {
+        uint64_t chunk_size = (i == num_chunks - 1) ? (message_size - i * max_chunk_size) : max_chunk_size;
+        
+        {
+#ifdef NS3_MTP
+            MtpInterface::CriticalSection cs;
+#endif
+            waiting_to_sent_callback[FlowIdKey{ehd->flow_id, {rank, actual_dst}}]++;
+            waiting_to_notify_receiver[FlowIdKey{ehd->flow_id, {rank, actual_dst}}]++;
+            waiting_to_message_finish[FlowIdKey{ehd->flow_id, {rank, actual_dst}}]++;
+        }
+        
+        int send_lat = 6;
+        if (const char* send_lat_env = std::getenv("AS_SEND_LAT")) {
+            try {
+                send_lat = std::stoi(send_lat_env);
+            } catch (const std::invalid_argument&) {
+                NcclLog->writeLog(NcclLogLevel::ERROR,"send_lat set error");
+                exit(-1);
+            }
+        }
+        send_lat *= 1000;
+        MsgEvent se(rank, actual_dst, 0, chunk_size, msg_handler, fun_arg, tag, ehd->flow_id);
+        Simulator::ScheduleWithContext(rank, Time(send_lat+1), ub_send_flow, se);
+
+    }
     
     return 0;
 }
@@ -75,8 +120,8 @@ int ASTRASimNetwork::sim_recv(void* /*buffer*/, uint64_t message_size, int /*typ
                                void (*msg_handler)(void* fun_arg), void* fun_arg) {
     int actual_src = src + npu_offset;
 
-    MsgEvent recv_event(actual_src, rank, 1, message_size, msg_handler, fun_arg, tag);
-    const auto ehd = static_cast<AstraSim::RecvPacketEventHadndlerData*>(recv_event.fun_arg);
+    const auto ehd = static_cast<AstraSim::RecvPacketEventHadndlerData*>(fun_arg);
+    MsgEvent recv_event(actual_src, rank, 1, message_size, msg_handler, fun_arg, tag, ehd->flow_id);
     MsgEventKey key = {tag, {actual_src, rank}};
 
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
@@ -242,7 +287,8 @@ int main(int argc, char* argv[]) {
     for (uint32_t i = 0; i < ub_node_num; i++)
         if (ub_node_type_vec[i] == 0) host_node_ids.push_back(i);
 
-    for (int j = 0; j < nodes_num; j++) {
+    // NOTE: Create one Sys more to handle last timestamp reading. 
+    for (int j = 0; j < nodes_num+1; j++) {
         networks[j] = new ASTRASimNetwork(j, /*npu_offset=*/0);
 
         systems[j] = new AstraSim::Sys(
@@ -280,22 +326,35 @@ int main(int argc, char* argv[]) {
     }
     
     // --- Uncomment the following for a Manual connectivity test 
-    // ns3::Simulator::Schedule(ns3::NanoSeconds(100), []() {
-    //     std::cout << "[DEBUG] Injecting a 4096-byte flow from GPU 0 to GPU 1..." << std::endl;
+//     ns3::Simulator::Schedule(ns3::NanoSeconds(100), []() {
+       
 
-    //     auto completion_cb = [](void* arg) {
-    //         std::cout << "[DEBUG] Transmission SUCCESS! Received at "
-    //                   << ns3::Simulator::Now().GetNanoSeconds() << " ns." << std::endl;
-    //         ns3::Simulator::Stop();
-    //     };
+//         auto completion_cb = [](void* arg) {
+//             std::cout << "[DEBUG] Transmission SUCCESS! Received at "
+//                       << ns3::Simulator::Now().GetNanoSeconds() << " ns." << std::endl;
+//             ns3::Simulator::Stop();
+//         };
+        
+//         MsgEvent se(/*src=*/0, /*dst=*/8, 0, /*chunk_size*/4096, completion_cb, nullptr, /*tag*/0, /*flow_id*/0);
+//         std::cout << "[DEBUG] Injecting a 4096-byte flow from GPU " << se.src << " to GPU " << se.dst << "..." << std::endl;
+//         {
+// #ifdef NS3_MTP
+//             MtpInterface::CriticalSection cs;
+// #endif
+//             sentHash[MsgEventKey{se.tag, {se.src, se.dst}}] = se;
+//             waiting_to_sent_callback[FlowIdKey{se.flow_id, {se.src, se.dst}}]++;
+//             waiting_to_notify_receiver[FlowIdKey{se.flow_id, {se.src, se.dst}}]++;
+//             waiting_to_message_finish[FlowIdKey{se.flow_id, {se.src, se.dst}}]++;
+//         }
+        
+//         int send_lat = 2;
+//         ub_send_flow(se);
+//     });
 
-    //     ub_send_flow(/*src=*/0, /*dst=*/127, /*count=*/4096, /*tag=*/999, completion_cb, nullptr);
-    // });
-
-    // ns3::Simulator::Schedule(ns3::MilliSeconds(100), []() {
-    //     std::cout << "[DEBUG] Timeout reached. Transmission hung or routing failed!" << std::endl;
-    //     ns3::Simulator::Stop();
-    // });
+//     ns3::Simulator::Schedule(ns3::MilliSeconds(100), []() {
+//         std::cout << "[DEBUG] Timeout reached. Transmission hung or routing failed!" << std::endl;
+//         ns3::Simulator::Stop();
+//     });
 
 
     // --- Fire workloads ---
