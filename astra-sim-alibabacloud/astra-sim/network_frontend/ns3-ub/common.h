@@ -372,7 +372,6 @@ inline void ComputeAndInstallRouting() {
                     // Next-hop is dst, find the outport on src towards dst
                     for (auto& adj : ub_adj[src]) {
                         if (adj.neighbor == dst) {
-                            std::cout << src << ":" << adj.outport << std::endl;
                             port_shortest_outports.push_back(adj.outport);
                         }
                     }
