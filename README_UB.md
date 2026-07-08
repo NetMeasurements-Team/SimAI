@@ -78,7 +78,11 @@ task.opType       = "URMA_WRITE";
 task.priority     = 1;
 task.delay        = "1ns";
 ```
-Due to UB limitations in `TrafficRecord::dataSize` (which only accepts a 32-bit integer), larger transmissions are naturally split across different Work Queue Entries (i.e., using multiple QP - Jetty in UB terminology).
+Due to UB limitations in `TrafficRecord::dataSize` (which only accepts a 32-bit integer), larger transmissions are naturally split across different Work Queue Entries (i.e., using multiple QP - Jetty in UB terminology). 
+
+Finally, because the receiving application in the underlying `ns-3-ub` backend lacks a direct callback to notify the frontend when a message has fully arrived, a workaround is used to trigger receiver completion. Specifically, the receiver is triggered with a "receive finished" event once the sender receives the last ACK for the transmission signaled a the sender's WQE completion trace, preserving the original design of the SimAI (then corrected in our fork).
+
+
 ---
 
 ## 3. How to Generate UB Topologies
