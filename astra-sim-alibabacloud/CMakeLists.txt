@@ -53,6 +53,12 @@ if(USE_RDMA)
     find_package(MPI REQUIRED)
     target_link_libraries(AstraSim PUBLIC MPI::MPI_CXX)
 endif()
+# include_directories("${PROJECT_SOURCE_DIR}/../../")
+# add_library(AstraSim ${astra_SRC})
+# set_property(TARGET AstraSim PROPERTY CXX_STANDARD 17)
+# set_property(TARGET AstraSim PROPERTY CXX_STANDARD_REQUIRED ON)
+# # Suppress warnings about converting string literals to char* and allow GNU extensions
+# target_compile_options(AstraSim PRIVATE -Wno-write-strings -std=gnu++17)
 
 if(SIMAI_MODE STREQUAL "analytical")
     target_compile_definitions(AstraSim PRIVATE ANALYTI)

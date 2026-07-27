@@ -121,13 +121,14 @@ void Layer::call(EventType event, CallData* mdata) {
                 << " is finished************" << std::endl;
     }
     weight_grad_datasets[data]->finish_tick += weight_grad_update_time;
-    total_weight_grad_comm += weight_grad_datasets[data]->finish_tick -
-        weight_grad_datasets[data]->creation_tick;
+    auto safe_diff = [](Tick a, Tick b) -> Tick { return (a >= b) ? (a - b) : 0; };
+    total_weight_grad_comm += safe_diff(weight_grad_datasets[data]->finish_tick,
+      weight_grad_datasets[data]->creation_tick);
 
     if (weight_grad_datasets.size() == 1 &&
         wg_barrier == CollectiveBarrier::Blocking) { 
-      total_waiting_for_wg_comm += weight_grad_datasets[data]->finish_tick -
-          weight_grad_datasets[data]->creation_tick;
+        total_waiting_for_wg_comm += safe_diff(weight_grad_datasets[data]->finish_tick,
+          weight_grad_datasets[data]->creation_tick);
       update_stream_stats(weight_grad_datasets[data]);
       int dataset_streams = weight_grad_datasets[data]->total_streams;
       delete weight_grad_datasets[data];
@@ -137,8 +138,8 @@ void Layer::call(EventType event, CallData* mdata) {
       delete intData;
       return;
     } else if (started_waiting_for_weight_grad.size() > 0) {  
-      total_waiting_for_wg_comm += weight_grad_datasets[data]->finish_tick -
-          started_waiting_for_weight_grad.front();
+        total_waiting_for_wg_comm += safe_diff(weight_grad_datasets[data]->finish_tick,
+          started_waiting_for_weight_grad.front());
       started_waiting_for_weight_grad.pop_front();
       update_stream_stats(weight_grad_datasets[data]);
       int dataset_streams = weight_grad_datasets[data]->total_streams;
@@ -167,12 +168,13 @@ void Layer::call(EventType event, CallData* mdata) {
                 << " is finished************" << std::endl;
     }
     input_grad_datasets[data]->finish_tick += input_grad_update_time;
-    total_input_grad_comm += input_grad_datasets[data]->finish_tick -
-        input_grad_datasets[data]->creation_tick;
+    auto safe_diff2 = [](Tick a, Tick b) -> Tick { return (a >= b) ? (a - b) : 0; };
+    total_input_grad_comm += safe_diff2(input_grad_datasets[data]->finish_tick,
+      input_grad_datasets[data]->creation_tick);
     if (input_grad_datasets.size() == 1 &&
         ig_barrier == CollectiveBarrier::Blocking) {
-      total_waiting_for_ig_comm += input_grad_datasets[data]->finish_tick -
-          input_grad_datasets[data]->creation_tick;
+        total_waiting_for_ig_comm += safe_diff2(input_grad_datasets[data]->finish_tick,
+          input_grad_datasets[data]->creation_tick);
       update_stream_stats(input_grad_datasets[data]);
       int dataset_streams = input_grad_datasets[data]->total_streams;
       delete input_grad_datasets[data];
@@ -182,8 +184,8 @@ void Layer::call(EventType event, CallData* mdata) {
       delete intData;
       return;
     } else if (started_waiting_for_input_grad.size() > 0) {
-      total_waiting_for_ig_comm += input_grad_datasets[data]->finish_tick -
-          started_waiting_for_input_grad.front();
+        total_waiting_for_ig_comm += safe_diff2(input_grad_datasets[data]->finish_tick,
+          started_waiting_for_input_grad.front());
       started_waiting_for_input_grad.pop_front();
       update_stream_stats(input_grad_datasets[data]);
       int dataset_streams = input_grad_datasets[data]->total_streams;
@@ -212,12 +214,13 @@ void Layer::call(EventType event, CallData* mdata) {
                 << " is finished************" << std::endl;
     }
     fwd_pass_datasets[data]->finish_tick += fwd_update_time;
-    total_fwd_comm += fwd_pass_datasets[data]->finish_tick -
-        fwd_pass_datasets[data]->creation_tick;
+    auto safe_diff3 = [](Tick a, Tick b) -> Tick { return (a >= b) ? (a - b) : 0; };
+    total_fwd_comm += safe_diff3(fwd_pass_datasets[data]->finish_tick,
+      fwd_pass_datasets[data]->creation_tick);
     if (fwd_pass_datasets.size() == 1 &&
         fwd_barrier == CollectiveBarrier::Blocking) {
-      total_waiting_for_fwd_comm += fwd_pass_datasets[data]->finish_tick -
-          fwd_pass_datasets[data]->creation_tick;
+        total_waiting_for_fwd_comm += safe_diff3(fwd_pass_datasets[data]->finish_tick,
+          fwd_pass_datasets[data]->creation_tick);
       update_stream_stats(fwd_pass_datasets[data]);
       int dataset_streams = fwd_pass_datasets[data]->total_streams;
       delete fwd_pass_datasets[data];
@@ -227,8 +230,8 @@ void Layer::call(EventType event, CallData* mdata) {
       delete intData;
       return;
     } else if (started_waiting_for_fwd_pass.size() > 0) {
-      total_waiting_for_fwd_comm += fwd_pass_datasets[data]->finish_tick -
-          started_waiting_for_fwd_pass.front();
+        total_waiting_for_fwd_comm += safe_diff3(fwd_pass_datasets[data]->finish_tick,
+          started_waiting_for_fwd_pass.front());
       started_waiting_for_fwd_pass.pop_front();
       update_stream_stats(fwd_pass_datasets[data]);
       int dataset_streams = fwd_pass_datasets[data]->total_streams;

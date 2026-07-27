@@ -22,6 +22,7 @@
 #include <ns3/core-module.h>
 #include <ns3/error-model.h>
 #include <ns3/internet-module.h>
+#include <ns3/node-list.h>
 #include <ns3/nvswitch-node.h>
 #include <ns3/point-to-point-helper.h>
 #include <ns3/qbb-helper.h>
@@ -70,6 +71,7 @@ inline uint32_t global_t = 1;
 inline uint32_t mi_thresh = 5;
 inline bool flow_stripping = false;
 inline bool packet_spraying = false;
+inline bool source_routing = false;
 inline bool reuse_qps = true;
 inline bool var_win = false, fast_react = true;
 inline bool rto = false;
@@ -314,6 +316,63 @@ inline void CalculateRoutes(NodeContainer& n) {
   }
 }
 
+inline Ptr<UniformRandomVariable> source_routing_rand;
+
+// Per-packet path sampler for SOURCE_ROUTING. Walks the same shortest-path
+// DAG CalculateRoute already built (nextHop/nbr2if -- the exact set today's
+// per-switch ECMP hashing draws from, see SRH_PLAN.md), drawing an
+// independent uniform choice at every equal-cost branch, and returns the
+// ordered list of switch/host *node ids* a packet's SRH should carry (each
+// switch resolves the next segment's node id to one of its own local ports
+// via its m_srNextHop table -- see SwitchNode::GetOutDev). No table is
+// cached: calling this fresh for every packet is what lets packets of the
+// same flow take different equal-cost paths, and it also means a route
+// recomputation (e.g. after a link goes down) is picked up by the very next
+// packet with no separate invalidation step.
+//
+// The very first hop (srcId's own NIC out to its directly attached switch)
+// is deliberately not emitted as a segment: that choice is already made by
+// RdmaHw picking which NIC to send from, not by a switch reading an SRH.
+// Segments start at the first switch's own forwarding decision and include
+// the last switch (dstId's own ToR/NVSwitch), since it still has to pick
+// which of its own ports leads to dstId.
+inline std::vector<uint16_t> BuildSourceRoute(uint32_t srcId, uint32_t dstId) {
+  std::vector<uint16_t> segs;
+  Ptr<Node> src = NodeList::GetNode(srcId);
+  Ptr<Node> dst = NodeList::GetNode(dstId);
+  if (src == dst)
+    return segs;
+
+  auto pickNext = [](const vector<Ptr<Node>>& candidates) -> Ptr<Node> {
+    if (candidates.size() == 1)
+      return candidates[0];
+    if (!source_routing_rand)
+      source_routing_rand = CreateObject<UniformRandomVariable>();
+    return candidates[source_routing_rand->GetInteger(0, candidates.size() - 1)];
+  };
+
+  auto srcIt = nextHop.find(src);
+  if (srcIt == nextHop.end())
+    return segs;
+  auto srcDstIt = srcIt->second.find(dst);
+  if (srcDstIt == srcIt->second.end() || srcDstIt->second.empty())
+    return segs;
+  Ptr<Node> cur = pickNext(srcDstIt->second); // first switch; no segment emitted for this hop
+
+  while (cur != dst) {
+    auto it = nextHop.find(cur);
+    if (it == nextHop.end())
+      break;
+    auto dstIt = it->second.find(dst);
+    if (dstIt == it->second.end() || dstIt->second.empty())
+      break;
+    Ptr<Node> next = pickNext(dstIt->second);
+    segs.push_back(static_cast<uint16_t>(next->GetId()));
+    cur = next;
+  }
+  return segs;
+}
+
 inline void SetRoutingEntries() {
   for (auto i = nextHop.begin(); i != nextHop.end(); ++i) {
     Ptr<Node> node = i->first;
@@ -340,6 +399,29 @@ inline void SetRoutingEntries() {
             node->GetObject<RdmaDriver>()->m_rdma->add_nvswitch(dst->GetId());
           }
         }
+      }
+    }
+  }
+}
+
+// Populates each switch/NVSwitch's node-id -> local-port table used to
+// resolve SRH segments (see BuildSourceRoute above and
+// SwitchNode::GetOutDev). Built straight from nbr2if, which already has
+// every direct adjacency (switch-to-switch and switch-to-host) regardless
+// of whether it lies on a shortest path, so it's a strict superset of what
+// BuildSourceRoute could ever emit as a segment.
+inline void SetSourceRoutingEntries() {
+  for (auto& i : nbr2if) {
+    Ptr<Node> node = i.first;
+    if (node->GetNodeType() != 1 && node->GetNodeType() != 2)
+      continue; // only switches/NVSwitches forward via SRH
+    for (auto& j : i.second) {
+      Ptr<Node> neighbor = j.first;
+      uint32_t interface = j.second.idx;
+      if (node->GetNodeType() == 1) {
+        DynamicCast<SwitchNode>(node)->AddSrNextHopEntry(neighbor->GetId(), interface);
+      } else {
+        DynamicCast<NVSwitchNode>(node)->AddSrNextHopEntry(neighbor->GetId(), interface);
       }
     }
   }
@@ -596,6 +678,10 @@ inline bool ReadConf(const string& network_topo, const string& network_conf, con
       uint32_t v;
       conf >> v;
       packet_spraying = v;
+    } else if (key.compare("ENABLE_SOURCE_ROUTING") == 0) {
+      uint32_t v;
+      conf >> v;
+      source_routing = v;
     } else if (key.compare("GLOBAL_T") == 0) {
       conf >> global_t;
       global_t = 1;
@@ -812,6 +898,7 @@ inline void SetupNetwork(
 			Ptr<NVSwitchNode> sw = CreateObject<NVSwitchNode>();
 			n.Add(sw);
 		  sw->SetAttribute("AckHighPrio", UintegerValue(1));
+		  sw->SetAttribute("SourceRouting", BooleanValue(source_routing));
 		}
 	}
 
@@ -1010,6 +1097,8 @@ inline void SetupNetwork(
       rdmaHw->SetAttribute("NicCoalesceMethod", StringValue(nic_coalesce_method));
       rdmaHw->SetAttribute("NACKGenerationInterval", DoubleValue(nack_gen_interval));
       rdmaHw->SetAttribute("EnableRto", BooleanValue(rto));
+      rdmaHw->SetAttribute("SourceRouting", BooleanValue(source_routing));
+      rdmaHw->SetSourceRouteCb(MakeCallback(&BuildSourceRoute));
 
       switch (cc_mode) {
       case 1:
@@ -1070,6 +1159,7 @@ inline void SetupNetwork(
     RdmaEgressQueue::ack_q_idx = 3;
 
   SetRoutingEntries();
+  SetSourceRoutingEntries();
   //printRoutingEntries();
 
   for (uint32_t i = 0; i < node_num; i++) {
@@ -1078,6 +1168,7 @@ inline void SetupNetwork(
       sw->SetAttribute("CcMode", UintegerValue(cc_mode));
       sw->SetAttribute("MaxRtt", UintegerValue(maxRtt));
       sw->SetAttribute("PacketSpraying", BooleanValue(packet_spraying));
+      sw->SetAttribute("SourceRouting", BooleanValue(source_routing));
     }
   }
 
