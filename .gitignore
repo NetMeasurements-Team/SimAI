@@ -22,3 +22,8 @@ test/log/
 **/cmake-build*
 
 topologies/
+tmp/
+
+inputs/
+
+.cache/clangd
