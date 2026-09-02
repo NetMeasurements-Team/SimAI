@@ -605,7 +605,6 @@ inline bool ReadConf(const string& network_topo, const string& network_conf, con
       packet_spraying = v;
     } else if (key.compare("GLOBAL_T") == 0) {
       conf >> global_t;
-      global_t = 1;
     } else if (key.compare("MI_THRESH") == 0) {
       conf >> mi_thresh;
     } else if (key.compare("VAR_WIN") == 0) {
