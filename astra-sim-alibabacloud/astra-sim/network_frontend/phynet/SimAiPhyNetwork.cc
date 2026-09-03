@@ -13,12 +13,12 @@
 *limitations under the License.
 */
 
-#include"astra-sim/system/MockNcclLog.h"
-#include"astra-sim/system/PhyMultiThread.hh"
+#include "astra-sim/system/MockNcclLog.h"
+#include "astra-sim/system/phy-common/PhyMultiThread.hh"
 
-#include"SimAiPhyNetwork.h"
-#include"SimAiEntry.h"
-#include"PhySimAi.h"
+#include "SimAiPhyNetwork.h"
+#include "SimAiEntry.h"
+#include "PhySimAi.h"
 
 extern int local_rank;
 

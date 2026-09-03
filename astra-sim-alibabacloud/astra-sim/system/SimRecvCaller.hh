@@ -31,7 +31,7 @@ class SimRecvCaller : public Callable {
   int type;
   int src;
   int tag;
-  sim_request request;
+  sim_request* request;
   void (*msg_handler)(void* fun_arg);
   void* fun_arg;
   void call(EventType type, CallData* data);
@@ -43,7 +43,7 @@ class SimRecvCaller : public Callable {
       int type,
       int src,
       int tag,
-      sim_request request,
+      sim_request* request,
       void (*msg_handler)(void* fun_arg),
       void* fun_arg);
 };

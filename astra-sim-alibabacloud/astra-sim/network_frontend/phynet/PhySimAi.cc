@@ -13,10 +13,11 @@
 *limitations under the License.
 */
 
-#include <unistd.h>
 #include"PhySimAi.h"
 #include"astra-sim/system/MockNcclLog.h"
+
 using namespace std;
+
 
 queue<struct CallTask> PhyNetSim::call_list = {};
 int PhyNetSim::tick = 0;

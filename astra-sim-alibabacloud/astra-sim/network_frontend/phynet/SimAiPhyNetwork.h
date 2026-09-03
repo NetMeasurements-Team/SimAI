@@ -15,11 +15,12 @@
 
 #ifndef __SIMAI_PHY_NETWORK_HH__
 #define __SIMAI_PHY_NETWORK_HH__
-#include"astra-sim/system/AstraNetworkAPI.hh"
+
+#include "astra-sim/system/AstraNetworkAPI.hh"
 
 using namespace std;
 
-class SimAiPhyNetWork: public AstraSim::AstraNetworkAPI{
+class SimAiPhyNetWork : public AstraSim::AstraNetworkAPI {
 private:
   int npu_offset;
 public:

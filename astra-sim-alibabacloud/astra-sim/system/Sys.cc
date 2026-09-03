@@ -393,15 +393,19 @@ int Sys::rendezvous_sim_send(
     sim_request* request,
     void (*msg_handler)(void* fun_arg),
     void* fun_arg) {
-  const auto rsd = new RendezvousSendData(id, this, buffer, count, type, dst, tag, *request, msg_handler, fun_arg);
-  sim_request newReq = *request;
+  RendezvousSendData* rsd =
+      new RendezvousSendData(id, this, buffer, count, type, dst, tag, request, msg_handler, fun_arg);
+  int newTag = tag + 500000000;
   constexpr uint64_t rendezvous_size = 8192;
-  newReq.dstRank = request->srcRank;
-  newReq.srcRank = request->dstRank;
-  newReq.reqCount = rendezvous_size;
-  const int newTag = tag + 500000000;
-  newReq.tag = newTag;
-  sim_recv(delay, buffer, rendezvous_size, type, dst, newTag, &newReq, &Sys::handleEvent, rsd);
+  sim_request newReq;
+  if (request != nullptr) {
+    newReq = *request;
+    newReq.tag = newTag;
+    newReq.dstRank = request->srcRank;
+    newReq.srcRank = request->dstRank;
+    newReq.reqCount = rendezvous_size;
+  }
+  sim_recv(delay, buffer, rendezvous_size, type, dst, newTag, request ? &newReq : nullptr, &Sys::handleEvent, rsd);
   return 1;
 }
 
@@ -429,7 +433,7 @@ int Sys::sim_send(
         pending_sends[std::make_pair(dst, tag)] = tmp;
       }
       pending_sends[std::make_pair(dst, tag)].push_back(
-          new SimSendCaller(this, buffer, count, type, dst, tag, *request, msg_handler, fun_arg));
+          new SimSendCaller(this, buffer, count, type, dst, tag, request, msg_handler, fun_arg));
       return 1;
     }
   }
@@ -438,7 +442,7 @@ int Sys::sim_send(
     NI->sim_send(buffer, count, type, dst, tag, request, msg_handler, fun_arg);
   } else {
     try_register_event(
-        new SimSendCaller(this, buffer, count, type, dst, tag, *request, msg_handler, fun_arg),
+        new SimSendCaller(this, buffer, count, type, dst, tag, request, msg_handler, fun_arg),
         EventType::General,
         nullptr,
         delay);
@@ -473,15 +477,18 @@ int Sys::rendezvous_sim_recv(
     sim_request* request,
     void (*msg_handler)(void* fun_arg),
     void* fun_arg) {
-  const auto rrd = new RendezvousRecvData(id, this, buffer, count, type, src, tag, *request, msg_handler, fun_arg);
-  sim_request newReq = *request;
-  constexpr uint64_t rendezvous_size = 8192;
-  newReq.dstRank = request->srcRank;
-  newReq.srcRank = request->dstRank;
-  newReq.reqCount = rendezvous_size;
+  const auto rrd = new RendezvousRecvData(id, this, buffer, count, type, src, tag, request, msg_handler, fun_arg);
   const int newTag = tag + 500000000;
-  newReq.tag = newTag;
-  sim_send(delay, buffer, rendezvous_size, type, src, newTag, &newReq, &Sys::handleEvent, rrd);
+  constexpr uint64_t rendezvous_size = 8192;
+  sim_request newReq;
+  if (request != nullptr) {
+    newReq = *request;
+    newReq.tag = newTag;
+    newReq.dstRank = request->srcRank;
+    newReq.srcRank = request->dstRank;
+    newReq.reqCount = rendezvous_size;
+  }
+  sim_send(delay, buffer, rendezvous_size, type, src, newTag, request ? &newReq : nullptr, &Sys::handleEvent, rrd);
   return 1;
 }
 
@@ -499,7 +506,7 @@ int Sys::sim_recv(
     NI->sim_recv(buffer, count, type, src, tag, request, msg_handler, fun_arg);
   } else {
     try_register_event(
-        new SimRecvCaller(this, buffer, count, type, src, tag, *request, msg_handler, fun_arg),
+        new SimRecvCaller(this, buffer, count, type, src, tag, request, msg_handler, fun_arg),
         EventType::General,
         nullptr,
         delay);
@@ -1091,7 +1098,7 @@ CollectivePhase Sys::generate_collective_phase(
           }
           NcclLog->writeLog(
               NcclLogLevel::DEBUG,
-              " %d,  %d,  %d to  %d current_flow_id %d prev rank:  %d parent_flow_id:  %d child_flow_id:  %d chunk_id: "
+              " %d,  %d,  %d to  %d flow_id %d prev rank:  %d parent_flow_id:  %d child_flow_id:  %d chunk_id: "
               " %d flow_size: %lu chunk_count:  %d ",
               flow.first.first,
               flow.first.second,
@@ -1182,7 +1189,7 @@ CollectivePhase Sys::generate_collective_phase(
           }
           NcclLog->writeLog(
               NcclLogLevel::DEBUG,
-              " %d,  %d,  %d to  %d current_flow_id %d prev rank:  %d parent_flow_id:  %d child_flow_id:  %d chunk_id: "
+              " %d,  %d,  %d to  %d flow_id %d prev rank:  %d parent_flow_id:  %d child_flow_id:  %d chunk_id: "
               " %d flow_size: %lu chunk_count:  %d ",
               flow.first.first,
               flow.first.second,

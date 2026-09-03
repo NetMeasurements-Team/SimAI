@@ -13,19 +13,11 @@
 *limitations under the License.
 */
 
-#ifndef __PHYMULTITHREAD_HH__
-#define __PHYMULTITHREAD_HH__
+#ifndef __SIMAI_BOOTSTRAPNET_HH__
+#define __SIMAI_BOOTSTRAPNET_HH__
 
-#include"AstraNetworkAPI.hh"
+using namespace std;
 
-enum WORK_TYPE{SENDFINISHED,RECEIVEFINISHED};
-
-void set_send_finished_callback(void (*msg_handler)(AstraSim::ncclFlowTag flowTag));
-
-void set_receive_finished_callback(void (*msg_handler)(AstraSim::ncclFlowTag flowTag));
-
-bool create_polling_cqe_thread(void * cq_ptr,int lcore_id = 0);
-
-void notify_all_thread_finished();
+void BootStrapNet(int argc, char *argv[]);
 
 #endif

@@ -15,26 +15,9 @@
 #ifndef __SIMAI_PHYCOMMON_HH__
 #define __SIMAI_PHYCOMMON_HH__
 
-#include <stdio.h>
-#include <errno.h>
-#include <stdarg.h>
-#include <string.h>
-#include <stddef.h>
 #include <setjmp.h>
-#include <stdlib.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <sys/stat.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
 #include <netdb.h>
 #include <assert.h>
-#include <getopt.h>
-#include<map>
-#include<vector>
-#include<string>
 
 #define assert_non_null(x) assert((x) != NULL)
 

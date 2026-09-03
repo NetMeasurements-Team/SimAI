@@ -238,13 +238,6 @@ bool Ring::ready() {
     return false;
   }
   MyPacket packet = packets.front();
-  sim_request snd_req;
-  snd_req.srcRank = id;
-  snd_req.dstRank = packet.preferred_dest;
-  snd_req.tag = stream->stream_num;
-  snd_req.reqType = UINT8;
-  snd_req.vnet = this->stream->current_queue_id;
-  snd_req.layerNum = layer_num;
   stream->owner->front_end_sim_send(
       0,
       Sys::dummy_data,
@@ -252,15 +245,14 @@ bool Ring::ready() {
       UINT8,
       packet.preferred_dest,
       stream->stream_num,
-      &snd_req,
+      nullptr,
       &Sys::handleEvent,
       nullptr); // stream_num+(packet.preferred_dest*50)
-  sim_request rcv_req;
-  rcv_req.vnet = this->stream->current_queue_id;
-  rcv_req.layerNum = layer_num;
   RecvPacketEventHadndlerData* ehd = new RecvPacketEventHadndlerData(
       stream,
+      packet.preferred_src,
       stream->owner->id,
+      stream->stream_num,
       EventType::PacketReceived,
       packet.preferred_vnet,
       packet.stream_num);
@@ -271,7 +263,7 @@ bool Ring::ready() {
       UINT8,
       packet.preferred_src,
       stream->stream_num,
-      &rcv_req,
+      nullptr,
       &Sys::handleEvent,
       ehd); // stream_num+(owner->id*50)
   reduce();

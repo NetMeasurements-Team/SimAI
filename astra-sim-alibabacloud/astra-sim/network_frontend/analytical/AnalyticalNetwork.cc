@@ -16,11 +16,6 @@
 #include"AnalyticalNetwork.h"
 #include"AnaSim.h"
 
-extern std::map<std::pair<std::pair<int, int>,int>, AstraSim::ncclFlowTag> receiver_pending_queue;
-extern map<std::pair<int, std::pair<int, int>>, struct task1> expeRecvHash;
-extern map<std::pair<int, std::pair<int, int>>, int> recvHash;
-extern map<std::pair<int, std::pair<int, int>>, struct task1> sentHash;
-extern map<std::pair<int, int>, int64_t> nodeHash;
 extern int local_rank;
 
 AnalyticalNetWork::AnalyticalNetWork(int _local_rank)

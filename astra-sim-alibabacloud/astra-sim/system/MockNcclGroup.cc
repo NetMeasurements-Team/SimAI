@@ -1240,8 +1240,8 @@ void logFlowModels(
               rank_it->second[2] != cur_rank && gp_info.nNodes > 1 &&
               PXN_ENABLE) { 
             prevranks.clear();
-            if(rank_it->second[0]!=-1){
-              prevranks={rank_it->second[0]};
+            if (rank_it->second[0] != -1) {
+              prevranks = {rank_it->second[0]};
             }
             tmp_result = SingleFlow(
                 g_flow_id,
@@ -1612,8 +1612,8 @@ void logFlowModels(
               rank_it->second[2] != cur_rank && gp_info.nNodes > 1 &&
               PXN_ENABLE) { 
             prevranks.clear();
-            if(rank_it->second[0]!=-1){
-              prevranks = {rank_it->second[0]};
+            if (rank_it->second[0] != -1) {
+              prevranks = { rank_it->second[0] };
             }
             tmp_result = SingleFlow(
                 g_flow_id,
@@ -1713,7 +1713,7 @@ void logFlowModels(
             int partner_flow_id = task_list[rank_it->second[0]].flow_id;
             if (rank_it->second[3] == cur_rank &&
                 rank_it->second[2] != cur_rank && gp_info.nNodes > 1 &&
-                PXN_ENABLE) { 
+                PXN_ENABLE) {
               prevranks.clear();
               if(rank_it->second[0]!=-1){
                 prevranks = {rank_it->second[0]};

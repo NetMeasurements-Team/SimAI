@@ -19,21 +19,10 @@
 #undef PGO_TRAINING
 #include <iostream>
 
-#include"astra-sim/system/RecvPacketEventHadndlerData.hh"
 #include"astra-sim/system/AstraNetworkAPI.hh"
-#include"astra-sim/system/SimAiPhyCommon.hh"
 
 using namespace std;
 
-struct task1 {
-  int src;
-  int dest;
-  int type;
-  uint64_t count;
-  void *fun_arg;
-  void (*msg_handler)(void *fun_arg);
-  double schTime;
-};
 
 void set_simai_network_callback();
 void send_flow(int src, int dst, uint64_t maxPacketCount,

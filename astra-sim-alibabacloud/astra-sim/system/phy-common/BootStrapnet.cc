@@ -13,14 +13,11 @@
 *limitations under the License.
 */
 
-#include <map>
-#include <iostream>
 #include <fstream>
-#include <string>
-#include <cstring>
-#include <arpa/inet.h>
-#include <netdb.h>
+#include <iostream>
+#include <map>
 #include <mpi.h>
+#include <string>
 #include "BootStrapnet.hh"
 
 

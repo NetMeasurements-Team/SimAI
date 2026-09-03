@@ -13,7 +13,7 @@ SimSendCaller::SimSendCaller(
     int type,
     int dst,
     int tag,
-    sim_request request,
+    sim_request* request,
     void (*msg_handler)(void* fun_arg),
     void* fun_arg) {
   this->generator = generator;
@@ -33,7 +33,7 @@ void SimSendCaller::call(EventType type, CallData* data) {
       this->type,
       this->dst,
       this->tag,
-      &this->request,
+      this->request,
       this->msg_handler,
       this->fun_arg);
   delete this;

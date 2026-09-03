@@ -32,7 +32,6 @@
 
 #include <fstream>
 #include <iostream>
-#include <time.h>
 #include <unordered_map>
 #include <utility>
 
@@ -41,6 +40,7 @@ using namespace std;
 
 NS_LOG_COMPONENT_DEFINE("GENERIC_SIMULATION");
 
+// TODO replace with a NetworkConfig class
 inline uint32_t cc_mode = 1;
 inline bool enable_qcn = true, use_dynamic_pfc_threshold = true;
 inline uint32_t packet_payload_size = 1000, l2_chunk_size = 0, l2_ack_interval = 0;
