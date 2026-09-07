@@ -64,7 +64,7 @@ target_include_directories(AstraSim PUBLIC
         "${SIMCCL_INCLUDE_DIR}"
 )
 
-if(NOT SIMAI_MODE STREQUAL "ns3")
+if(NOT SIMAI_MODE STREQUAL "ns3" AND NOT SIMAI_MODE STREQUAL "ns3-ub")
     find_package(LibXml2 REQUIRED)
     include_directories(${LIBXML2_INCLUDE_DIR})
     target_link_libraries(AstraSim PRIVATE LibXml2::LibXml2)

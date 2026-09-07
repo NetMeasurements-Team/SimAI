@@ -290,9 +290,7 @@ int main(int argc, char* argv[]) {
     // NOTE: Create one Sys more to handle last timestamp reading. 
     for (int j = 0; j < nodes_num+1; j++) {
         networks[j] = new ASTRASimNetwork(j, /*npu_offset=*/0);
-
         systems[j] = new AstraSim::Sys(
-            param.system_conf,   // system_conf
             networks[j],         // network
             nullptr,             // memory (unused)
             j,                   // id

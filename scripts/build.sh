@@ -39,7 +39,7 @@ function compile {
 
     build_dir=${ROOT_DIR}/$(get_build_dir_name $profile)
     case "$mode" in
-    "ns3")
+    "ns3"|"ns3-ub")
         mkdir -p "${build_dir}"
         cmake -DCMAKE_BUILD_TYPE="${profile}" -DNS3_NATIVE_OPTIMIZATIONS="${native}" \
           -DSYS_ASSERTS="${sys_asserts}" ""${ns3_asserts:+-DNS3_ASSERT="${ns3_asserts}"} \
@@ -70,14 +70,17 @@ function cleanup_build {
     build_dir_name=$(get_build_dir_name $profile)
     build_dir=${ROOT_DIR}/${build_dir_name}
     case "$mode" in
-    "ns3")
+    "ns3"|"ns3-ub")
         set -x
         rm -rf "${build_dir}"
         rm -rf "${TARGET_BIN_DIR}"
         rm -rf "${NS3_SRC_DIR}/${build_dir_name:?}"
         rm -rf "${NS3_SRC_DIR}/build"
         rm -rf "${NS3_SRC_DIR}/src/applications/astra-sim"
-	      rm -rf "${NS3_SRC_DIR}/src/applications/SimCCL"
+        rm -rf "${NS3_SRC_DIR}/src/applications/SimCCL"
+        rm -rf "${NS3_SRC_DIR}/scratch/AstraSimNetwork.*"
+        rm -rf "${NS3_SRC_DIR}/scratch/common.h"
+        rm -rf "${NS3_SRC_DIR}/scratch/entry.h"
         rm -f "${NS3_SRC_DIR}/.lock-ns3_linux_build"
         mkdir -p "${build_dir}"
         set +x
@@ -92,7 +95,7 @@ function cleanup_build {
 # Main Script
 print_usage() {
     printf -- "Usage: %s [options]\n" "$0"
-    printf -- "-c|--compile <mode>  Compile for ns3|phy|analytical\n"
+    printf -- "-c|--compile <mode>  Compile for ns3|ns3-ub|phy|analytical\n"
     printf -- "-l|--clean <mode>    Clean the build directory.\n"
     printf -- "-lc|-cl <mode>       Clean and then compile.\n"
     printf -- "-d|--build-profile   ns3 build profile debug|default|release|optimized.\n"

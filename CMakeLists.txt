@@ -28,13 +28,13 @@ file(MAKE_DIRECTORY "${RESULT_DIR}")
 option(SYS_ASSERTS "Enable assert() in all profile with -UNDEBUG" OFF)
 
 set(SIMAI_MODE "analytical" CACHE STRING "SimAI build mode")
-set_property(CACHE SIMAI_MODE PROPERTY STRINGS analytical ns3 phy)
+set_property(CACHE SIMAI_MODE PROPERTY STRINGS analytical ns3 ns3-ub phy)
 
-set(_valid_simai_modes analytical ns3 phy)
+set(_valid_simai_modes analytical ns3 ns3-ub phy)
 list(FIND _valid_simai_modes "${SIMAI_MODE}" _simai_mode_index)
 if(_simai_mode_index EQUAL -1)
     message(FATAL_ERROR
-            "Invalid SIMAI_MODE='${SIMAI_MODE}'. Expected one of: analytical, ns3, phy")
+            "Invalid SIMAI_MODE='${SIMAI_MODE}'. Expected one of: analytical, ns3, ns3-ub, phy")
 endif()
 
 if(SYS_ASSERTS)
@@ -78,9 +78,9 @@ file(GLOB SIMCCL_MOCK_HEADERS CONFIGURE_DEPENDS
 
 message(STATUS "SimCCL mock version: ${SIMAI_NCCL_VERSION}")
 
-if(SIMAI_MODE STREQUAL "ns3")
+if(SIMAI_MODE STREQUAL "ns3" OR SIMAI_MODE STREQUAL "ns3-ub")
     add_subdirectory(
-            "${ASTRA_SIM_DIR}/network_frontend/ns3"
+            "${ASTRA_SIM_DIR}/network_frontend/${SIMAI_MODE}"
             simai_ns3
     )
     set(target_name "scratch_AstraSimNetwork")

@@ -9,7 +9,7 @@ This document describes the implementation of the **Unified Bus (UB)** network s
 Follow these steps to compile and run a quick test simulation with the UB backend.
 
 ### Step 1: Compile the Simulator with the UB Backend
-Run the following build command from the root `SimAI-internal` directory:
+Run the following build command from the root `SimAI` directory:
 ```bash
 bash scripts/build.sh -lc ns3-ub -d optimized
 ```
