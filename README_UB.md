@@ -11,7 +11,7 @@ Follow these steps to compile and run a quick test simulation with the UB backen
 ### Step 1: Compile the Simulator with the UB Backend
 Run the following build command from the root `SimAI-internal` directory:
 ```bash
-bash scripts/build_with_cmake.sh -lc ns3-ub -d optimized
+bash scripts/build.sh -lc ns3-ub -d optimized
 ```
 This builds the `ns-3-ub` packet simulator and creates the `bin/SimAI_simulator` executable symlink.
 
