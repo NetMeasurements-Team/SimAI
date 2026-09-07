@@ -41,7 +41,7 @@ add_library(AstraSim ${ASTRA_SIM_SOURCES} ${ASTRA_SIM_HEADERS})
 target_compile_features(AstraSim PUBLIC cxx_std_17)
 target_include_directories(AstraSim PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 
-if(NOT SIMAI_MODE STREQUAL "ns3")
+if(NOT SIMAI_MODE STREQUAL "ns3" AND NOT SIMAI_MODE STREQUAL "ns3-ub")
     find_package(LibXml2 REQUIRED)
     include_directories(${LIBXML2_INCLUDE_DIR})
     target_link_libraries(AstraSim PRIVATE LibXml2::LibXml2)

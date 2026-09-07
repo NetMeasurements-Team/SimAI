@@ -35,9 +35,14 @@ def Rail_Opti_SingleToR(parameters):
         file_name = "Spectrum-X_"+str(parameters['gpu'])+"g_"+str(parameters['gpu_per_server'])+"gps_"+parameters['bandwidth']+"_"+parameters['gpu_type']
     else:
         file_name = "Rail_Opti_SingleToR_"+str(parameters['gpu'])+"g_"+str(parameters['gpu_per_server'])+"gps_"+parameters['bandwidth']+"_"+parameters['gpu_type']
+    if parameters['ub']:
+        file_name += "_UB"
     with open(file_name, 'w') as f:
         print(file_name)
-        first_line = str(nodes)+" "+str(parameters['gpu_per_server'])+" "+str(nv_switch_num)+" "+str(switch_nodes-nv_switch_num)+" "+str(int(links))+" "+str(parameters['gpu_type'])
+        if parameters['ub']:
+            first_line = str(nodes)+" "+str(parameters['gpu_per_server'])+" 0 "+str(switch_nodes)+" "+str(int(links))+" "+str(parameters['gpu_type'])
+        else:
+            first_line = str(nodes)+" "+str(parameters['gpu_per_server'])+" "+str(nv_switch_num)+" "+str(switch_nodes-nv_switch_num)+" "+str(int(links))+" "+str(parameters['gpu_type'])
         f.write(first_line)
         f.write('\n')
         nv_switch = []
@@ -86,10 +91,10 @@ def Rail_Opti_SingleToR(parameters):
                 group_account = 0
 
         for i in asw_switch: # asw - psw
-                for j in psw_switch:
-                    line = str(i) + " " + str(j) +" "+ str(parameters['ap_bandwidth'])+" " +str(parameters['latency'])+" "+str(parameters['error_rate'])
-                    f.write(line)
-                    f.write('\n')
+            for j in psw_switch:
+                line = str(i) + " " + str(j) +" "+ str(parameters['ap_bandwidth'])+" " +str(parameters['latency'])+" "+str(parameters['error_rate'])
+                f.write(line)
+                f.write('\n')
 
 def Rail_Opti_DualToR_SinglePlane(parameters):
     nodes_per_asw = parameters['nics_per_aswitch']
@@ -120,9 +125,14 @@ def Rail_Opti_DualToR_SinglePlane(parameters):
         file_name = "AlibabaHPN_"+str(parameters['gpu'])+"g_"+str(parameters['gpu_per_server'])+"gps_DualToR_SinglePlane_"+parameters['bandwidth']+"_"+parameters['gpu_type']
     else:
         file_name = "Rail_Opti_"+str(parameters['gpu'])+"g_"+str(parameters['gpu_per_server'])+"gps_DualToR_SinglePlane_"+parameters['bandwidth']+"_"+parameters['gpu_type']
+    if parameters['ub']:
+        file_name += "_UB"
     with open(file_name, 'w') as f:
         print(file_name)
-        first_line = str(nodes)+" "+str(parameters['gpu_per_server'])+" "+str(nv_switch_num)+" "+str(switch_nodes-nv_switch_num)+" "+str(int(links))+" "+str(parameters['gpu_type'])
+        if parameters['ub']:
+            first_line = str(nodes)+" "+str(parameters['gpu_per_server'])+" 0 "+str(switch_nodes)+" "+str(int(links))+" "+str(parameters['gpu_type'])
+        else:
+            first_line = str(nodes)+" "+str(parameters['gpu_per_server'])+" "+str(nv_switch_num)+" "+str(switch_nodes-nv_switch_num)+" "+str(int(links))+" "+str(parameters['gpu_type'])
         f.write(first_line)
         f.write('\n')
         nv_switch = []
@@ -218,9 +228,14 @@ def Rail_Opti_DualToR_DualPlane(parameters):
         file_name = "AlibabaHPN_"+str(parameters['gpu'])+"g_"+str(parameters['gpu_per_server'])+"gps_DualToR_DualPlane_"+parameters['bandwidth']+"_"+parameters['gpu_type']
     else:
         file_name = "Rail_Opti_"+str(parameters['gpu'])+"g_"+str(parameters['gpu_per_server'])+"gps_DualToR_DualPlane_"+parameters['bandwidth']+"_"+parameters['gpu_type']
+    if parameters['ub']:
+        file_name += "_UB"
     with open(file_name, 'w') as f:
         print(file_name)
-        first_line = str(nodes)+" "+str(parameters['gpu_per_server'])+" "+str(nv_switch_num)+" "+str(switch_nodes-nv_switch_num)+" "+str(int(links))+" "+str(parameters['gpu_type'])
+        if parameters['ub']:
+            first_line = str(nodes)+" "+str(parameters['gpu_per_server'])+" 0 "+str(switch_nodes)+" "+str(int(links))+" "+str(parameters['gpu_type'])
+        else:
+            first_line = str(nodes)+" "+str(parameters['gpu_per_server'])+" "+str(nv_switch_num)+" "+str(switch_nodes-nv_switch_num)+" "+str(int(links))+" "+str(parameters['gpu_type'])
         f.write(first_line)
         f.write('\n')
         nv_switch = []
@@ -319,9 +334,14 @@ def No_Rail_Opti_SingleToR(parameters):
         file_name = "DCN+SingleToR_"+str(parameters['gpu'])+"g_"+str(parameters['gpu_per_server'])+"gps_"+parameters['bandwidth']+"_"+parameters['gpu_type']
     else:
         file_name = "No_Rail_Opti_"+str(parameters['gpu'])+"g_"+str(parameters['gpu_per_server'])+"gps_SingleToR_"+parameters['bandwidth']+"_"+parameters['gpu_type']
+    if parameters['ub']:
+        file_name += "_UB"
     with open(file_name, 'w') as f:
         print(file_name)
-        first_line = str(nodes)+" "+str(parameters['gpu_per_server'])+" "+str(nv_switch_num)+" "+str(switch_nodes-nv_switch_num)+" "+str(int(links))+" "+str(parameters['gpu_type'])
+        if parameters['ub']:
+            first_line = str(nodes)+" "+str(parameters['gpu_per_server'])+" 0 "+str(switch_nodes)+" "+str(int(links))+" "+str(parameters['gpu_type'])
+        else:
+            first_line = str(nodes)+" "+str(parameters['gpu_per_server'])+" "+str(nv_switch_num)+" "+str(switch_nodes-nv_switch_num)+" "+str(int(links))+" "+str(parameters['gpu_type'])
         f.write(first_line)
         f.write('\n')
         nv_switch = []
@@ -400,9 +420,14 @@ def No_Rail_Opti_DualToR(parameters):
         file_name = "DCN+DualToR_"+str(parameters['gpu'])+"g_"+str(parameters['gpu_per_server'])+"gps_"+parameters['bandwidth']+"_"+parameters['gpu_type']
     else:
         file_name = "No_Rail_Opti_"+str(parameters['gpu'])+"g_"+str(parameters['gpu_per_server'])+"gps_DualToR_"+parameters['bandwidth']+"_"+parameters['gpu_type']
+    if parameters['ub']:
+        file_name += "_UB"
     with open(file_name, 'w') as f:
         print(file_name)
-        first_line = str(nodes)+" "+str(parameters['gpu_per_server'])+" "+str(nv_switch_num)+" "+str(switch_nodes-nv_switch_num)+" "+str(int(links))+" "+str(parameters['gpu_type'])
+        if parameters['ub']:
+            first_line = str(nodes)+" "+str(parameters['gpu_per_server'])+" 0 "+str(switch_nodes)+" "+str(int(links))+" "+str(parameters['gpu_type'])
+        else:
+            first_line = str(nodes)+" "+str(parameters['gpu_per_server'])+" "+str(nv_switch_num)+" "+str(switch_nodes-nv_switch_num)+" "+str(int(links))+" "+str(parameters['gpu_type'])
         f.write(first_line)
         f.write('\n')
         nv_switch = []
@@ -474,6 +499,7 @@ def main():
     parser.add_argument('--ro', action='store_true',help='use rail-optimized structure')
     parser.add_argument('--dt',action='store_true', help='enable dual ToR, only for DCN+')
     parser.add_argument('--dp', action='store_true', help='enable dual_plane, only for AlibabaHPN')
+    parser.add_argument('--ub', action='store_true', help='generate topology for UB simulation (no nvswitches)')
     parser.add_argument('-g','--gpu',type=int,default=None,help='gpus num, default 32')
     parser.add_argument('-er','--error_rate',type=str,default=None,help='error_rate, default 0')
     #Intra-Host Parameters:
@@ -526,6 +552,7 @@ def analysis_template(args, default_parameters):
     parameters['rail_optimized'] = bool(args.ro)
     parameters['dual_ToR'] = bool(args.dt)
     parameters['dual_plane'] = bool(args.dp)
+    parameters['ub'] = bool(args.ub)
 
     
     if parameters['topology'] == 'Spectrum-X':
@@ -560,6 +587,30 @@ def analysis_template(args, default_parameters):
                 'rail_optimized': True, 
                 'dual_ToR': True, 
                 'dual_plane': True, 
+            })
+    elif parameters['topology'] == 'AlibabaHPN-st':
+        default_parameters.update({
+            'gpu': 15360,
+            'bandwidth': '200Gbps',
+            'asw_switch_num': 120,
+            'nics_per_aswitch': 128,
+            'psw_switch_num': 120,
+            'asw_per_psw':120
+        })
+        parameters.update({
+            'rail_optimized': True,
+            'dual_ToR': False,
+            'dual_plane': False,
+
+        })
+        if args.dp:
+            default_parameters.update({
+                'asw_per_psw':60
+            })
+            parameters.update({
+                'rail_optimized': True,
+                'dual_ToR': False,
+                'dual_plane': True,
             })
     elif parameters['topology'] == 'DCN+':
         default_parameters.update({
