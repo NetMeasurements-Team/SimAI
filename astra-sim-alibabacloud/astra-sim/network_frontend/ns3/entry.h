@@ -435,12 +435,17 @@ inline void check_sim_finish() {
   if (waiting_sim_finish && waiting_to_notify_receiver.empty() && waiting_to_sent_callback.empty() &&
       waiting_to_message_finish.empty() && sentHash.empty() && expeRecvHash.empty() && recvHash.empty()) {
     std::call_once(sim_finished, [] {
-      #ifdef NS3_MTP
-      MtpInterface::CriticalSection cs;
-      #endif
-      std::cout << "All messages finished. Stopping simulation at time "
-                << AstraSim::Sys::boostedTick() << "."
-                << std::endl;
+      {
+        #ifdef NS3_MTP
+        MtpInterface::CriticalSection cs;
+        #endif
+        std::cout << "All messages finished. Stopping simulation at time "
+                  << AstraSim::Sys::boostedTick() << "."
+                  << std::endl;
+      }
+      // finish() cascades into RdmaHw::QpComplete(), which takes its own
+      // CriticalSection internally. Since the lock is not reentrant, it must
+      // be released before calling finish() to avoid a self-deadlock.
       finish();
     });
     Simulator::Stop();
