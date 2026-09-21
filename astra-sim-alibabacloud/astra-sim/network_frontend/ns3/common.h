@@ -72,6 +72,9 @@ inline uint32_t mi_thresh = 5;
 inline bool flow_stripping = false;
 inline bool packet_spraying = false;
 inline bool source_routing = false;
+inline bool expected_flow_hit_tracking = false;
+inline std::string expected_flow_hit_output_file = "expected_flow_hits.txt";
+inline uint32_t expected_flow_hit_group_size = 1;
 inline bool reuse_qps = true;
 inline bool var_win = false, fast_react = true;
 inline bool rto = false;
@@ -322,26 +325,28 @@ inline Ptr<UniformRandomVariable> source_routing_rand;
 // DAG CalculateRoute already built (nextHop/nbr2if -- the exact set today's
 // per-switch ECMP hashing draws from, see SRH_PLAN.md), drawing an
 // independent uniform choice at every equal-cost branch, and returns the
-// ordered list of switch/host *node ids* a packet's SRH should carry (each
-// switch resolves the next segment's node id to one of its own local ports
-// via its m_srNextHop table -- see SwitchNode::GetOutDev). No table is
-// cached: calling this fresh for every packet is what lets packets of the
-// same flow take different equal-cost paths, and it also means a route
-// recomputation (e.g. after a link goes down) is picked up by the very next
-// packet with no separate invalidation step.
+// ordered list of switch/host *node ids* the packet will actually traverse,
+// starting with the first switch out of srcId's NIC and ending with dstId
+// itself (each switch resolves the *next* segment's node id to one of its
+// own local ports via its m_srNextHop table -- see SwitchNode::GetOutDev).
+// No table is cached: calling this fresh for every packet is what lets
+// packets of the same flow take different equal-cost paths, and it also
+// means a route recomputation (e.g. after a link goes down) is picked up by
+// the very next packet with no separate invalidation step.
 //
-// The very first hop (srcId's own NIC out to its directly attached switch)
-// is deliberately not emitted as a segment: that choice is already made by
-// RdmaHw picking which NIC to send from, not by a switch reading an SRH.
-// Segments start at the first switch's own forwarding decision and include
-// the last switch (dstId's own ToR/NVSwitch), since it still has to pick
-// which of its own ports leads to dstId.
+// NOTE: the first element (the first switch out of srcId) is the complete
+// path, but is *not* part of the wire-format SRH segment list -- that hop
+// is already decided by RdmaHw picking which NIC to send from, not by a
+// switch reading an SRH. Callers building the actual SrHeader must drop
+// element 0 (`std::vector<uint16_t>(path.begin() + 1, path.end())`); callers
+// that want the true, complete path a packet takes -- e.g. the expected-hit
+// oracle, RdmaHw::RecordExpectedFlowHits -- use the full return value as-is.
 inline std::vector<uint16_t> BuildSourceRoute(uint32_t srcId, uint32_t dstId) {
-  std::vector<uint16_t> segs;
+  std::vector<uint16_t> path;
   Ptr<Node> src = NodeList::GetNode(srcId);
   Ptr<Node> dst = NodeList::GetNode(dstId);
   if (src == dst)
-    return segs;
+    return path;
 
   auto pickNext = [](const vector<Ptr<Node>>& candidates) -> Ptr<Node> {
     if (candidates.size() == 1)
@@ -353,11 +358,12 @@ inline std::vector<uint16_t> BuildSourceRoute(uint32_t srcId, uint32_t dstId) {
 
   auto srcIt = nextHop.find(src);
   if (srcIt == nextHop.end())
-    return segs;
+    return path;
   auto srcDstIt = srcIt->second.find(dst);
   if (srcDstIt == srcIt->second.end() || srcDstIt->second.empty())
-    return segs;
-  Ptr<Node> cur = pickNext(srcDstIt->second); // first switch; no segment emitted for this hop
+    return path;
+  Ptr<Node> cur = pickNext(srcDstIt->second); // first switch
+  path.push_back(static_cast<uint16_t>(cur->GetId()));
 
   while (cur != dst) {
     auto it = nextHop.find(cur);
@@ -367,10 +373,10 @@ inline std::vector<uint16_t> BuildSourceRoute(uint32_t srcId, uint32_t dstId) {
     if (dstIt == it->second.end() || dstIt->second.empty())
       break;
     Ptr<Node> next = pickNext(dstIt->second);
-    segs.push_back(static_cast<uint16_t>(next->GetId()));
+    path.push_back(static_cast<uint16_t>(next->GetId()));
     cur = next;
   }
-  return segs;
+  return path;
 }
 
 inline void SetRoutingEntries() {
@@ -424,6 +430,87 @@ inline void SetSourceRoutingEntries() {
         DynamicCast<NVSwitchNode>(node)->AddSrNextHopEntry(neighbor->GetId(), interface);
       }
     }
+  }
+}
+
+// Derives one host-group's output path from the single configured base path.
+// With EXPECTED_FLOW_HIT_GROUP_SIZE at its default of 1, startId == endId and
+// this produces the original per-host name, e.g. "expected_flow_hits.txt" ->
+// "expected_flow_hits.host42.txt"; a group of more than one host instead
+// produces a range name, e.g. "expected_flow_hits.hosts0-7.txt". Used
+// instead of a directory-based config key so the files land next to the
+// other already-configured output files, with no new "create this directory
+// if missing" step needed.
+inline std::string PerHostOutputPath(const std::string& base, uint32_t startId, uint32_t endId) {
+  size_t dot = base.find_last_of('.');
+  std::string stem = (dot == std::string::npos) ? base : base.substr(0, dot);
+  std::string ext = (dot == std::string::npos) ? "" : base.substr(dot);
+  if (startId == endId)
+    return stem + ".host" + std::to_string(startId) + ext;
+  return stem + ".hosts" + std::to_string(startId) + "-" + std::to_string(endId) + ext;
+}
+
+// End-of-simulation dump of the expected-switch-hit oracle (see
+// claude_reports/FLOW_HIT_ORACLE_PLAN.md). Hosts are bucketed into groups of
+// EXPECTED_FLOW_HIT_GROUP_SIZE consecutive node ids (host node ids are
+// always a contiguous 0..hostCount-1 range in this codebase's topology
+// convention -- switches/NVSwitches occupy the ids above that range, see
+// SetupNetwork's topology parsing), and each group writes one shared file.
+// Merging multiple hosts' maps into one never actually combines two hosts'
+// numbers under the same key: a FlowKey5Tuple's sip is always the
+// contributing host's own address (data packets: the sender; ACK/NACK: the
+// acking host, after RdmaHw's direction reversal), so no two different
+// hosts ever produce the same key -- grouping only changes which file a
+// host's rows land in, and the existing sip column still tells you which
+// host any given row came from. Must be called after Simulator::Destroy(),
+// once every MTP worker thread has been joined, so every host's map is
+// quiescent.
+inline void DumpExpectedFlowHits() {
+  uint32_t groupSize = expected_flow_hit_group_size == 0 ? 1 : expected_flow_hit_group_size;
+
+  // groupId -> switchId -> flow -> count, merged from every host in that group.
+  std::map<uint32_t, std::map<uint16_t, std::map<FlowKey5Tuple, uint64_t>>> groups;
+
+  for (uint32_t i = 0; i < n.GetN(); i++) {
+    Ptr<Node> node = n.Get(i);
+    if (node->GetNodeType() != 0)
+      continue; // hosts only
+    Ptr<RdmaDriver> rdma = node->GetObject<RdmaDriver>();
+    if (!rdma)
+      continue;
+    const auto& hits = rdma->m_rdma->GetExpectedFlowHits();
+    if (hits.empty())
+      continue; // this host never sent a source-routed packet
+
+    uint32_t groupId = node->GetId() / groupSize;
+    auto& group = groups[groupId];
+    for (auto& switchEntry : hits)
+      for (auto& flowEntry : switchEntry.second)
+        group[switchEntry.first][flowEntry.first] += flowEntry.second;
+  }
+
+  for (auto& groupEntry : groups) {
+    uint32_t groupId = groupEntry.first;
+    uint32_t startId = groupId * groupSize;
+    uint32_t endId = startId + groupSize - 1;
+    std::string path = PerHostOutputPath(expected_flow_hit_output_file, startId, endId);
+    FILE* f = fopen(path.c_str(), "w");
+    if (!f) {
+      std::cout << "WARNING: could not open expected-flow-hit output file for hosts " << startId
+                << "-" << endId << std::endl;
+      continue;
+    }
+    fprintf(f, "switch_node_id,sip,dip,sport,dport,proto,expected_packet_count\n");
+    for (auto& switchEntry : groupEntry.second) {
+      uint16_t switchId = switchEntry.first;
+      for (auto& flowEntry : switchEntry.second) {
+        const FlowKey5Tuple& flow = flowEntry.first;
+        uint64_t count = flowEntry.second;
+        fprintf(f, "%u,%08x,%08x,%u,%u,%u,%lu\n", switchId, flow.sip, flow.dip, flow.sport,
+                flow.dport, flow.proto, count);
+      }
+    }
+    fclose(f);
   }
 }
 
@@ -682,6 +769,15 @@ inline bool ReadConf(const string& network_topo, const string& network_conf, con
       uint32_t v;
       conf >> v;
       source_routing = v;
+    } else if (key.compare("ENABLE_EXPECTED_FLOW_HIT_TRACKING") == 0) {
+      uint32_t v;
+      conf >> v;
+      expected_flow_hit_tracking = v;
+    } else if (key.compare("EXPECTED_FLOW_HIT_OUTPUT_FILE") == 0) {
+      conf >> expected_flow_hit_output_file;
+      expected_flow_hit_output_file = extend_output_file_name(run_name, expected_flow_hit_output_file);
+    } else if (key.compare("EXPECTED_FLOW_HIT_GROUP_SIZE") == 0) {
+      conf >> expected_flow_hit_group_size;
     } else if (key.compare("GLOBAL_T") == 0) {
       conf >> global_t;
       global_t = 1;
@@ -817,6 +913,17 @@ inline bool ReadConf(const string& network_topo, const string& network_conf, con
     fflush(stdout);
   }
   conf.close();
+  if (expected_flow_hit_tracking && !source_routing) {
+    std::cout << "WARNING: ENABLE_EXPECTED_FLOW_HIT_TRACKING is set but "
+                 "ENABLE_SOURCE_ROUTING is not -- hosts never learn a packet's "
+                 "path without source routing, so no oracle files will be produced."
+              << std::endl;
+  }
+  if (expected_flow_hit_group_size == 0) {
+    std::cout << "WARNING: EXPECTED_FLOW_HIT_GROUP_SIZE is 0, treating as 1 "
+                 "(one file per host)."
+              << std::endl;
+  }
   return true;
 }
 
@@ -1099,6 +1206,7 @@ inline void SetupNetwork(
       rdmaHw->SetAttribute("EnableRto", BooleanValue(rto));
       rdmaHw->SetAttribute("SourceRouting", BooleanValue(source_routing));
       rdmaHw->SetSourceRouteCb(MakeCallback(&BuildSourceRoute));
+      rdmaHw->SetAttribute("ExpectedFlowHitTracking", BooleanValue(expected_flow_hit_tracking));
 
       switch (cc_mode) {
       case 1:

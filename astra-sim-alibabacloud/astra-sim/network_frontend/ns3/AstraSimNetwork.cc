@@ -393,7 +393,10 @@ int main(const int argc, char* argv[]) {
   Simulator::Stop(Seconds(2000000000));
   Simulator::Run();
   Simulator::Destroy();
-  
+  if (expected_flow_hit_tracking) {
+    DumpExpectedFlowHits();
+  }
+
   #ifdef NS3_MPI
   MpiInterface::Disable();
   #endif
