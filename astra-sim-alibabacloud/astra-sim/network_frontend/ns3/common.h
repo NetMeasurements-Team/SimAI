@@ -1025,9 +1025,9 @@ inline void SetupNetwork(
         // Hpcc
         rdmaHw->m_cc_configs.emplace_back("FastReact", BooleanValue(fast_react).Copy());
         rdmaHw->m_cc_configs.emplace_back("TargetUtil", DoubleValue(u_target).Copy());
-        rdmaHw->m_cc_configs.emplace_back("MiThresh", DoubleValue(mi_thresh).Copy());
+        rdmaHw->m_cc_configs.emplace_back("MiThresh", UintegerValue(mi_thresh).Copy());
         rdmaHw->m_cc_configs.emplace_back("MultiRate", BooleanValue(multi_rate).Copy());
-        rdmaHw->m_cc_configs.emplace_back("SampleFeedback ", BooleanValue(sample_feedback).Copy());
+        rdmaHw->m_cc_configs.emplace_back("SampleFeedback", BooleanValue(sample_feedback).Copy());
         break;
       case 8:
         // Dctcp
