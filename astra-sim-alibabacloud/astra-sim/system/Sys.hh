@@ -186,12 +186,13 @@ public:
   static int nextPowerOf2(int n);
   static void sys_panic(const std::string& msg);
   void exitSimLoop(const std::string& msg) const;
-  bool seprate_log;
+  bool separate_log;
 
   std::map<std::pair<int, int>, std::list<SimSendCaller*>> pending_sends;
   std::map<std::pair<int, int>, bool> is_there_pending_sends;
 
-  Sys(AstraNetworkAPI* NI,
+  Sys(std::string system_configuration,
+      AstraNetworkAPI* NI,
       AstraMemoryAPI* MEM,
       int id,
       int npu_offset,
@@ -207,7 +208,6 @@ public:
       int stat_row,
       std::string path,
       std::string run_name,
-      bool seprate_log,
       bool rendezvous_enabledstd,
       GPUType _gpu_type,
       std::vector<int> _all_gpus,

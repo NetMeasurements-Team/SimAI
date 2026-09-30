@@ -277,12 +277,14 @@ struct user_param {
   string workload;
   string network_topo;
   string network_conf;
+  string system_conf;
   string run_name;
   user_param() {
     thread = 1;
     workload = "";
     network_topo = "";
     network_conf = "";
+    system_conf = "astra-sim-alibabacloud/inputs/system/default.txt";
     run_name = "";
   };
   ~user_param(){};
@@ -297,6 +299,7 @@ static int user_param_prase(const int argc, char* argv[], user_param* user_param
       std::cout<<"-w    workloads default none "<<std::endl;
       std::cout<<"-n    network topo"<<std::endl;
       std::cout<<"-c    network conf"<<std::endl;
+      std::cout<<"-s    system conf"<<std::endl;
       std::cout<<"-r    run name"<<std::endl;
       return 1;
     case 't':
@@ -310,6 +313,9 @@ static int user_param_prase(const int argc, char* argv[], user_param* user_param
       break;
     case 'c':
       user_param->network_conf = optarg;
+      break;
+    case 's':
+      user_param->system_conf = optarg;
       break;
     case 'r':
       user_param->run_name = optarg;
@@ -360,6 +366,7 @@ int main(const int argc, char* argv[]) {
   for (int j = 0; j < nodes_num; j++) {
     networks[j] = new ASTRASimNetwork(j ,0);
     systems[j] = new AstraSim::Sys(
+        user_param.system_conf,
         networks[j],
         nullptr,
         j,
@@ -376,7 +383,6 @@ int main(const int argc, char* argv[]) {
         0,
         RESULT_PATH,
         user_param.run_name,
-        true,
         false,
         gpu_type,
         {gpu_num},
