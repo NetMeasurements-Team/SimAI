@@ -244,12 +244,10 @@ Sys::Sys(
     return;
   }
 #if defined(NS3_MTP) || defined(NS3_MPI) || defined(PHY_MTP)
-  result = mock_nccl_grobal_group_init();
-  if (result == false) {
+  if (mock_nccl_grobal_group_init() == false) {
     sys_panic("Unable to initialize the system global group because the file can not be opened");
   }
-  result = mock_nccl_comms_init();
-  if (result == false) {
+  if (mock_nccl_comms_init() == false) {
     sys_panic("Unable to initialize the system mock_nccl_comms because the file can not be opened");
   }
 #endif
