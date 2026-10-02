@@ -153,6 +153,13 @@ inline std::map<std::pair<int, std::pair<int, int>>, uint64_t> sent_chunksize;
 static std::once_flag sim_finished;
 static std::atomic<bool> waiting_sim_finish(false);
 
+// ACKs and completion callbacks may outlive every Sys object. Read the backend
+// clock directly while preserving the tick conversion and logical offset.
+inline AstraSim::Tick frontend_tick() {
+  return Simulator::Now().GetNanoSeconds() / CLOCK_PERIOD + AstraSim::Sys::offset;
+}
+
+
 inline bool is_sending_finished(int src, int dst, int flow_id) {
   if (waiting_to_sent_callback.count(FlowIdKey{flow_id, {src, dst}})) {
     if (--waiting_to_sent_callback[FlowIdKey{flow_id, {src, dst}}] == 0) {
@@ -256,7 +263,7 @@ inline void push_msg_to_client(
   NcclLog->writeLog(
       NcclLogLevel::INFO,
       "push_msg_to_client, %u -> %u, flow_id %u, tag %u, port %u, at the tick %u",
-      client->m_qp->m_src, client->m_qp->m_dest, flow_id, tag, client->m_qp->sport, AstraSim::Sys::boostedTick());
+      client->m_qp->m_src, client->m_qp->m_dest, flow_id, tag, client->m_qp->sport, frontend_tick());
   client->PushMessageToQp(size, flow_id, tag);
 }
 
@@ -440,7 +447,7 @@ inline void check_sim_finish() {
         MtpInterface::CriticalSection cs;
         #endif
         std::cout << "All messages finished. Stopping simulation at time "
-                  << AstraSim::Sys::boostedTick() << "."
+                  << frontend_tick() << "."
                   << std::endl;
       }
       finish();
@@ -473,7 +480,7 @@ inline void message_finish(FILE* fout, Ptr<RdmaQueuePair> q, const RdmaQueuePair
   NcclLog->writeLog(
       NcclLogLevel::INFO,
       "message_finish, %u -> %u, flow_id %u, tag %u, %u flows left in qp, at the tick %u",
-      q->m_src, q->m_dest, msg.m_flow_id, msg.m_tag, q->m_messages.size(), AstraSim::Sys::boostedTick());
+      q->m_src, q->m_dest, msg.m_flow_id, msg.m_tag, q->m_messages.size(), frontend_tick());
   const uint32_t sid = ip_to_node_id(q->sip), did = ip_to_node_id(q->dip);
   print_fct_entry(fout, q, msg.m_size);
 
@@ -506,7 +513,7 @@ inline void qp_finish(FILE* fout, Ptr<RdmaQueuePair> q) {
   NcclLog->writeLog(
       NcclLogLevel::INFO,
       "qp_finish, %d -> %d, port %d, at the tick %d",
-      sid, did, q->sport, AstraSim::Sys::boostedTick());
+      sid, did, q->sport, frontend_tick());
 }
 
 /**
@@ -518,7 +525,7 @@ inline void send_finish(FILE* fout, Ptr<RdmaQueuePair> q, const RdmaQueuePair::R
   NcclLog->writeLog(
       NcclLogLevel::INFO,
       "send_finish, %d -> %d, flow_id %d, tag %u, port %d, total bytes %llu, at the tick %d",
-      sid,  did, msg.m_flow_id, msg.m_tag, q->sport, msg.m_size, AstraSim::Sys::boostedTick());
+      sid,  did, msg.m_flow_id, msg.m_tag, q->sport, msg.m_size, frontend_tick());
   uint64_t notify_size;
   {
 #ifdef NS3_MTP
@@ -544,7 +551,7 @@ inline void recv_finish(FILE* fout, Ptr<RdmaRxQueuePair> rx_q, const RdmaRxQueue
   NcclLog->writeLog(
       NcclLogLevel::INFO,
       "recv_finish, %u -> %u, flow_id %u, tag %u, %u flows left in qp, at the tick %u",
-      sid, did, msg.m_flow_id, msg.m_tag, rx_q->m_messages.size(), AstraSim::Sys::boostedTick());
+      sid, did, msg.m_flow_id, msg.m_tag, rx_q->m_messages.size(), frontend_tick());
 
   uint64_t notify_size;
   {
