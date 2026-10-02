@@ -29,7 +29,12 @@
 #include <ns3/rdma.h>
 #include <ns3/sim-setting.h>
 #include <ns3/switch-node.h>
+#include <ns3/ppp-header.h>
+#include <ns3/pause-header.h>
 
+#include <cmath>
+#include <limits>
+#include <stdexcept>
 #include <fstream>
 #include <iostream>
 #include <unordered_map>
@@ -939,6 +944,11 @@ inline void SetupNetwork(
       Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(n.Get(i));
       uint32_t shift = 3; 
 
+      const uint64_t buffer_bytes = static_cast<uint64_t>(buffer_size) * 1024 * 1024;
+      uint64_t reserved_and_headroom_bytes = 0;
+      if (buffer_bytes > std::numeric_limits<uint32_t>::max()) {
+        throw std::runtime_error("BUFFER_SIZE exceeds the MMU's 32-bit capacity");
+      }
       for (uint32_t j = 1; j < sw->GetNDevices(); j++) {
         Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(sw->GetDevice(j));
         uint64_t rate = dev->GetDataRate().GetBitRate();
@@ -950,19 +960,42 @@ inline void SetupNetwork(
                       "must set pmax for each link speed");
         sw->m_mmu->ConfigEcn(j, rate2kmin[rate], rate2kmax[rate],
                              rate2pmax[rate]);
-        // uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())
-        //                      ->GetDelay()
-        //                      .GetTimeStep();
-        uint32_t headroom = rate * maxRtt / 8 / 1000000000 + packet_payload_size * 2;  // BDP + 2 packet;
-        sw->m_mmu->ConfigHdrm(j, headroom);
+
+        const int64_t propagation_delay = DynamicCast<QbbChannel>(dev->GetChannel())->GetDelay().GetNanoSeconds();
+        const uint64_t pause_packet_bytes =
+            PppHeader::GetStaticSize() + Ipv4Header().GetSerializedSize() + PauseHeader().GetSerializedSize();
+
+        if (propagation_delay < 0 || !std::isfinite(switch_fw_delay) || switch_fw_delay < 0) {
+          throw std::runtime_error("PFC delays must be finite and nonnegative");
+        }
+        const uint64_t max_packet_bytes =
+            uint64_t{packet_payload_size} + CustomHeader::GetStaticWholeHeaderSize();
+        const long double headroom =
+            std::ceil(static_cast<long double>(rate) *
+                      (2.L * propagation_delay + static_cast<long double>(switch_fw_delay) * 1000.L) / 8e9L) +
+            3.L * max_packet_bytes +
+            pause_packet_bytes;
+
+        if (!std::isfinite(headroom) || headroom < 0 ||
+            headroom > std::numeric_limits<uint32_t>::max()) {
+          throw std::runtime_error("Invalid per-port PFC headroom");
+        }
+
+        sw->m_mmu->ConfigHdrm(j, static_cast<uint32_t>(headroom));
+
+        // one protected priority per port
+        reserved_and_headroom_bytes += static_cast<uint64_t>(headroom) + sw->m_mmu->reserve;
         sw->m_mmu->pfc_a_shift[j] = shift;
         while (rate > nic_rate && sw->m_mmu->pfc_a_shift[j] > 0) {
           sw->m_mmu->pfc_a_shift[j]--;
           rate /= 2;
         }
       }
+      if (reserved_and_headroom_bytes >= buffer_bytes) {
+        throw std::runtime_error("PFC headroom and reservations leave no shared switch buffer");
+      }
       sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
-      sw->m_mmu->ConfigBufferSize(buffer_size * 1024 * 1024);
+      sw->m_mmu->ConfigBufferSize(static_cast<uint32_t>(buffer_bytes));
       sw->m_mmu->node_id = sw->GetId();
     } else if (n.Get(i)->GetNodeType() == 2) {
 			Ptr<NVSwitchNode> sw = DynamicCast<NVSwitchNode>(n.Get(i));
@@ -970,9 +1003,7 @@ inline void SetupNetwork(
       for (uint32_t j = 1; j < sw->GetNDevices(); j++) {
         Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(sw->GetDevice(j));
         uint64_t rate = dev->GetDataRate().GetBitRate();
-        uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())
-                             ->GetDelay()
-                             .GetTimeStep();
+        uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())->GetDelay().GetNanoSeconds();
         uint32_t headroom = rate * delay / 8 / 1000000000 * 4;
         sw->m_mmu->ConfigHdrm(j, headroom);
         sw->m_mmu->pfc_a_shift[j] = shift;
