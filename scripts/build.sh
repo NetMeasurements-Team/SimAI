@@ -27,6 +27,7 @@ function compile {
     local ns3_asserts="$5"
     local ns3_stub_headers="$6"
     local ns3_relative_links="$7"
+    local ns3_tests="$8"
 
     mkdir -p "${SIM_LOG_DIR}"/inputs/system/
     mkdir -p "${SIM_LOG_DIR}"/inputs/workload/
@@ -43,18 +44,19 @@ function compile {
           -DSYS_ASSERTS="${sys_asserts}" ""${ns3_asserts:+-DNS3_ASSERT="${ns3_asserts}"} \
           -DNS3_EXPORT_HEADERS_AS_STUBS="${ns3_stub_headers}" \
           -DNS3_USE_RELATIVE_PATHS_SYMLINKS="${ns3_relative_links}" \
+          -DNS3_TESTS="${ns3_tests}" \
           -DSIMAI_MODE="$mode" -DNS3_MTP=ON \
-          -G "Unix Makefiles" -S "${ROOT_DIR}" -B "${build_dir}"
+          -G "Unix Makefiles" -S "${ROOT_DIR}" -B "${build_dir}" || return $?
         cmake --build "${build_dir}" -j "$(($(lscpu | grep '^CPU(s):' | awk '{print $2}') - 1))"
         ;;
     "phy")
         mkdir -p "${build_dir}"
-        cmake -DSIMAI_MODE="$mode" -G "Unix Makefiles" -S "${ROOT_DIR}" -B "${build_dir}"
+        cmake -DSIMAI_MODE="$mode" -G "Unix Makefiles" -S "${ROOT_DIR}" -B "${build_dir}" || return $?
         cmake --build "${build_dir}" -j "$(($(lscpu | grep '^CPU(s):' | awk '{print $2}') - 1))"
         ;;
     "analytical")
         mkdir -p "${build_dir}"
-        cmake -DSIMAI_MODE="$mode" -G "Unix Makefiles" -S "${ROOT_DIR}" -B "${build_dir}"
+        cmake -DSIMAI_MODE="$mode" -G "Unix Makefiles" -S "${ROOT_DIR}" -B "${build_dir}" || return $?
         cmake --build "${build_dir}" -j "$(($(lscpu | grep '^CPU(s):' | awk '{print $2}') - 1))"
         ;;
     esac
@@ -87,7 +89,7 @@ function cleanup_build {
 
 # Main Script
 print_usage() {
-    printf -- "Usage: $0 [options]\n"
+    printf -- "Usage: %s [options]\n" "$0"
     printf -- "-c|--compile <mode>  Compile for ns3|phy|analytical\n"
     printf -- "-l|--clean <mode>    Clean the build directory.\n"
     printf -- "-lc|-cl <mode>       Clean and then compile.\n"
@@ -96,9 +98,10 @@ print_usage() {
     printf -- "--ns3-asserts        Enable NS3_ASSERT in any build profile.\n"
     printf -- "--ns3-stub-headers   Set NS3_EXPORT_HEADERS_AS_STUBS=ON (exports stubs in place of symlinks).\n"
     printf -- "--ns3-relative-links Set NS3_USE_RELATIVE_PATHS_SYMLINKS=ON (use relative paths for symlinks/stubs).\n"
+    printf -- "--ns3-tests          Enable the native ns-3 test suites (default: OFF).\n"
     printf -- "-h|--help            Show this help message.\n"
     printf -- "\n"
-    printf -- "Example: $0 -lc ns3 -d optimized --sys-asserts\n"
+    printf -- "Example: %s -lc ns3 -d optimized --sys-asserts\n" "$0"
 }
 
 profile=
@@ -110,6 +113,7 @@ sys_asserts=OFF
 ns3_asserts=
 ns3_stub_headers=OFF
 ns3_relative_links=OFF
+ns3_tests=OFF
 
 # Expand -lc <mode> into -l <mode> -c <mode>
 processed_args=()
@@ -127,7 +131,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 OPTS=$(getopt -o c:l:d:h \
-  --long compile:,clean:,help,build-profile:,sys-asserts,ns3-asserts,ns3-stub-headers,ns3-relative-links \
+  --long compile:,clean:,help,build-profile:,sys-asserts,ns3-asserts,ns3-stub-headers,ns3-relative-links,ns3-tests \
   -n "$0" -- "${processed_args[@]}")
 if [ $? != 0 ]; then
   echo "Failed parsing options." >&2; print_usage; exit 1
@@ -142,6 +146,7 @@ while true; do
                                 optimized) profile=release; native=ON ;;
                                 *) profile=default ;;
                               esac;                                       shift 2 ;;
+    --ns3-tests)             ns3_tests=ON;                               shift ;;
     --sys-asserts)            sys_asserts=ON;                             shift ;;
     --ns3-asserts)            ns3_asserts=ON;                             shift ;;
     --ns3-stub-headers)       ns3_stub_headers=ON;                        shift ;;
@@ -154,10 +159,14 @@ while true; do
   esac
 done
 profile="${profile:-default}"
+if [[ "$ns3_tests" == ON && "$mode" != ns3 ]]; then
+  echo "Error: --ns3-tests requires ns3 mode." >&2
+  exit 1
+fi
 
 if [[ $clean == "ON" ]]; then
   cleanup_build "$mode" "$profile"
 fi
 if [[ $compile == "ON" ]]; then
-  compile "$mode" "$profile" "$native" "$sys_asserts" "$ns3_asserts" "$ns3_stub_headers" "$ns3_relative_links"
+  compile "$mode" "$profile" "$native" "$sys_asserts" "$ns3_asserts" "$ns3_stub_headers" "$ns3_relative_links" "$ns3_tests"
 fi

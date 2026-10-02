@@ -11,6 +11,7 @@ astra-sim-alibabacloud/inputs/config/*
 bin/
 results/
 test/log/
+simai-test-results-*
 *.log
 .cur*
 .DS_Store
@@ -20,6 +21,7 @@ test/log/
 **/cmake-cache*
 !astra-sim-alibabacloud/build
 **/cmake-build*
+**/__pycache__
 
 topologies/
 tmp/

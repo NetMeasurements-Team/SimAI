@@ -106,6 +106,7 @@ inline std::vector<int> NVswitchs;
 inline uint32_t qp_mon_interval = 100;
 inline uint32_t bw_mon_interval = 10000;
 inline uint32_t qlen_mon_interval = 10000;
+inline bool enable_monitor = false;
 inline uint64_t mon_start = 0, mon_end = 2100000000;
 
 inline string qlen_mon_file;
@@ -678,22 +679,20 @@ inline bool ReadConf(const string& network_topo, const string& network_conf, con
       conf >> buffer_size;
     } else if (key.compare("SWITCH_FORWARD_DELAY") == 0) {
       conf >> switch_fw_delay;
+    } else if (key.compare("ENABLE_MONITOR") == 0) {
+      conf >> enable_monitor;
     } else if (key.compare("QLEN_MON_FILE") == 0) {
       conf >> qlen_mon_file;
       qlen_mon_file = extend_output_file_name(run_name, qlen_mon_file);
-      qlen_mon_file = get_output_file_name(network_conf, qlen_mon_file);
     } else if (key.compare("BW_MON_FILE") == 0) {
       conf >> bw_mon_file;
       bw_mon_file = extend_output_file_name(run_name, bw_mon_file);
-      bw_mon_file = get_output_file_name(network_conf, bw_mon_file);
     } else if (key.compare("RATE_MON_FILE") == 0) {
       conf >> rate_mon_file;
       rate_mon_file = extend_output_file_name(run_name, rate_mon_file);
-      rate_mon_file = get_output_file_name(network_conf, rate_mon_file);
     } else if (key.compare("CNP_MON_FILE") == 0) {
       conf >> cnp_mon_file;
       cnp_mon_file = extend_output_file_name(run_name, cnp_mon_file);
-      cnp_mon_file = get_output_file_name(network_conf, cnp_mon_file);
     } else if (key.compare("MON_START") == 0) {
       conf >> mon_start;
     } else if (key.compare("MON_END") == 0) {
@@ -1166,6 +1165,10 @@ inline void SetupNetwork(
 
   topo_ifs.close();
   tracef.close();
+
+  if (enable_monitor) {
+    schedule_monitor();
+  }
 
   if (link_down_time > 0) {
     Simulator::Schedule(Seconds(2) + MicroSeconds(link_down_time),

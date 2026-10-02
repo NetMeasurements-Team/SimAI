@@ -20,6 +20,7 @@
 #include <queue>
 #include <cmath>
 #include <algorithm>
+#include <stdexcept>
 #include "astra-sim/system/MockNcclLog.h"
 
 using namespace std;
@@ -82,6 +83,11 @@ void logFlowModels(
     }
     int all_group_idx = 0;
     int nNodes = _ngpus/_gpus_per_nodes;
+    // Ethernet-only topologies have no NVSwitch entries. If present, the
+    // mapping must contain one entry per server before groups index it.
+    if (!_NVSwitch.empty() && _NVSwitch.size() != static_cast<size_t>(nNodes)) {
+      throw std::invalid_argument("NVSwitch mapping must be empty or contain one entry per server");
+    }
     int nlocalranks = _gpus_per_nodes;
     int TP_nums = _ngpus/_TP_size;
     int DP_nums = _ngpus/_DP_size;
@@ -111,6 +117,7 @@ void logFlowModels(
         }
         NVSwitchs.clear();
         for(int idx:TPnodes){
+          if (_NVSwitch.empty()) continue;
           NVSwitchs.push_back(_NVSwitch[idx]);
           GroupIndex[std::make_pair(_NVSwitch[idx],TP)] = all_group_idx;
         }
@@ -133,6 +140,7 @@ void logFlowModels(
         }
         NVSwitchs.clear();
         for(int idx:DPnodes){
+          if (_NVSwitch.empty()) continue;
           NVSwitchs.push_back(_NVSwitch[idx]);
           GroupIndex[std::make_pair(_NVSwitch[idx],DP)] = all_group_idx;
         }
@@ -178,6 +186,7 @@ void logFlowModels(
           }
           NVSwitchs.clear();
           for(int idx:EPnodes){
+          if (_NVSwitch.empty()) continue;
             NVSwitchs.push_back(_NVSwitch[idx]);
             GroupIndex[std::make_pair(_NVSwitch[idx],EP)] = all_group_idx;
           }
@@ -204,6 +213,7 @@ void logFlowModels(
           }
           NVSwitchs.clear();
           for (int idx : DP_EP_nodes){
+          if (_NVSwitch.empty()) continue;
             NVSwitchs.push_back(_NVSwitch[idx]);
             GroupIndex[std::make_pair(_NVSwitch[idx], DP_EP)] = all_group_idx;
           }

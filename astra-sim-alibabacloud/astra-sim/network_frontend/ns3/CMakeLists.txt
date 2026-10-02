@@ -1,4 +1,11 @@
 function(ns3_export_file src dst)
+    # Check before removing an old export, and identify broken deployment links.
+    if(NOT EXISTS "${src}")
+        message(FATAL_ERROR "ns3 export source is missing or a broken symlink: '${src}' -> '${dst}'")
+    endif()
+    if("${src}" STREQUAL "${dst}")
+        message(FATAL_ERROR "ns3 export source and destination are identical: '${src}'")
+    endif()
     get_filename_component(dst_dir "${dst}" DIRECTORY)
     file(MAKE_DIRECTORY "${dst_dir}")
 
@@ -19,7 +26,17 @@ function(ns3_export_file src dst)
         if("${src_path}" MATCHES "\\.(h|hh)$")
             file(GENERATE OUTPUT "${dst}" CONTENT "#include \"${src_path}\"\n")
         else()
-            configure_file("${src}" "${dst}" COPYONLY)
+            # Capture the paths and OS error instead of configure_file's generic
+            # 'No such file or directory' message for a failed remote export.
+            execute_process(
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${src}" "${dst}"
+                RESULT_VARIABLE copy_result
+                ERROR_VARIABLE copy_error
+            )
+            if(NOT "${copy_result}" STREQUAL "0")
+                message(FATAL_ERROR "ns3 export failed: '${src}' -> '${dst}': ${copy_error}")
+            endif()
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${src}")
         endif()
     else()
         file(CREATE_LINK "${src_path}" "${dst}" SYMBOLIC)
