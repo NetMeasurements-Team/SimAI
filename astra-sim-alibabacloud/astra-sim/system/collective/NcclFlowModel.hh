@@ -22,6 +22,7 @@
 #include <ctime>
 #include <list>
 #include <map>
+#include <set>
 #include <atomic>
 #include "Algorithm.hh"
 #include "astra-sim/system/Common.hh"
@@ -44,6 +45,8 @@ public:
   std::map<std::pair<int, int>, std::list<MyPacket>> packets;
   bool toggle;
   std::map<std::pair<int, int>, int> free_packets;
+  // Shared dependencies must register each incoming flow only once.
+  std::set<std::pair<int, int>> registered_receive_flows;
   bool processed;
   bool send_back;
   bool NPU_to_MA;

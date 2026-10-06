@@ -341,6 +341,14 @@ void NcclFlowModel::run(EventType event, CallData* data) {
 bool NcclFlowModel::init_recv_ready() {
   std::map<std::pair<int, std::vector<int>>, std::vector<int>> recv_ready_flows;
   for (auto flow : _flow_models) {
+    // PAT supplies independent transfers without predecessor lists. Register
+    // every incoming transfer, including nonzero chunks, before issuing sends.
+    if (flow.second.conn_type == "PAT") {
+      if (flow.second.dest == id) {
+        recv_ready(flow.second.channel_id, flow.second.flow_id);
+      }
+      continue;
+    }
     if (flow.second.src != id && (flow.second.conn_type != "PTP_PXN_END" || flow.second.dest != id)) {
       continue;
     }
@@ -388,13 +396,17 @@ bool NcclFlowModel::recv_ready(int channel_id, int flow_id) {
       channel_id,
       flow_id);
 
-  if (flow_model.conn_type == "PTP_PXN_END" && flow_model.dest == id) {
+  const bool direct_pat_receive = flow_model.conn_type == "PAT" && flow_model.dest == id;
+  if (direct_pat_receive || (flow_model.conn_type == "PTP_PXN_END" && flow_model.dest == id)) {
     data_sources = { flow_model.src };
   }
   for (const int data_source : data_sources) {
-    // find the source flow
+    // PAT initialization identifies the incoming flow directly by its ID.
+    // Other paths locate an incoming predecessor of the supplied flow.
     MockNccl::SingleFlow source_flow;
-    if (data_source != id) {
+    if (direct_pat_receive) {
+      source_flow = flow_model;
+    } else if (data_source != id) {
       auto it = std::find_if(_flow_models.begin(), _flow_models.end(),
       [&](const std::pair<std::pair<int, int>, MockNccl::SingleFlow>& entry) {
          const auto& flow = entry.second;
@@ -410,6 +422,15 @@ bool NcclFlowModel::recv_ready(int channel_id, int flow_id) {
       source_flow = it->second;
     } else {
       source_flow = flow_model;
+    }
+
+    {
+      FlowCriticalSection cs;
+      if (!registered_receive_flows
+               .insert({source_flow.channel_id, source_flow.flow_id})
+               .second) {
+        continue;
+      }
     }
 
     // init the event handler
@@ -621,6 +642,18 @@ bool NcclFlowModel::ready(int channel_id, int flow_id) {
       source_flow = flow_model;
     }
 
+    {
+      FlowCriticalSection cs;
+      if (free_packets[std::make_pair(channel_id, data_source)] <= 0) {
+        continue;
+      }
+      if (!registered_receive_flows
+               .insert({source_flow.channel_id, source_flow.flow_id})
+               .second) {
+        continue;
+      }
+    }
+
     // init the event handler
     auto* ehd = new RecvPacketEventHadndlerData(
         stream,
@@ -641,18 +674,16 @@ bool NcclFlowModel::ready(int channel_id, int flow_id) {
     ehd->flow_id = source_flow.flow_id;
     ehd->channel_id = channel_id;
 
-    if (free_packets[std::make_pair(channel_id, data_source)] > 0) {
-      stream->owner->front_end_sim_recv(
-          0,
-          Sys::dummy_data,
-          source_flow.flow_size,
-          UINT8,
-          data_source,
-          ehd->tag,
-          nullptr,
-          &Sys::handleEvent,
-          ehd);
-    }
+    stream->owner->front_end_sim_recv(
+        0,
+        Sys::dummy_data,
+        source_flow.flow_size,
+        UINT8,
+        data_source,
+        ehd->tag,
+        nullptr,
+        &Sys::handleEvent,
+        ehd);
   }
   if (flow_model.dest == id) {
     return true;
