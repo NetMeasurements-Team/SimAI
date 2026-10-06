@@ -9,7 +9,7 @@ SimAI provides two levels of testing:
   test framework. Their sources and detailed documentation live in the backend
   submodule.
 
-The commands below run from the repository root on a Linux build host.
+The commands below run from the repository root.
 
 ## Native backend tests
 
@@ -189,3 +189,105 @@ pending. The isolated backend test checks drainage separately.
 A PFC-disabled negative control is deliberately omitted here: the RDMA recovery
 behavior can retransmit or stall after loss, making a timeout ambiguous. The
 isolated backend test already provides that negative control without RDMA.
+
+### Collective completion and selection matrix
+
+`tests/ns3/collective-matrix/run.py` checks AllReduce, AllGather, ReduceScatter
+and AllToAll across Ring/PTP, PXN and NVLS. The v2.30 matrix also covers PAT,
+LL/LL128/Simple selection, automatic selection thresholds and fallback cases.
+There are 15 cases for v2.20 and 55 for v2.30, including non-power-of-two ranks.
+
+Build and run each version sequentially. Currently, switching versions requires
+a clean build: shared ns-3 export paths can otherwise retain stale objects.
+The runner's `--nccl-version` validates expectations; it does not select or
+rebuild the executable.
+
+```bash
+bash scripts/build.sh -lc ns3 -d debug --nccl-version 2.20 &&
+python3 tests/ns3/collective-matrix/run.py --nccl-version 2.20
+
+bash scripts/build.sh -lc ns3 -d debug --nccl-version 2.30 &&
+python3 tests/ns3/collective-matrix/run.py --nccl-version 2.30
+```
+
+Use `--list` to show cases, repeat `--case NAME` to select cases, or use
+`--prepare-only` to generate inputs without running the simulator. Each case has
+its own directory with inputs, invocation metadata, binary/input hashes, logs
+and traces. The runner continues after failures and updates `summary.json`;
+any failure gives a nonzero exit status. The default wall-clock timeout is
+120 seconds per case (`--timeout` overrides it). Ctrl-C records `INTERRUPTED`.
+
+A pass requires collective and workload completion, matching stream counts,
+nonempty generated flows, and completed network messages matching the generated
+source/destination/size multiset. Selection and PXN forwarding are checked;
+v2.30 additionally exposes algorithm/protocol IDs in its detailed-flow CSV.
+These are completion tests, not numerical tensor correctness or timing
+benchmarks. Tree, CollNet, NVLS-tree and Broadcast are not covered through the
+current selector/workload frontend.
+
+The runner clears inherited `AS_*`, `SIMAI_*` and `NCCL_*` settings before
+applying recorded case overrides. It leaves send latency enabled. Its validator
+can be checked without a simulator:
+
+```bash
+python3 tests/ns3/collective-matrix/test_validation.py
+```
+
+#### Coverage
+
+| Cases                                                                     | v2.20          | v2.30                                |
+|---------------------------------------------------------------------------|----------------|--------------------------------------|
+| AllReduce, AllGather, ReduceScatter, AllToAll; 4 ranks, same/cross server | UNDEF protocol | LL, LL128, Simple, explicitly forced |
+| All four collectives with 3 ranks on 3 servers                            | Yes            | Yes                                  |
+| AllToAll and ReduceScatter with PXN, 2 servers x 2 ranks                  | Yes            | All three protocols                  |
+| NVLS AllReduce, H100, 8 ranks and one NVSwitch, 4 MiB                     | Yes            | Simple                               |
+| PAT AllGather/ReduceScatter, 2/3/4 servers, one rank each                 | Unavailable    | Simple                               |
+| PAT automatic selection inside/outside size window; ineligible topology   | Unavailable    | Yes                                  |
+| PAT keeps Simple even when LL/LL128 is forced                             | Unavailable    | Yes                                  |
+| Automatic LL/LL128/Simple size selection; protocol-aware mode disabled    | Unavailable    | Yes                                  |
+
+There are 15 v2.20 cases and 55 v2.30 cases. Sizes are modest (mostly 768 KiB),
+except explicit NVLS/protocol-threshold cases. Most tests use a minimal Ethernet
+star with an explicit GPUs-per-server value, no NVSwitch, and no congestion
+requirement. Thus "same server" tests the selector's locality handling, not a
+calibrated NVLink topology. The NVLS case also adds GPU-to-NVSwitch links.
+All cases issue exactly one forward-pass collective in a TP group containing all
+ranks. DP/EP grouping, pipelining, and concurrency are outside this matrix.
+
+#### Results and reruns
+
+The runner creates a fresh `simai-test-results-matrix-...` directory, prints its
+location, continues after failures, and returns nonzero if any case fails. Each
+case has generated workload/topology/configuration inputs, `invocation.json`,
+`run.log`, the detailed-flow CSV and simulator output files. `summary.json` is
+updated after every case, including its failure reason and elapsed wall time. 
+Ctrl-C records the current case as `INTERRUPTED` and exits with status 130. A 
+timeout defaults to 120 wall-clock seconds **per case**; use `--timeout 300` on a
+slower server. An absent CSV, a fallback, a no-op, or an incomplete message count
+is a failure, not an automatic skip. Keep the case directory when investigating a
+failure.
+
+```bash
+# List names and expectations without building or running anything.
+python3 tests/ns3/collective-matrix/run.py --nccl-version 2.30 --list
+
+# Generate all input files without executing the simulator.
+python3 tests/ns3/collective-matrix/run.py --nccl-version 2.30 --prepare-only
+
+# Rerun an exact case after building the corresponding version.
+python3 tests/ns3/collective-matrix/run.py --nccl-version 2.30 \
+  --case pat3-allgather --timeout 300
+
+# Optional binary/output overrides; output must not already exist.
+python3 tests/ns3/collective-matrix/run.py --nccl-version 2.20 \
+  --binary /absolute/path/to/SimAI_simulator --output /tmp/my-matrix-results
+
+# Check the validator itself, without a simulator.
+python3 tests/ns3/collective-matrix/test_validation.py
+```
+
+#### Current build limitation
+
+Use a clean build when switching SimCCL versions. The ns-3 build exports
+versioned mock sources through shared symlink paths, and an incremental build
+can retain stale objects after a version change.
