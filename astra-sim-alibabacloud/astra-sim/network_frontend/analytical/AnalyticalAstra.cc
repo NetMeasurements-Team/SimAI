@@ -19,7 +19,7 @@
 #include<vector>
 
 #include "astra-sim/system/Sys.hh"
-#include "astra-sim/system/MockNcclLog.h"
+#include "SimCCL/mock/MockNcclLog.h"
 #include "astra-sim/system/AstraComputeAPI.hh"
 #include "astra-sim/system/AstraParamParse.hh"
 
@@ -41,24 +41,6 @@ extern int local_rank;
 std::vector<string> workloads;
 std::vector<std::vector<int>> physical_dims;
 
-struct user_param {
-  int thread;
-  int gpus;
-  string workload;
-  int comm_scale;
-  user_param() {
-    thread = 1;
-    gpus = 1;
-    workload = "";
-    comm_scale = 1;
-  };
-  ~user_param(){};
-  user_param(int _thread, int _gpus, string _workload, int _comm_scale = 1)
-      : thread(_thread),
-        gpus(_gpus),
-        workload(_workload),
-        comm_scale(_comm_scale){};
-};
 
 int main(int argc,char *argv[]) {
   UserParam* param = UserParam::getInstance();
@@ -99,6 +81,7 @@ int main(int argc,char *argv[]) {
   
   AnalyticalNetWork *analytical_network = new AnalyticalNetWork(0);
   AstraSim::Sys *systems = new AstraSim::Sys(
+    param->system_conf,
     analytical_network,
     nullptr,
     0,
@@ -115,7 +98,6 @@ int main(int argc,char *argv[]) {
     0,
     RESULT_PATH + param->res,
     "Analytical_test",
-    true,
     false,
     param->net_work_param.gpu_type,
     param->gpus,

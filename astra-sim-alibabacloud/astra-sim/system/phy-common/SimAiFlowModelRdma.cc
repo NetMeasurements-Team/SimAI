@@ -21,7 +21,7 @@
 #include <unistd.h>
 
 #include "../AstraNetworkAPI.hh"
-#include "../MockNcclLog.h"
+#include "SimCCL/mock/MockNcclLog.h"
 #include "SimAiFlowModelRdma.hh"
 #include "PhyMultiThread.hh"
 

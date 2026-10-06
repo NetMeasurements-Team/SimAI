@@ -14,11 +14,11 @@ LICENSE file in the root directory of this source tree.
 #include "SimRecvCaller.hh"
 #include "SimSendCaller.hh"
 #include "StreamBaseline.hh"
-#include "astra-sim/system/MockNcclLog.h"
+#include "SimCCL/mock/MockNcclLog.h"
 #include "astra-sim/system/collective/AllToAll.hh"
 #include "astra-sim/system/collective/DoubleBinaryTreeAllReduce.hh"
 #include "astra-sim/system/collective/HalvingDoubling.hh"
-#include "astra-sim/system/collective/NcclTreeFlowModel.hh"
+#include "astra-sim/system/collective/NcclFlowModel.hh"
 #include "astra-sim/system/collective/Ring.hh"
 #include "astra-sim/system/scheduling/OfflineGreedy.hh"
 #include "astra-sim/system/topology/GeneralComplexTopology.hh"
@@ -577,7 +577,7 @@ std::vector<CollectiveImplementation*> Sys::generate_collective_implementation_f
     } else if (dimension_input == "NcclFlowModel") {
       result.push_back(new CollectiveImplementation(CollectiveImplementationType::NcclFlowModel));
     } else if (dimension_input == "ncclRingTreeModel") {
-      result.push_back(new CollectiveImplementation(CollectiveImplementationType::NcclTreeFlowModel));
+      result.push_back(new CollectiveImplementation(CollectiveImplementationType::NcclFlowModel));
     } else {
       sys_panic(
           "Cannot interpret collective implementations. Please check the collective implementations in the sys"
@@ -1103,7 +1103,7 @@ CollectivePhase Sys::generate_collective_phase(
       CollectivePhase vn(
           this,
           queue_id,
-          new NcclTreeFlowModel(
+          new NcclFlowModel(
               collective_type,
               id,
               layer_num,
@@ -1113,7 +1113,9 @@ CollectivePhase Sys::generate_collective_phase(
               injection_policy,
               boost_mode,
               RingFlowModels,
-              channels.size()));
+              channels.size(),
+              nccl_info->algorithm,
+              nccl_info->protocol));
       return vn;
     } else if (nccl_info->algorithm == NCCL_ALGO_TREE) {
       std::shared_ptr<MockNccl::FlowModels> TreeFlowModels;
@@ -1126,7 +1128,7 @@ CollectivePhase Sys::generate_collective_phase(
       CollectivePhase vn(
           this,
           queue_id,
-          new NcclTreeFlowModel(
+          new NcclFlowModel(
               collective_type,
               id,
               layer_num,
@@ -1136,7 +1138,9 @@ CollectivePhase Sys::generate_collective_phase(
               injection_policy,
               boost_mode,
               TreeFlowModels,
-              treechannels.size()));
+              treechannels.size(),
+              nccl_info->algorithm,
+              nccl_info->protocol));
       return vn;
     } else if (nccl_info->algorithm == NCCL_ALGO_NVLS) {
       collective_type = ComType::All_Reduce_NVLS;
@@ -1194,7 +1198,7 @@ CollectivePhase Sys::generate_collective_phase(
       CollectivePhase vn(
           this,
           queue_id,
-          new NcclTreeFlowModel(
+          new NcclFlowModel(
               collective_type,
               id,
               layer_num,
@@ -1204,7 +1208,34 @@ CollectivePhase Sys::generate_collective_phase(
               injection_policy,
               boost_mode,
               RingFlowModels,
-              treechannels.size()));
+              treechannels.size(),
+              nccl_info->algorithm,
+              nccl_info->protocol));
+      return vn;
+    } else if (nccl_info->algorithm == NCCL_ALGO_PAT) {
+      std::shared_ptr<MockNccl::FlowModels> PATFlowModels =
+          std::static_pointer_cast<MockNccl::FlowModels>(ptr_FlowModels);
+      std::map<int, std::map<int, std::vector<int>>> pat_channels;
+      {
+        SysCriticalSection cs;
+        pat_channels = mock_nccl_comms[comm_ps]->get_rings();
+      }
+      CollectivePhase vn(
+          this,
+          queue_id,
+          new NcclFlowModel(
+              collective_type,
+              id,
+              layer_num,
+              static_cast<RingTopology*>(topology),
+              data_size,
+              direction,
+              injection_policy,
+              boost_mode,
+              PATFlowModels,
+              pat_channels.size(),
+              nccl_info->algorithm,
+              nccl_info->protocol));
       return vn;
     }
   } else {

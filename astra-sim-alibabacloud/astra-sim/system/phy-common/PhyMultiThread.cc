@@ -16,11 +16,11 @@
 #include <chrono>
 #include <atomic>
 
-#include "../MockNcclLog.h"
+#include "SimCCL/mock/MockNcclLog.h"
 #include "PhyMultiThread.hh"
 #include "SimAiFlowModelRdma.hh"
 
-extern FlowPhyRdma flow_rdma; 
+extern FlowPhyRdma flow_rdma;
 
 std::map<int,std::atomic<int>> all_recv_size;
 std::map<int,std::atomic<int>> all_send_size;

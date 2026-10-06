@@ -56,6 +56,14 @@ foreach(src_file IN LISTS ASTRA_SIM_FILES)
     ns3_export_file("${src_file}" "${NS3_SRC_DIR}/src/applications/${relative_path}")
 endforeach()
 
+foreach(src_file IN LISTS SIMCCL_MOCK_SOURCES SIMCCL_MOCK_HEADERS)
+    get_filename_component(filename "${src_file}" NAME)
+    ns3_export_file(
+            "${src_file}"
+            "${NS3_SRC_DIR}/src/applications/SimCCL/mock/${filename}"
+    )
+endforeach()
+
 file(GLOB NS3_FRONTEND_FILES CONFIGURE_DEPENDS
         "${ASTRA_SIM_DIR}/network_frontend/ns3/*.cc"
         "${ASTRA_SIM_DIR}/network_frontend/ns3/*.hh"

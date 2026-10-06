@@ -42,6 +42,50 @@ if(SYS_ASSERTS)
     message(STATUS "Asserts enabled for all profiles.")
 endif()
 
+# Select one SimCCL mock version for all backends.
+# An explicit CMake cache value takes precedence over the environment.
+set(_simai_nccl_default "v2.20")
+if(DEFINED ENV{SIMAI_NCCL_VERSION}
+        AND NOT "$ENV{SIMAI_NCCL_VERSION}" STREQUAL "")
+    set(_simai_nccl_default "$ENV{SIMAI_NCCL_VERSION}")
+endif()
+
+set(SIMAI_NCCL_VERSION "${_simai_nccl_default}" CACHE STRING
+        "SimCCL mock version")
+set_property(CACHE SIMAI_NCCL_VERSION PROPERTY STRINGS v2.20 v2.30)
+
+if(NOT SIMAI_NCCL_VERSION STREQUAL "v2.20"
+        AND NOT SIMAI_NCCL_VERSION STREQUAL "v2.30")
+    message(FATAL_ERROR
+            "Invalid SIMAI_NCCL_VERSION='${SIMAI_NCCL_VERSION}'; expected v2.20 or v2.30")
+endif()
+
+set(SIMCCL_MOCK_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/SimCCL/src/mock/${SIMAI_NCCL_VERSION}")
+
+if(NOT EXISTS "${SIMCCL_MOCK_DIR}/MockNcclGroup.cc")
+    message(FATAL_ERROR
+            "SimCCL mock sources are missing from '${SIMCCL_MOCK_DIR}'. Initialize the SimCCL submodule.")
+endif()
+
+file(GLOB SIMCCL_MOCK_SOURCES CONFIGURE_DEPENDS
+        "${SIMCCL_MOCK_DIR}/*.cc")
+file(GLOB SIMCCL_MOCK_HEADERS CONFIGURE_DEPENDS
+        "${SIMCCL_MOCK_DIR}/*.h")
+
+# Provide the include namespace used by SimAI without modifying SimCCL.
+set(SIMCCL_INCLUDE_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/simccl-include/${SIMAI_NCCL_VERSION}")
+file(MAKE_DIRECTORY "${SIMCCL_INCLUDE_DIR}/SimCCL/mock")
+
+foreach(header IN LISTS SIMCCL_MOCK_HEADERS)
+    get_filename_component(header_name "${header}" NAME)
+    file(WRITE "${SIMCCL_INCLUDE_DIR}/SimCCL/mock/${header_name}"
+            "#include \"${header}\"\n")
+endforeach()
+
+message(STATUS "SimCCL mock version: ${SIMAI_NCCL_VERSION}")
+
 if(SIMAI_MODE STREQUAL "ns3")
     add_subdirectory(
             "${ASTRA_SIM_DIR}/network_frontend/ns3"

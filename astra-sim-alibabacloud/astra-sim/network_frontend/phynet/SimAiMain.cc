@@ -25,7 +25,7 @@
 
 #include "astra-sim/system/AstraComputeAPI.hh"
 #include "astra-sim/system/Sys.hh"
-#include "astra-sim/system/MockNcclLog.h"
+#include "SimCCL/mock/MockNcclLog.h"
 #include "astra-sim/system/phy-common/BootStrapnet.hh"
 #include "astra-sim/system/phy-common/PhyMultiThread.hh"
 #include "astra-sim/system/Common.hh"
@@ -44,6 +44,7 @@ struct user_param {
   int thread;
   int gpus;
   string workload;
+  string system_conf;
   int comm_scale;
   GPUType gpu_type;
   int nvswitch_num;
@@ -53,6 +54,7 @@ struct user_param {
     thread = 1;
     gpus = 8;
     workload = "microAllReduce.txt";
+    system_conf = "astra-sim-alibabacloud/inputs/system/default.txt";
     comm_scale = 1;
     gpu_type = GPUType::A100;
     nvswitch_num = 1;
@@ -60,10 +62,11 @@ struct user_param {
     gid_index = 0;
   };
   ~user_param(){};
-  user_param(int _thread, int _gpus, string _workload, int _comm_scale = 1)
+  user_param(int _thread, int _gpus, string _workload, string _system_conf, int _comm_scale = 1)
       : thread(_thread),
         gpus(_gpus),
         workload(_workload),
+        system_conf(_system_conf),
         comm_scale(_comm_scale){};
 };
 
@@ -76,7 +79,7 @@ static int user_param_prase(int argc,char * argv[],struct user_param* user_param
         {"comm_scale", required_argument, 0, 's'},
         {"gid_index", required_argument, 0, 'i'},
         {0, 0, 0, 0}};
-  while ((opt = getopt(argc,argv,"ht:w:g:s:i:"))!=-1){
+  while ((opt = getopt(argc,argv,"ht:w:g:s:i:c:"))!=-1){
     switch (opt)
     {
     case 'h':
@@ -84,6 +87,7 @@ static int user_param_prase(int argc,char * argv[],struct user_param* user_param
       std::cout<<"-w    workloads default microAllReduce.txt "<<std::endl;
       std::cout<<"-g    number of gpus,default 1"<<std::endl;
       std::cout<<"-s    comm_scale default 1"<<std::endl;
+      std::cout<<"-c    system_conf"<<std::endl;
       std::cout<<"-i    rdma gid_indxe default 0" <<std::endl;
       break;
     case 't':
@@ -100,6 +104,9 @@ static int user_param_prase(int argc,char * argv[],struct user_param* user_param
       break;
     case 's':
       user_param->comm_scale = stof(optarg);
+      break;
+    case 'c':
+      user_param->system_conf = optarg;
       break;
     case 'i':
       user_param->gid_index = stoi(optarg);
@@ -141,6 +148,7 @@ int main(int argc,char *argv[]){
 
   SimAiPhyNetWork* phy_network = new SimAiPhyNetWork(local_rank);
   global_sys = new AstraSim::Sys(
+    user_param.system_conf,
     phy_network,
     nullptr,
     local_rank,
@@ -157,7 +165,6 @@ int main(int argc,char *argv[]){
     0,
     RESULT_PATH,
     "phynet_test",
-    true,
     false,
     user_param.gpu_type,
     {user_param.gpus},

@@ -1,6 +1,6 @@
 [submodule "SimCCL"]
 	path = SimCCL
-	url = git@github.com:NetMeasurements-Team/SimCCL.git
+	url = ../SimCCL.git
 	branch = master
 [submodule "aicb"]
 	path = aicb

@@ -33,7 +33,7 @@
   #include <ns3/mtp-interface.h>
 #endif
 
-#include "astra-sim/system/MockNcclLog.h"
+#include "SimCCL/mock/MockNcclLog.h"
 #include "common.h"
 
 using namespace ns3;

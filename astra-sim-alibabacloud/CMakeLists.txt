@@ -37,9 +37,17 @@ if(SIMAI_MODE STREQUAL "phy")
     list(APPEND ASTRA_SIM_HEADERS ${PHY_COMMON_HEADERS})
 endif()
 
-add_library(AstraSim ${ASTRA_SIM_SOURCES} ${ASTRA_SIM_HEADERS})
+add_library(AstraSim
+        ${ASTRA_SIM_SOURCES}
+        ${ASTRA_SIM_HEADERS}
+        ${SIMCCL_MOCK_SOURCES}
+        ${SIMCCL_MOCK_HEADERS}
+)
 target_compile_features(AstraSim PUBLIC cxx_std_17)
-target_include_directories(AstraSim PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(AstraSim PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${SIMCCL_INCLUDE_DIR}"
+)
 
 if(NOT SIMAI_MODE STREQUAL "ns3")
     find_package(LibXml2 REQUIRED)
