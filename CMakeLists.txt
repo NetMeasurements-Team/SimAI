@@ -68,22 +68,6 @@ if(NOT EXISTS "${SIMCCL_MOCK_DIR}/MockNcclGroup.cc")
             "SimCCL mock sources are missing from '${SIMCCL_MOCK_DIR}'. Initialize the SimCCL submodule.")
 endif()
 
-file(GLOB SIMCCL_MOCK_SOURCES CONFIGURE_DEPENDS
-        "${SIMCCL_MOCK_DIR}/*.cc")
-file(GLOB SIMCCL_MOCK_HEADERS CONFIGURE_DEPENDS
-        "${SIMCCL_MOCK_DIR}/*.h")
-
-# Provide the include namespace used by SimAI without modifying SimCCL.
-set(SIMCCL_INCLUDE_DIR
-        "${CMAKE_CURRENT_BINARY_DIR}/simccl-include/${SIMAI_NCCL_VERSION}")
-file(MAKE_DIRECTORY "${SIMCCL_INCLUDE_DIR}/SimCCL/mock")
-
-foreach(header IN LISTS SIMCCL_MOCK_HEADERS)
-    get_filename_component(header_name "${header}" NAME)
-    file(WRITE "${SIMCCL_INCLUDE_DIR}/SimCCL/mock/${header_name}"
-            "#include \"${header}\"\n")
-endforeach()
-
 message(STATUS "SimCCL mock version: ${SIMAI_NCCL_VERSION}")
 
 if(SIMAI_MODE STREQUAL "ns3")

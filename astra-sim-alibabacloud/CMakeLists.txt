@@ -25,6 +25,28 @@ file(GLOB ASTRA_SIM_HEADERS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/*.h"
 )
 
+file(GLOB SIMCCL_MOCK_SOURCES CONFIGURE_DEPENDS
+        "${SIMCCL_MOCK_DIR}/*.cc")
+
+file(GLOB SIMCCL_MOCK_HEADERS CONFIGURE_DEPENDS
+        "${SIMCCL_MOCK_DIR}/*.hh"
+        "${SIMCCL_MOCK_DIR}/*.h")
+
+# Reconcile versioned path layout of SimCCL
+set(SIMCCL_INCLUDE_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/simccl-include/${SIMAI_NCCL_VERSION}")
+file(MAKE_DIRECTORY "${SIMCCL_INCLUDE_DIR}/SimCCL/mock")
+foreach(header IN LISTS SIMCCL_MOCK_HEADERS)
+    get_filename_component(header_name "${header}" NAME)
+    file(RELATIVE_PATH header_relative
+            "${SIMCCL_INCLUDE_DIR}/SimCCL/mock"
+            "${header}"
+    )
+    file(TO_CMAKE_PATH "${header_relative}" header_relative)
+    file(WRITE "${SIMCCL_INCLUDE_DIR}/SimCCL/mock/${header_name}"
+            "#include \"${header_relative}\"\n")
+endforeach()
+
 if(SIMAI_MODE STREQUAL "phy")
     file(GLOB PHY_COMMON_SOURCES CONFIGURE_DEPENDS
             "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/phy-common/*.cc"
