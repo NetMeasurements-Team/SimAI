@@ -25,13 +25,6 @@ file(GLOB ASTRA_SIM_HEADERS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/*.h"
 )
 
-file(GLOB SIMCCL_MOCK_SOURCES CONFIGURE_DEPENDS
-        "${SIMCCL_MOCK_DIR}/*.cc")
-
-file(GLOB SIMCCL_MOCK_HEADERS CONFIGURE_DEPENDS
-        "${SIMCCL_MOCK_DIR}/*.hh"
-        "${SIMCCL_MOCK_DIR}/*.h")
-
 # Reconcile versioned path layout of SimCCL
 set(SIMCCL_INCLUDE_DIR
         "${CMAKE_CURRENT_BINARY_DIR}/simccl-include/${SIMAI_NCCL_VERSION}")

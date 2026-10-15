@@ -68,6 +68,14 @@ if(NOT EXISTS "${SIMCCL_MOCK_DIR}/MockNcclGroup.cc")
             "SimCCL mock sources are missing from '${SIMCCL_MOCK_DIR}'. Initialize the SimCCL submodule.")
 endif()
 
+# Shared by every backend: the ns3 frontend exports these into the ns-3 tree,
+# while the AstraSim library consumes them directly.
+file(GLOB SIMCCL_MOCK_SOURCES CONFIGURE_DEPENDS
+        "${SIMCCL_MOCK_DIR}/*.cc")
+file(GLOB SIMCCL_MOCK_HEADERS CONFIGURE_DEPENDS
+        "${SIMCCL_MOCK_DIR}/*.hh"
+        "${SIMCCL_MOCK_DIR}/*.h")
+
 message(STATUS "SimCCL mock version: ${SIMAI_NCCL_VERSION}")
 
 if(SIMAI_MODE STREQUAL "ns3")
