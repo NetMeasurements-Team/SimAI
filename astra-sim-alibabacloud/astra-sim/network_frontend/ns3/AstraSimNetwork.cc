@@ -396,6 +396,9 @@ int main(const int argc, char* argv[]) {
   if (expected_flow_hit_tracking) {
     DumpExpectedFlowHits();
   }
+  // Self-gated on telemetry_flow_index, independent of the oracle flag above.
+  DumpTelemetryStats();
+  DumpTelemetrySwitchCounters();
 
   #ifdef NS3_MPI
   MpiInterface::Disable();

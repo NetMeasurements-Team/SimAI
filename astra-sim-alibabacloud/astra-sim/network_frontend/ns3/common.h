@@ -30,11 +30,18 @@
 #include <ns3/rdma.h>
 #include <ns3/sim-setting.h>
 #include <ns3/switch-node.h>
+#include <ns3/telemetry-header.h>
 
+#include <algorithm>
+#include <cstring>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <set>
+#include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 using namespace ns3;
 using namespace std;
@@ -75,6 +82,27 @@ inline bool source_routing = false;
 inline bool expected_flow_hit_tracking = false;
 inline std::string expected_flow_hit_output_file = "expected_flow_hits.txt";
 inline uint32_t expected_flow_hit_group_size = 1;
+
+// Telemetry flow index (claude_reports/TELEMETRY_FLOW_INDEX_PLAN.md).
+inline bool telemetry_flow_index = false;
+inline std::string telemetry_flow_file = "telemetry_flows.txt";
+// TELEMETRY_FLOW_KEY: 0 = 5TUPLE (default, per-channel resolution),
+// 1 = PAIR (all channels of a host pair share one index).
+inline bool telemetry_flow_key_pair_mode = false;
+inline std::string telemetry_index_dump_file = "";
+inline bool telemetry_on_acks = true;
+inline std::string telemetry_miss_output_file = "";
+inline std::string telemetry_switch_counter_file = "";
+// The presimulation's flow list, canonically sorted and deduplicated. Only the
+// ordering matters: it fixes which flow gets a given switch's index 0 vs 1.
+inline std::vector<FlowKey5Tuple> telemetry_flows;
+// flow -> [(switchId, index at that switch)], sorted by switchId. Built once at
+// setup, never mutated afterwards, and shared read-only by every host -- which
+// is what lets step 3 hang a borrowed pointer off each QP with no locking and
+// no per-host copy.
+inline std::map<FlowKey5Tuple, std::vector<std::pair<uint16_t, uint16_t>>> telemetry_index;
+// switchId -> N_s, the number of counters that switch must allocate.
+inline std::map<uint16_t, uint32_t> telemetry_switch_cardinality;
 inline bool reuse_qps = true;
 inline bool var_win = false, fast_react = true;
 inline bool rto = false;
@@ -140,6 +168,7 @@ inline map<Ptr<Node>, map<Ptr<Node>, uint64_t>> pairTxDelay;
 inline map<uint32_t, map<uint32_t, uint64_t>> pairBw;
 inline map<Ptr<Node>, map<Ptr<Node>, uint64_t>> pairBdp;
 inline map<uint32_t, map<uint32_t, uint64_t>> pairRtt;
+
 
 struct FlowInput {
   uint32_t src, dst, pg, maxPacketCount, port, dport;
@@ -341,7 +370,8 @@ inline Ptr<UniformRandomVariable> source_routing_rand;
 // element 0 (`std::vector<uint16_t>(path.begin() + 1, path.end())`); callers
 // that want the true, complete path a packet takes -- e.g. the expected-hit
 // oracle, RdmaHw::RecordExpectedFlowHits -- use the full return value as-is.
-inline std::vector<uint16_t> BuildSourceRoute(uint32_t srcId, uint32_t dstId) {
+inline std::vector<uint16_t> BuildSourceRoute(uint32_t srcId, uint32_t dstId,
+                                              uint32_t firstHopId) {
   std::vector<uint16_t> path;
   Ptr<Node> src = NodeList::GetNode(srcId);
   Ptr<Node> dst = NodeList::GetNode(dstId);
@@ -362,7 +392,19 @@ inline std::vector<uint16_t> BuildSourceRoute(uint32_t srcId, uint32_t dstId) {
   auto srcDstIt = srcIt->second.find(dst);
   if (srcDstIt == srcIt->second.end() || srcDstIt->second.empty())
     return path;
-  Ptr<Node> cur = pickNext(srcDstIt->second); // first switch
+  // The first hop is NOT a free choice: the packet leaves through whichever NIC
+  // RdmaHw::GetNicIdxOfQp already picked, which fixes the switch it lands on.
+  // Sampling it here instead made path[0] a guess -- harmless on a single-ToR
+  // topology where there is only one candidate, but wrong about half the time
+  // on a dual-ToR one, which mis-credited the first hop in both the telemetry
+  // header and the expected-hit oracle. The caller passes the real peer node;
+  // we only fall back to sampling if it could not be resolved.
+  Ptr<Node> cur;
+  if (firstHopId != UINT32_MAX) {
+    cur = NodeList::GetNode(firstHopId);
+  } else {
+    cur = pickNext(srcDstIt->second);
+  }
   path.push_back(static_cast<uint16_t>(cur->GetId()));
 
   while (cur != dst) {
@@ -431,6 +473,385 @@ inline void SetSourceRoutingEntries() {
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Telemetry flow index (claude_reports/TELEMETRY_FLOW_INDEX_PLAN.md, step 2).
+//
+// A presimulation over the same (workload, topology) supplies ONE file: the
+// flat list of 5-tuples the workload produces. Nothing about switches is read
+// from disk. Which switches a flow can traverse, and what index it holds at
+// each of them, are both derived here from `nextHop` -- the shortest-path DAG
+// CalculateRoute already built -- so the input stays one small file and the
+// index space is a pure function of (flow list, topology), independent of any
+// randomness in the presimulation run that produced the list.
+//
+// Indices are dense PER SWITCH: switch s numbers the flows whose DAG includes
+// it 0..N_s-1 with no gaps, so s can address exactly N_s counters. The global
+// sort order only decides *which* flow gets s's index 0 versus index 1.
+// ---------------------------------------------------------------------------
+
+// Collapses 5-tuples that must share one index.
+//
+// Always: 0xFD (NACK) folds onto 0xFC (ACK). They are the same logical
+// reverse-direction flow of the same QP, differing only in whether the
+// receiver is acknowledging or reporting a gap, and a flow list generated from
+// fct.txt contains no NACK rows at all -- so without this fold every NACK in a
+// live run would miss its index.
+//
+// In PAIR mode, additionally: ports are zeroed, so every channel between a
+// host pair shares one index. That makes the index space immune to the order
+// in which entry.h's portNumber[src][dst]++ hands out ports, at the cost of
+// per-channel resolution. Whether that costs anything is workload-dependent --
+// check the workload's ports-per-pair histogram before choosing it.
+inline FlowKey5Tuple NormalizeTelemetryFlowKey(FlowKey5Tuple f) {
+  if (f.proto == 0xFD)
+    f.proto = 0xFC;
+  if (telemetry_flow_key_pair_mode) {
+    f.sport = 0;
+    f.dport = 0;
+  }
+  return f;
+}
+
+// Every real switch (GetNodeType() == 1) reachable from srcId on the
+// shortest-path DAG toward dstId -- i.e. every switch BuildSourceRoute could
+// ever return for this source/destination pair, over all of its random
+// equal-cost choices. Returned sorted by node id and deduplicated.
+//
+// This is deliberately the DAG rather than the set a presimulation was
+// *observed* to use: spraying makes the observed set a random sample of this
+// one, so indexing on observations risks a live-run packet arriving at a
+// switch where its flow has no index. NVSwitches and the destination host are
+// excluded, matching RdmaHw::RecordExpectedFlowHits' filter.
+inline std::vector<uint16_t> TelemetryDagSwitches(uint32_t srcId, uint32_t dstId) {
+  std::vector<uint16_t> out;
+  if (srcId == dstId)
+    return out;
+  Ptr<Node> dst = NodeList::GetNode(dstId);
+
+  std::set<uint32_t> seen;
+  std::vector<Ptr<Node>> frontier;
+  seen.insert(srcId);
+  frontier.push_back(NodeList::GetNode(srcId));
+
+  while (!frontier.empty()) {
+    Ptr<Node> cur = frontier.back();
+    frontier.pop_back();
+    if (cur == dst)
+      continue;
+    auto it = nextHop.find(cur);
+    if (it == nextHop.end())
+      continue;
+    auto dstIt = it->second.find(dst);
+    if (dstIt == it->second.end())
+      continue;
+    for (Ptr<Node> next : dstIt->second) {
+      if (!seen.insert(next->GetId()).second)
+        continue;
+      if (next->GetNodeType() == 1)
+        out.push_back(static_cast<uint16_t>(next->GetId()));
+      frontier.push_back(next);
+    }
+  }
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
+// Parses the presimulation flow list. Format (see the plan's section 3):
+//
+//   # free-form comment lines
+//   sip,dip,sport,dport,proto
+//   0b000001,0b000101,10000,100,17
+//
+// sip/dip are the same 8-hex-digit encoding the oracle dump and fct.txt use.
+// Any line that does not parse as five fields is skipped, which transparently
+// absorbs the header line and comments whatever they are called -- 144_flows.txt's
+// "srcIP,destIP,..." spelling included. Keys are normalized and deduplicated on
+// load, so PAIR mode cannot hand the same key two different indices.
+inline bool LoadTelemetryFlows() {
+  FILE* f = fopen(telemetry_flow_file.c_str(), "r");
+  if (!f) {
+    std::cout << "ERROR: could not open TELEMETRY_FLOW_FILE '" << telemetry_flow_file << "'"
+              << std::endl;
+    return false;
+  }
+  char line[512];
+  uint64_t parsed = 0, skipped = 0;
+  telemetry_flows.clear();
+  while (fgets(line, sizeof(line), f)) {
+    uint32_t sip, dip, sport, dport, proto;
+    if (sscanf(line, "%x,%x,%u,%u,%u", &sip, &dip, &sport, &dport, &proto) != 5) {
+      skipped++;
+      continue;
+    }
+    FlowKey5Tuple flow{sip, dip, static_cast<uint16_t>(sport), static_cast<uint16_t>(dport),
+                       static_cast<uint8_t>(proto)};
+    telemetry_flows.push_back(NormalizeTelemetryFlowKey(flow));
+    parsed++;
+  }
+  fclose(f);
+
+  std::sort(telemetry_flows.begin(), telemetry_flows.end());
+  telemetry_flows.erase(std::unique(telemetry_flows.begin(), telemetry_flows.end(),
+                                    [](const FlowKey5Tuple& a, const FlowKey5Tuple& b) {
+                                      return !(a < b) && !(b < a);
+                                    }),
+                        telemetry_flows.end());
+
+  std::cout << "telemetry: loaded " << parsed << " rows (" << skipped
+            << " non-data lines skipped) from " << telemetry_flow_file << " -> "
+            << telemetry_flows.size() << " distinct flow keys" << std::endl;
+  return !telemetry_flows.empty();
+}
+
+// Assigns every flow its per-switch index. One pass over the canonically
+// sorted flow list; for each flow, one DAG walk (cached per host pair, since a
+// flow and its ACK flow -- and every channel of the same pair -- share one) and
+// one post-increment of each of those switches' own counters.
+//
+// Must run after CalculateRoutes() has filled nextHop.
+inline bool BuildTelemetryIndex() {
+  telemetry_index.clear();
+  telemetry_switch_cardinality.clear();
+
+  std::map<std::pair<uint32_t, uint32_t>, std::vector<uint16_t>> dagCache;
+  uint64_t entries = 0, badEndpoints = 0;
+
+  for (const FlowKey5Tuple& flow : telemetry_flows) {
+    const uint32_t src = ip_to_node_id(Ipv4Address(flow.sip));
+    const uint32_t dst = ip_to_node_id(Ipv4Address(flow.dip));
+    if (src >= n.GetN() || dst >= n.GetN() || n.Get(src)->GetNodeType() != 0 ||
+        n.Get(dst)->GetNodeType() != 0) {
+      badEndpoints++;
+      continue;
+    }
+    const auto pairKey = std::make_pair(src, dst);
+    auto it = dagCache.find(pairKey);
+    if (it == dagCache.end())
+      it = dagCache.emplace(pairKey, TelemetryDagSwitches(src, dst)).first;
+
+    auto& vec = telemetry_index[flow];
+    vec.reserve(it->second.size());
+    for (uint16_t sw : it->second) {
+      uint32_t& next = telemetry_switch_cardinality[sw];
+      if (next >= TelemetryHeader::NO_INDEX) {
+        std::cout << "ERROR: switch " << sw << " needs more than "
+                  << TelemetryHeader::NO_INDEX
+                  << " flow indices, which does not fit the telemetry header's 16-bit "
+                     "fields. Reduce the flow list, or widen TelemetryHeader's fields."
+                  << std::endl;
+        return false;
+      }
+      vec.emplace_back(sw, static_cast<uint16_t>(next++));
+      entries++;
+    }
+  }
+
+  if (badEndpoints)
+    std::cout << "WARNING: telemetry: " << badEndpoints
+              << " flow rows named an endpoint that is not a host node in this topology; "
+                 "skipped (is the flow list from a different topology?)"
+              << std::endl;
+
+  // Report only what carries information. A mean would be entries/switches,
+  // both already on this line; a minimum cannot even be zero, since a switch no
+  // flow reaches never enters the map. What matters is the largest array any
+  // switch must allocate (the number that would hit the header's 16-bit limit)
+  // and how much of the topology the flow list actually covers.
+  uint32_t maxN = 0;
+  for (const auto& e : telemetry_switch_cardinality)
+    maxN = std::max(maxN, e.second);
+  uint32_t totalSwitches = 0;
+  for (uint32_t i = 0; i < n.GetN(); i++)
+    if (n.Get(i)->GetNodeType() == 1)
+      totalSwitches++;
+
+  std::cout << "telemetry: indexed " << telemetry_index.size() << " flows across "
+            << telemetry_switch_cardinality.size() << " of " << totalSwitches
+            << " switches, " << entries
+            << " (flow,switch) entries; largest per-switch counter array = " << maxN
+            << std::endl;
+  if (telemetry_switch_cardinality.size() < totalSwitches) {
+    std::cout << "WARNING: telemetry: "
+              << (totalSwitches - telemetry_switch_cardinality.size())
+              << " switches lie on no flow's path. Expected for a workload that does not "
+                 "use the whole fabric, but also what a flow list from a *different* "
+                 "topology looks like -- worth checking." << std::endl;
+  }
+  return true;
+}
+
+// Optional debug dump of the whole index, one row per (switch, flow), sorted by
+// switch then index. This is what the plan's section 11.3 check diffs against a
+// per-switch presimulation file such as 144_flows.txt: the row count for a given
+// switch_node_id is that switch's N_s, and any excess over the observed count is
+// a counter that DAG membership allocates but the run never increments.
+inline void DumpTelemetryIndex() {
+  if (telemetry_index_dump_file.empty())
+    return;
+  std::map<uint16_t, std::vector<std::pair<uint16_t, const FlowKey5Tuple*>>> bySwitch;
+  for (const auto& e : telemetry_index)
+    for (const auto& si : e.second)
+      bySwitch[si.first].emplace_back(si.second, &e.first);
+
+  FILE* f = fopen(telemetry_index_dump_file.c_str(), "w");
+  if (!f) {
+    std::cout << "WARNING: could not open TELEMETRY_INDEX_DUMP_FILE '"
+              << telemetry_index_dump_file << "'" << std::endl;
+    return;
+  }
+  fprintf(f, "switch_node_id,index,sip,dip,sport,dport,proto\n");
+  for (auto& e : bySwitch) {
+    std::sort(e.second.begin(), e.second.end(),
+              [](const std::pair<uint16_t, const FlowKey5Tuple*>& a,
+                 const std::pair<uint16_t, const FlowKey5Tuple*>& b) { return a.first < b.first; });
+    for (const auto& row : e.second)
+      fprintf(f, "%u,%u,%08x,%08x,%u,%u,%u\n", e.first, row.first, row.second->sip,
+              row.second->dip, row.second->sport, row.second->dport, row.second->proto);
+  }
+  fclose(f);
+  std::cout << "telemetry: wrote index dump to " << telemetry_index_dump_file << std::endl;
+}
+
+// Loads the flow list and builds the index. Returns false if telemetry is
+// enabled but unusable, so the caller can fail loudly rather than run a whole
+// simulation that silently stamps nothing.
+inline bool SetupTelemetryIndex() {
+  if (!telemetry_flow_index)
+    return true;
+  if (!LoadTelemetryFlows())
+    return false;
+  if (!BuildTelemetryIndex())
+    return false;
+  DumpTelemetryIndex();
+  return true;
+}
+
+// Registered on every host's RdmaHw as its TelemetryIndexCallback. Returns a
+// borrowed pointer into telemetry_index -- valid for the whole run, since that
+// map is built before Simulator::Run() and never mutated afterwards -- or
+// nullptr when the presimulation's flow list did not contain this flow.
+// Callers resolve this once per QP, never per packet.
+// End-of-run dump of the switch-side counters, one row per (switch, index),
+// alongside the 5-tuple that index belongs to so it can be joined directly
+// against the host-side oracle without a second file. This is the closed-loop
+// check of section 11.1: counted_packets here must equal the oracle's
+// expected_packet_count for the same (switch, flow).
+inline void DumpTelemetrySwitchCounters() {
+  if (!telemetry_flow_index || telemetry_switch_counter_file.empty())
+    return;
+  // switch -> index -> flow, inverted from the index we already built.
+  std::map<uint16_t, std::map<uint16_t, const FlowKey5Tuple*>> bySwitch;
+  for (const auto& e : telemetry_index)
+    for (const auto& si : e.second)
+      bySwitch[si.first][si.second] = &e.first;
+
+  FILE* f = fopen(telemetry_switch_counter_file.c_str(), "w");
+  if (!f) {
+    std::cout << "WARNING: could not open TELEMETRY_SWITCH_COUNTER_FILE '"
+              << telemetry_switch_counter_file << "'" << std::endl;
+    return;
+  }
+  fprintf(f, "switch_node_id,index,sip,dip,sport,dport,proto,counted_packets\n");
+  uint64_t noIndex = 0, outOfRange = 0, noHeader = 0, counted = 0, srPtrBad = 0, srSelfBad = 0;
+  for (uint32_t i = 0; i < n.GetN(); i++) {
+    Ptr<Node> node = n.Get(i);
+    if (node->GetNodeType() != 1)
+      continue;
+    Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(node);
+    const auto& counters = sw->GetTelemetryCounters();
+    noIndex += sw->GetTelemetryNoIndex();
+    outOfRange += sw->GetTelemetryOutOfRange();
+    noHeader += sw->GetTelemetryNoHeader();
+    srPtrBad += sw->GetSrPtrOutOfRange();
+    srSelfBad += sw->GetSrSelfMismatch();
+    auto sit = bySwitch.find(static_cast<uint16_t>(node->GetId()));
+    for (uint32_t k = 0; k < counters.size(); k++) {
+      counted += counters[k];
+      const FlowKey5Tuple* flow =
+          (sit == bySwitch.end()) ? nullptr : (sit->second.count(k) ? sit->second.at(k) : nullptr);
+      if (flow)
+        fprintf(f, "%u,%u,%08x,%08x,%u,%u,%u,%lu\n", node->GetId(), k, flow->sip, flow->dip,
+                flow->sport, flow->dport, flow->proto, counters[k]);
+      else
+        fprintf(f, "%u,%u,,,,,,%lu\n", node->GetId(), k, counters[k]);
+    }
+  }
+  fclose(f);
+  std::cout << "telemetry: switches counted " << counted << " packets; " << noIndex
+            << " had no index for their hop, " << outOfRange << " were out of range, "
+            << noHeader << " source-routed packets carried no telemetry header" << std::endl;
+  if (srSelfBad) {
+    std::cout << "WARNING: telemetry: " << srSelfBad
+              << " packets arrived at a switch whose own node id is not the segment at "
+                 "segs[ptr-1], i.e. the header describes a route the packet is not on. "
+                 "That means the first hop the sender predicted differs from the one its "
+                 "NIC actually used." << std::endl;
+  }
+  if (srPtrBad) {
+    std::cout << "WARNING: telemetry: " << srPtrBad
+              << " packets arrived with an SRH pointer past the end of their segment list "
+                 "and were DROPPED. Before this was checked, that index read past the "
+                 "segment array into adjacent header memory, which can be forwarded to an "
+                 "arbitrary port and loop." << std::endl;
+  }
+  std::cout << "telemetry: wrote switch counters to " << telemetry_switch_counter_file
+            << std::endl;
+}
+
+inline const std::vector<std::pair<uint16_t, uint16_t>>* TelemetryIndexLookup(uint32_t sip,
+                                                                              uint32_t dip,
+                                                                              uint16_t sport,
+                                                                              uint16_t dport,
+                                                                              uint8_t proto) {
+  const FlowKey5Tuple key =
+      NormalizeTelemetryFlowKey(FlowKey5Tuple{sip, dip, sport, dport, proto});
+  auto it = telemetry_index.find(key);
+  return it == telemetry_index.end() ? nullptr : &it->second;
+}
+
+// End-of-run diagnostics: how many packets were stamped, how many were not, and
+// which 5-tuples were missing from the flow list entirely. A miss means the
+// presimulation and the live run disagree about which flows exist -- the one
+// real correctness risk in this design -- so it is counted and reported rather
+// than asserted on. Must be called after Simulator::Destroy(), like the oracle
+// dump it sits next to.
+inline void DumpTelemetryStats() {
+  if (!telemetry_flow_index)
+    return;
+  uint64_t stamped = 0, unstamped = 0;
+  std::map<FlowKey5Tuple, uint64_t> misses;
+  for (uint32_t i = 0; i < n.GetN(); i++) {
+    Ptr<Node> node = n.Get(i);
+    if (node->GetNodeType() != 0)
+      continue;
+    Ptr<RdmaDriver> rdma = node->GetObject<RdmaDriver>();
+    if (!rdma)
+      continue;
+    stamped += rdma->m_rdma->GetTelemetryStamped();
+    unstamped += rdma->m_rdma->GetTelemetryUnstamped();
+    for (const auto& e : rdma->m_rdma->GetTelemetryMisses())
+      misses[e.first] += e.second;
+  }
+  std::cout << "telemetry: stamped " << stamped << " packets, left " << unstamped
+            << " unstamped (" << misses.size() << " distinct flows missing from the flow list)"
+            << std::endl;
+  if (misses.empty() || telemetry_miss_output_file.empty())
+    return;
+  FILE* f = fopen(telemetry_miss_output_file.c_str(), "w");
+  if (!f) {
+    std::cout << "WARNING: could not open TELEMETRY_MISS_OUTPUT_FILE '"
+              << telemetry_miss_output_file << "'" << std::endl;
+    return;
+  }
+  fprintf(f, "sip,dip,sport,dport,proto,unstamped_packets\n");
+  for (const auto& e : misses)
+    fprintf(f, "%08x,%08x,%u,%u,%u,%lu\n", e.first.sip, e.first.dip, e.first.sport,
+            e.first.dport, e.first.proto, e.second);
+  fclose(f);
+  std::cout << "telemetry: wrote missing-flow report to " << telemetry_miss_output_file
+            << std::endl;
 }
 
 // Derives one host-group's output path from the single configured base path.
@@ -778,6 +1199,34 @@ inline bool ReadConf(const string& network_topo, const string& network_conf, con
       expected_flow_hit_output_file = extend_output_file_name(run_name, expected_flow_hit_output_file);
     } else if (key.compare("EXPECTED_FLOW_HIT_GROUP_SIZE") == 0) {
       conf >> expected_flow_hit_group_size;
+    } else if (key.compare("ENABLE_TELEMETRY_FLOW_INDEX") == 0) {
+      uint32_t v;
+      conf >> v;
+      telemetry_flow_index = v;
+    } else if (key.compare("TELEMETRY_FLOW_FILE") == 0) {
+      conf >> telemetry_flow_file;
+    } else if (key.compare("TELEMETRY_FLOW_KEY") == 0) {
+      std::string v;
+      conf >> v;
+      telemetry_flow_key_pair_mode = (v == "PAIR");
+      if (v != "PAIR" && v != "5TUPLE") {
+        std::cout << "WARNING: TELEMETRY_FLOW_KEY '" << v
+                  << "' is neither 5TUPLE nor PAIR, defaulting to 5TUPLE." << std::endl;
+      }
+    } else if (key.compare("TELEMETRY_INDEX_DUMP_FILE") == 0) {
+      conf >> telemetry_index_dump_file;
+      telemetry_index_dump_file = extend_output_file_name(run_name, telemetry_index_dump_file);
+    } else if (key.compare("TELEMETRY_ON_ACKS") == 0) {
+      uint32_t v;
+      conf >> v;
+      telemetry_on_acks = v;
+    } else if (key.compare("TELEMETRY_MISS_OUTPUT_FILE") == 0) {
+      conf >> telemetry_miss_output_file;
+      telemetry_miss_output_file = extend_output_file_name(run_name, telemetry_miss_output_file);
+    } else if (key.compare("TELEMETRY_SWITCH_COUNTER_FILE") == 0) {
+      conf >> telemetry_switch_counter_file;
+      telemetry_switch_counter_file =
+          extend_output_file_name(run_name, telemetry_switch_counter_file);
     } else if (key.compare("GLOBAL_T") == 0) {
       conf >> global_t;
       global_t = 1;
@@ -917,6 +1366,19 @@ inline bool ReadConf(const string& network_topo, const string& network_conf, con
     std::cout << "WARNING: ENABLE_EXPECTED_FLOW_HIT_TRACKING is set but "
                  "ENABLE_SOURCE_ROUTING is not -- hosts never learn a packet's "
                  "path without source routing, so no oracle files will be produced."
+              << std::endl;
+  }
+  if (telemetry_flow_index && !source_routing) {
+    std::cout << "WARNING: ENABLE_TELEMETRY_FLOW_INDEX is set but ENABLE_SOURCE_ROUTING "
+                 "is not -- the telemetry header rides on the SRH and is only attached to "
+                 "source-routed packets, so nothing will be stamped."
+              << std::endl;
+  }
+  if (telemetry_flow_index && !reuse_qps) {
+    std::cout << "WARNING: ENABLE_TELEMETRY_FLOW_INDEX is set with REUSE_QPS 0 -- every "
+                 "message then burns a fresh source port, so the set of 5-tuples grows "
+                 "without bound and cannot match a presimulation's flow list. Use "
+                 "REUSE_QPS 1, or TELEMETRY_FLOW_KEY PAIR."
               << std::endl;
   }
   if (expected_flow_hit_group_size == 0) {
@@ -1147,7 +1609,20 @@ inline void SetupNetwork(
         // uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())
         //                      ->GetDelay()
         //                      .GetTimeStep();
-        uint32_t headroom = rate * maxRtt / 8 / 1000000000 + packet_payload_size * 2;  // BDP + 2 packet;
+        // The "+ 2 packets" of PFC headroom must be TWO REAL PACKETS, not two
+        // payloads: a packet on the wire also carries ppp+ip+udp+SeqTs+INT, and
+        // under source routing an SrHeader, and under telemetry a
+        // TelemetryHeader on top of that. Sizing this from packet_payload_size
+        // alone under-reserves by the whole header stack, which on a workload
+        // already running at the edge of BUFFER_SIZE is enough to tip the switch
+        // into overflow. See the OPEN ISSUE section of
+        // claude_reports/TELEMETRY_FLOW_INDEX_PLAN.md.
+        uint32_t maxPktBytes = packet_payload_size + CustomHeader::GetStaticWholeHeaderSize();
+        if (source_routing)
+          maxPktBytes += SrHeader::GetStaticSize();
+        if (telemetry_flow_index)
+          maxPktBytes += TelemetryHeader::GetStaticSize();
+        uint32_t headroom = rate * maxRtt / 8 / 1000000000 + maxPktBytes * 2;  // BDP + 2 packets
         sw->m_mmu->ConfigHdrm(j, headroom);
         sw->m_mmu->pfc_a_shift[j] = shift;
         while (rate > nic_rate && sw->m_mmu->pfc_a_shift[j] > 0) {
@@ -1207,6 +1682,9 @@ inline void SetupNetwork(
       rdmaHw->SetAttribute("SourceRouting", BooleanValue(source_routing));
       rdmaHw->SetSourceRouteCb(MakeCallback(&BuildSourceRoute));
       rdmaHw->SetAttribute("ExpectedFlowHitTracking", BooleanValue(expected_flow_hit_tracking));
+      rdmaHw->SetAttribute("TelemetryFlowIndex", BooleanValue(telemetry_flow_index));
+      rdmaHw->SetAttribute("TelemetryOnAcks", BooleanValue(telemetry_on_acks));
+      rdmaHw->SetTelemetryIndexCb(MakeCallback(&TelemetryIndexLookup));
 
       switch (cc_mode) {
       case 1:
@@ -1268,6 +1746,13 @@ inline void SetupNetwork(
 
   SetRoutingEntries();
   SetSourceRoutingEntries();
+  // Needs nextHop, which CalculateRoutes filled above.
+  if (!SetupTelemetryIndex()) {
+    std::cout << "ERROR: telemetry flow index could not be built; aborting rather than "
+                 "running a simulation that stamps nothing."
+              << std::endl;
+    exit(1);
+  }
   //printRoutingEntries();
 
   for (uint32_t i = 0; i < node_num; i++) {
@@ -1277,6 +1762,14 @@ inline void SetupNetwork(
       sw->SetAttribute("MaxRtt", UintegerValue(maxRtt));
       sw->SetAttribute("PacketSpraying", BooleanValue(packet_spraying));
       sw->SetAttribute("SourceRouting", BooleanValue(source_routing));
+      // Each switch allocates exactly N_s counters -- the whole point of the
+      // per-switch dense index. Zero (a switch no flow reaches, or telemetry
+      // off) leaves counting disabled on that switch.
+      if (telemetry_flow_index && !telemetry_switch_counter_file.empty()) {
+        auto it = telemetry_switch_cardinality.find(static_cast<uint16_t>(n.Get(i)->GetId()));
+        uint32_t ns = it == telemetry_switch_cardinality.end() ? 0 : it->second;
+        sw->SetAttribute("TelemetryCounterCount", UintegerValue(ns));
+      }
     }
   }
 
