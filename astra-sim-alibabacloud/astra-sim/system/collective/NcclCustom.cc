@@ -19,6 +19,8 @@
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/system/StreamBaseline.hh"
 #include "astra-sim/system/PacketBundle.hh"
+#include <climits>
+#include <cstdint>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -160,6 +162,17 @@ void NcclCustom::init_indegree_mapping() {
     NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: init_indegree_mapping EXIT.", id);
 }
 
+int NcclCustom::flow_tag(const MockNccl::SingleFlow& flow) const {
+    assert(flow.channel_id >= 0 && flow.channel_id < static_cast<int>(m_channels));
+    assert(flow.chunk_id >= 0 && flow.chunk_id < flow.chunk_count);
+    const int64_t tag =
+        static_cast<int64_t>(layer_num) * flow.chunk_count * m_channels
+      + static_cast<int64_t>(flow.channel_id) * flow.chunk_count
+      + flow.chunk_id;
+    assert(tag >= 0 && tag <= INT_MAX); // the tag is an int down to the frontend
+    return static_cast<int>(tag);
+}
+
 void NcclCustom::release_packet(int channel_id, int flow_id, bool NPU_to_MA) {
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
     if(!NPU_to_MA){
@@ -266,18 +279,12 @@ void NcclCustom::send_flow_unlocked(int channel_id, int flow_id) {
     snd_req.flowTag.flow_size = flow.flow_size;
     snd_req.flowTag.sender_node = id;
     snd_req.flowTag.receiver_node = flow.dest;
-    snd_req.flowTag.tag_id =
-        //(layer_num*3 + static_cast<int>(layer_step)) * flow.chunk_count * m_channels +
-        flow.channel_id * flow.chunk_count +
-        flow.chunk_id;
-    NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Preparing to send flow %d with chunk_id/source/dest (%d/%d/%d) on channel %d with tag_id %d = %d * %d + %d.",
+    snd_req.flowTag.tag_id = flow_tag(flow);
+    NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Preparing to send flow %d with chunk_id/source/dest (%d/%d/%d) on channel %d with tag_id %d = %d * %d * %u + %d * %d + %d.",
         id, flow_id, flow.chunk_id, flow.src, flow.dest, channel_id,
         snd_req.flowTag.tag_id,
-        // Term 1: (layer_num * 3 + layer_step) * flow.chunk_count * m_channels
-        //layer_num, static_cast<int>(layer_step), flow.chunk_count, m_channels,
-        // Term 2: flow.channel_id * flow.chunk_count
+        layer_num, flow.chunk_count, m_channels,
         flow.channel_id, flow.chunk_count,
-        // Term 3: flow.chunk_id
         flow.chunk_id);
     NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Preparing to send flow %d with chunk_id/source/dest (%d/%d/%d) on channel %d with tag_id %d.",
         id, flow_id, flow.chunk_id, flow.src, flow.dest, channel_id, snd_req.flowTag.tag_id);
@@ -362,8 +369,7 @@ void NcclCustom::run(EventType event, CallData* data) {
                     stream,
                     flow.src,
                     id,
-                    flow.channel_id * flow.chunk_count
-                      + flow.chunk_id,
+                    flow_tag(flow),
                     EventType::PacketReceived,
                     stream->current_queue_id,
                     1);
@@ -539,8 +545,7 @@ void NcclCustom::run(EventType event, CallData* data) {
                     stream,
                     id,
                     flow.dest,
-                    flow.channel_id * flow.chunk_count
-                      + flow.chunk_id,
+                    flow_tag(flow),
                     EventType::PacketSentFinshed);
                 snd_ehd->flow_id = flow.flow_id;
                 snd_ehd->channel_id = flow.channel_id;
@@ -556,13 +561,10 @@ void NcclCustom::run(EventType event, CallData* data) {
                 snd_req.layerNum = layer_num;
                 snd_req.reqCount = flow.flow_size;
 
-                NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Preparing to send flow %d with chunk_id/source/dest (%d/%d/%d) on channel %d with tag_id %d = %d * %d + %d.",
+                NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Preparing to send flow %d with chunk_id/source/dest (%d/%d/%d) on channel %d with tag_id %d = %d * %d * %u + %d * %d + %d.",
                     id, flow_id, flow.chunk_id, flow.src, flow.dest, channel_id, snd_ehd->tag,
-                    // Term 1: (layer_num * 3 + layer_step) * flow.chunk_count * m_channels
-                    //layer_num, static_cast<int>(layer_step), flow.chunk_count, m_channels,
-                    // Term 2: flow.channel_id * flow.chunk_count
+                    layer_num, flow.chunk_count, m_channels,
                     flow.channel_id, flow.chunk_count,
-                    // Term 3: flow.chunk_id
                     flow.chunk_id);
 
                 stream->owner->front_end_sim_send(

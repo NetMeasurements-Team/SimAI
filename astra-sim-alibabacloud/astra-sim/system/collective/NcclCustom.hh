@@ -100,6 +100,7 @@ public:
     void send_flow_unlocked(int channel_id, int flow_id);
     void release_packet(int channel_id, int flow_id, bool NPU_to_MA);
     virtual void exit() override;
+    int flow_tag(const MockNccl::SingleFlow& flow) const;
 
     #ifdef PHY_MTP
     bool phy_iteratable(int channel_id); //
