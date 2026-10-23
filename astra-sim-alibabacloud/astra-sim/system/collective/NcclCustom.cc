@@ -35,7 +35,6 @@
 extern FlowPhyRdma flow_rdma;
 #endif
 
-#define NO_MA_NPU 0
 namespace AstraSim {
 
 std::atomic<bool> NcclCustom::g_flow_inCriticalSection_ncclCustom(false);
@@ -56,7 +55,9 @@ NcclCustom::NcclCustom(
     bool collective_graph,
     std::shared_ptr<MockNccl::FlowModels> ptr_flow_models,
     int treechannels,
-    int tot_gpus)
+    int tot_gpus,
+    int algorithm,
+    int protocol)
     : Algorithm(layer_num) {
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
     NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: NcclCustom constructor ENTRY. Layer: %d, Channels: %d", id, layer_num, treechannels);
@@ -69,6 +70,15 @@ NcclCustom::NcclCustom(
     this->m_channels = treechannels;
     this->tot_gpus = tot_gpus;
     this->collective_graph = collective_graph;
+    this->m_algorithm = algorithm;
+    this->m_protocol = protocol;
+
+    // MemBus injection state, initialized exactly as in NcclFlowModel.
+    this->toggle = false;
+    for (uint32_t channel_id = 0; channel_id < m_channels; channel_id++) {
+        zero_latency_packets[channel_id] = 0;
+        non_zero_latency_packets[channel_id] = 0;
+    }
 
     if (ptr_flow_models) {
         this->_flow_models = *ptr_flow_models;
@@ -162,6 +172,11 @@ void NcclCustom::init_indegree_mapping() {
     NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: init_indegree_mapping EXIT.", id);
 }
 
+// Tag used to match a send with its receive in the network frontend (keyed by tag, src, dst).
+// Same layout as NcclFlowModel: layer_num * chunk_count * m_channels + channel_id * chunk_count + chunk_id.
+// The layer term keeps cached flow models reused by different layers from colliding.
+// Sender and receiver must compute the same value, so every term comes either from the flow
+// itself (identical on both ranks) or from m_channels, which is the same on every rank.
 int NcclCustom::flow_tag(const MockNccl::SingleFlow& flow) const {
     assert(flow.channel_id >= 0 && flow.channel_id < static_cast<int>(m_channels));
     assert(flow.chunk_id >= 0 && flow.chunk_id < flow.chunk_count);
@@ -173,61 +188,65 @@ int NcclCustom::flow_tag(const MockNccl::SingleFlow& flow) const {
     return static_cast<int>(tag);
 }
 
-void NcclCustom::release_packet(int channel_id, int flow_id, bool NPU_to_MA) {
+// Hands one flow to the MemBus, mirroring NcclFlowModel::insert_packets() + release_packets().
+// Per channel, packets are released in rounds: the first PARALLEL_REDUCE packet goes NPU->MA
+// with no processing, the following (nodes_in_ring - 1) * PARALLEL_REDUCE go MA->NPU and,
+// for reducing collectives, pay the reduction cost (needs_processing). As in NcclFlowModel,
+// `toggle` is shared by all channels and flips at the start of every round, which marks the
+// reduce-scatter half of an AllReduce.
+// Must be called with the FlowCriticalSection held (the counters are shared state).
+void NcclCustom::release_packet(int channel_id, int flow_id) {
+    assert(NcclCustom::FlowCriticalSection::is_locked());
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
-    if(!NPU_to_MA){
-        NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Increasing send_packets_in_flight to %d for flow %d on channel %d.", id, send_packets_in_flight.load() + 1, flow_id, channel_id);
-        send_packets_in_flight++;
-    }
     const auto& flow = _flow_models.at({channel_id, flow_id});
-    
-    bool needs_processing = false;
+
+    int& zero_latency = zero_latency_packets[channel_id];
+    int& non_zero_latency = non_zero_latency_packets[channel_id];
+    if (zero_latency == 0 && non_zero_latency == 0) {
+        zero_latency = PARALLEL_REDUCE;
+        non_zero_latency = (nodes_in_ring - 1) * PARALLEL_REDUCE;
+        toggle = !toggle;
+    }
+
+    bool processed;
+    bool send_back;
+    bool npu_to_ma;
+    if (zero_latency > 0) {
+        processed = false;
+        send_back = false;
+        npu_to_ma = true;
+        zero_latency--;
+    } else {
+        processed = comType == ComType::Reduce_Scatter || (comType == ComType::All_Reduce && toggle);
+        send_back = non_zero_latency > PARALLEL_REDUCE;
+        npu_to_ma = false;
+        non_zero_latency--;
+    }
+
+    // Every released flow comes back as a send (General -> front_end_sim_send -> PacketSentFinshed),
+    // whichever MemBus direction it takes, so it is always counted as in flight.
+    send_packets_in_flight++;
+    NcclLog->writeLog(NcclLogLevel::DEBUG,
+        "ID %d: Releasing flow %d on channel %d (%s, processed %d, send_back %d), send_packets_in_flight %d.",
+        id, flow_id, channel_id, npu_to_ma ? "NPU->MA" : "MA->NPU", processed, send_back,
+        send_packets_in_flight.load());
 
     PacketBundle* pb = new PacketBundle(
         stream->owner,
         stream,
         {},
-        needs_processing,
-        false, 
+        processed,
+        send_back,
         flow.flow_size,
         MemBus::Transmition::Usual,
         channel_id,
         flow_id);
 
-    if (NPU_to_MA) {
-        NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Releasing NPU->MA packet for flow %d.", id, flow_id);
+    if (npu_to_ma) {
         pb->send_to_MA();
     } else {
-        NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Releasing MA->NPU packet for flow %d.", id, flow_id);
         pb->send_to_NPU();
     }
-}
-
-void NcclCustom::send_flow(int channel_id, int flow_id) {
-    MockNcclLog* NcclLog = MockNcclLog::getInstance();
-    NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: send_flow ENTRY for flow %d on channel %d.", id, flow_id, channel_id);
-    if (_flow_models.find({channel_id, flow_id}) == _flow_models.end()) {
-        NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: Attempted to send non-existent flow %d on channel %d.", id, flow_id, channel_id);
-        return;
-    }
-
-    auto& flow= _flow_models.at({channel_id, flow_id});
-    Tick current_time = Sys::boostedTick();
-
-    if (collective_graph == true){
-        // Record the start time for this flow under a thread-safe lock.
-        {
-            std::lock_guard<std::mutex> lg(g_graph_data_per_layer[layer_num].mtx);
-            g_graph_data_per_layer[layer_num].start_times[flow.flow_id] = current_time;
-        }
-    }
-
-    NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Packet sent for flow %d with chunk_id/source/dest (%d/%d/%d) on channel %d at tick %llu.",
-                id, flow.flow_id, flow.chunk_id, flow.src, flow.dest, flow.channel_id, current_time);
-
-    flow_states[flow_id] = FlowState::Sending;
-    release_packet(channel_id, flow_id, false);
-    NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: send_flow EXIT.", id);
 }
 
 void NcclCustom::send_flow_unlocked(int channel_id, int flow_id) {
@@ -262,55 +281,7 @@ void NcclCustom::send_flow_unlocked(int channel_id, int flow_id) {
     NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Packet sent for flow %d with chunk_id/source/dest (%d/%d/%d) on channel %d at tick %llu.",
             id, flow.flow_id, flow.chunk_id, flow.src, flow.dest, flow.channel_id, current_time);
 
-    #if NO_MA_NPU
-    send_packets_in_flight++;
-
-    sim_request snd_req;
-    snd_req.srcRank = id;
-    snd_req.dstRank = flow.dest;
-    snd_req.tag = channel_id;
-    snd_req.reqType = UINT8;
-    snd_req.vnet = this->stream->current_queue_id;
-    snd_req.layerNum = layer_num;
-    snd_req.reqCount = flow.flow_size;
-    snd_req.flowTag.current_flow_id = flow_id;
-    snd_req.flowTag.chunk_id = flow.chunk_id;
-    snd_req.flowTag.channel_id = channel_id;
-    snd_req.flowTag.flow_size = flow.flow_size;
-    snd_req.flowTag.sender_node = id;
-    snd_req.flowTag.receiver_node = flow.dest;
-    snd_req.flowTag.tag_id = flow_tag(flow);
-    NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Preparing to send flow %d with chunk_id/source/dest (%d/%d/%d) on channel %d with tag_id %d = %d * %d * %u + %d * %d + %d.",
-        id, flow_id, flow.chunk_id, flow.src, flow.dest, channel_id,
-        snd_req.flowTag.tag_id,
-        layer_num, flow.chunk_count, m_channels,
-        flow.channel_id, flow.chunk_count,
-        flow.chunk_id);
-    NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Preparing to send flow %d with chunk_id/source/dest (%d/%d/%d) on channel %d with tag_id %d.",
-        id, flow_id, flow.chunk_id, flow.src, flow.dest, channel_id, snd_req.flowTag.tag_id);
-    SendPacketEventHandlerData* send_ehd = new SendPacketEventHandlerData(
-        stream,
-        id,
-        flow.dest,
-        channel_id,
-        EventType::PacketSentFinshed);
-    ///send_ehd->flowTag = snd_req.flowTag;
-
-    stream->owner->front_end_sim_send(
-        0,
-        Sys::dummy_data,
-        snd_req.reqCount,
-        UINT8,
-        flow.dest,
-        snd_req.flowTag.tag_id,
-        &snd_req,
-        &Sys::handleEvent,
-        send_ehd);
-
-
-    #else
-    release_packet(channel_id, flow_id, false);
-    #endif
+    release_packet(channel_id, flow_id);
 
     NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: send_flow_unlocked EXIT.", id);
 }
@@ -549,7 +520,11 @@ void NcclCustom::run(EventType event, CallData* data) {
                     EventType::PacketSentFinshed);
                 snd_ehd->flow_id = flow.flow_id;
                 snd_ehd->channel_id = flow.channel_id;
+                snd_ehd->chunk_id = flow.chunk_id;
                 snd_ehd->nvls_on = comType == ComType::All_Reduce_NVLS;
+                // Selection used by the frontend's send-latency model (as in NcclFlowModel).
+                snd_ehd->algorithm = m_algorithm;
+                snd_ehd->protocol = m_protocol;
 
                 // TODO is this needed? It is used only by the physical frontend
                 sim_request snd_req;

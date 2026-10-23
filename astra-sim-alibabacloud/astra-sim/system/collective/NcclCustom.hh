@@ -57,6 +57,17 @@ public:
     int total_sends_to_initiate;
     std::map<int, int> flow_id_to_channel_id_map;
     bool collective_graph;
+    // NCCL algorithm / protocol selected for this collective, forwarded to the
+    // network frontend through SendPacketEventHandlerData (send-latency model).
+    int m_algorithm;
+    int m_protocol;
+    // MemBus injection modelling, same scheme as NcclFlowModel::insert_packets():
+    // per channel, one zero-latency packet (NPU->MA) followed by
+    // (nodes_in_ring - 1) * PARALLEL_REDUCE non-zero-latency packets (MA->NPU).
+    static constexpr int PARALLEL_REDUCE = 1;
+    bool toggle;
+    std::map<int, int> zero_latency_packets;
+    std::map<int, int> non_zero_latency_packets;
     std::map<int, int> indegree_mapping; //
     MockNccl::FlowModels _flow_models; //
     uint32_t m_channels; //
@@ -89,18 +100,19 @@ public:
         bool collective_graph,
         std::shared_ptr<MockNccl::FlowModels> ptr_flow_models,
         int treechannels,
-        int tot_gpus);
+        int tot_gpus,
+        int algorithm,
+        int protocol);
 
     virtual ~NcclCustom();
 
     virtual void run(EventType event, CallData* data) override;
     void init_indegree_mapping(); //
-    void send_flow(int channel_id, int flow_id);
     void check_completion();
-    void send_flow_unlocked(int channel_id, int flow_id);
-    void release_packet(int channel_id, int flow_id, bool NPU_to_MA);
-    virtual void exit() override;
     int flow_tag(const MockNccl::SingleFlow& flow) const;
+    void send_flow_unlocked(int channel_id, int flow_id);
+    void release_packet(int channel_id, int flow_id);
+    virtual void exit() override;
 
     #ifdef PHY_MTP
     bool phy_iteratable(int channel_id); //

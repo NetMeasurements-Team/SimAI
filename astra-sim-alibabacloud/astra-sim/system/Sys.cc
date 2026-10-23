@@ -1114,7 +1114,9 @@ CollectivePhase Sys::generate_nccl_phase(
             collective_graph,
             flow_models,
             32, // TODO: pass n_channels once get_msccl_channels() reports the right count
-            topo_gpus[0]));
+            topo_gpus[0],
+            nccl_info->algorithm,
+            nccl_info->protocol));
   }
 
   return CollectivePhase(
