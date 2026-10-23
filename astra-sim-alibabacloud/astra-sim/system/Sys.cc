@@ -17,6 +17,7 @@ LICENSE file in the root directory of this source tree.
 #include "SimCCL/mock/MockNcclLog.h"
 #include "astra-sim/system/collective/AllToAll.hh"
 #include "astra-sim/system/collective/DoubleBinaryTreeAllReduce.hh"
+#include "astra-sim/system/collective/NcclCustom.hh"
 #include "astra-sim/system/collective/HalvingDoubling.hh"
 #include "astra-sim/system/collective/NcclFlowModel.hh"
 #include "astra-sim/system/collective/Ring.hh"
@@ -139,6 +140,7 @@ Sys::Sys(
   this->dim_to_break = -1;
 
   start_sim_time = std::chrono::high_resolution_clock::now();
+  this->collective_graph=false;
   this->NI = NI;
   this->MEM = MEM;
   this->id = id;
@@ -165,7 +167,7 @@ Sys::Sys(
   this->topo_gpus = _all_gpus;
   this->gpu_type = _gpu_type;
   this->ngpus_per_node = _ngpus_per_node;
-  if ((id + npu_offset + 1) > all_generators.size()) {
+  if (id + npu_offset + 1 > all_generators.size()) {
     all_generators.resize(id + npu_offset + 1);
   }
   all_generators[id + npu_offset] = this;
@@ -208,7 +210,8 @@ Sys::Sys(
     NI->enabled = false;
     std::cout << "Node " << id << " has been totally disabled" << std::endl;
   }
-  concurrent_streams = (int)std::ceil(((double)active_chunks_per_dimension) / queues_per_dim[0]);
+  concurrent_streams =
+      static_cast<int>(std::ceil(static_cast<double>(active_chunks_per_dimension) / queues_per_dim[0]));
   active_first_phase = 100000000;
   if (id == 0) {
     std::cout << "The final active chunks per dimension 1 after allocating to queues is: "
@@ -226,10 +229,12 @@ Sys::Sys(
       new GeneralComplexTopology(id, physical_dims, all_gather_implementation_per_dimension);
   logical_topologies["AllToAll"] =
       new GeneralComplexTopology(id, physical_dims, all_to_all_implementation_per_dimension);
+  // for (auto impl : all_gather_implementation_per_dimension) {
+  //     std::cout << *impl << std::endl;
+  //   }
   stream_counter = 0;
   if (id == 0) {
     std::atexit(exiting);
-    std::cout << "total nodes: " << total_nodes << std::endl;
   }
 #ifdef ANALYTI
   nic_ratio_data = readCSV(NIC_RATIO_PATH);
@@ -245,10 +250,10 @@ Sys::Sys(
   }
 #if defined(NS3_MTP) || defined(NS3_MPI) || defined(PHY_MTP)
   if (mock_nccl_grobal_group_init() == false) {
-    sys_panic("Unable to initialize the system global group because the file can not be opened");
+    sys_panic("Unable to initialize the system grobal group because the file can not be openned");
   }
   if (mock_nccl_comms_init() == false) {
-    sys_panic("Unable to initialize the system mock_nccl_comms because the file can not be opened");
+    sys_panic("Unable to initialize the system mockncclComm because the file can not be openned");
   }
 #endif
   if (inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedy ||
@@ -578,6 +583,8 @@ std::vector<CollectiveImplementation*> Sys::generate_collective_implementation_f
       result.push_back(new CollectiveImplementation(CollectiveImplementationType::NcclFlowModel));
     } else if (dimension_input == "ncclRingTreeModel") {
       result.push_back(new CollectiveImplementation(CollectiveImplementationType::NcclFlowModel));
+    } else if (dimension_input == "MscclCustomFlow") {
+      result.push_back(new CollectiveImplementation(CollectiveImplementationType::MscclCustomFlow));
     } else {
       sys_panic(
           "Cannot interpret collective implementations. Please check the collective implementations in the sys"
@@ -975,6 +982,159 @@ DataSet* Sys::generate_all_to_all(
       layer_ptr);
 }
 
+// Parallel group (TP/DP/EP/...) of the collective the workload is currently issuing.
+ParallelStrategy Sys::current_comm_ps() const {
+  switch (workload->current_state) {
+  case Workload::LoopState::Forward_Pass:
+    return static_cast<ParallelStrategy>(workload->layers[workload->index]->fwd_pass_group_type);
+  case Workload::LoopState::Input_Gradient:
+    return static_cast<ParallelStrategy>(workload->layers[workload->index]->input_grad_group_type);
+  case Workload::LoopState::Weight_Gradient:
+    return static_cast<ParallelStrategy>(workload->layers[workload->index]->weight_grad_group_type);
+  default:
+    sys_panic("Unexpected workload state while generating a NCCL/MSCCL collective phase");
+  }
+  return static_cast<ParallelStrategy>(0); // unreachable
+}
+
+// Debug dump of every flow in a flow model (was copy-pasted once per algorithm).
+void Sys::log_flow_models(const std::shared_ptr<MockNccl::FlowModels>& flow_models, size_t n_channels) const {
+  if (flow_models == nullptr) {
+    return;
+  }
+  MockNcclLog* NcclLog = MockNcclLog::getInstance();
+  NcclLog->writeLog(
+      NcclLogLevel::DEBUG,
+      "rank %d NcclMock generate  %d channel and flow model count:  %d",
+      id,
+      static_cast<int>(n_channels),
+      static_cast<int>(flow_models->size()));
+  for (const auto& flow : *flow_models) {
+    const int prev = flow.second.prev.empty() ? -1 : flow.second.prev[0];
+    const int parent_flow_id = flow.second.parent_flow_id.empty() ? -1 : flow.second.parent_flow_id[0];
+    const int child_flow_id = flow.second.child_flow_id.empty() ? -1 : flow.second.child_flow_id[0];
+    NcclLog->writeLog(
+        NcclLogLevel::DEBUG,
+        " %d,  %d,  %d to  %d flow_id %d prev rank:  %d parent_flow_id:  %d child_flow_id:  %d chunk_id: "
+        " %d flow_size: %lu chunk_count:  %d, channel %d ",
+        flow.first.first,
+        flow.first.second,
+        flow.second.src,
+        flow.second.dest,
+        flow.second.flow_id,
+        prev,
+        parent_flow_id,
+        child_flow_id,
+        flow.second.chunk_id,
+        flow.second.flow_size,
+        flow.second.chunk_count,
+        flow.second.channel_id);
+  }
+}
+
+// Shared path for NcclFlowModel and MscclCustomFlow.
+// With msccl == true the mock comm returns NCCL_ALGO_MSCCL when a custom schedule exists,
+// otherwise it falls back to a regular NCCL algorithm and we take exactly the NCCL path.
+CollectivePhase Sys::generate_nccl_phase(
+    ComType collective_type,
+    int layer_num,
+    BasicLogicalTopology* topology,
+    uint64_t data_size,
+    int queue_id,
+    RingTopology::Direction direction,
+    InjectionPolicy injection_policy,
+    bool boost_mode,
+    bool msccl) {
+  MockNcclLog* NcclLog = MockNcclLog::getInstance();
+  const ParallelStrategy comm_ps = current_comm_ps();
+
+  MockNccl::ncclInfo* nccl_info;
+  std::shared_ptr<MockNccl::FlowModels> flow_models;
+  size_t n_channels = 0;
+  {
+    SysCriticalSection cs;
+    if (msccl) {
+      // generate_flow_model decides whether an MSCCL schedule exists (or falls back), so it runs first.
+      flow_models = std::static_pointer_cast<MockNccl::FlowModels>(
+          generate_flow_model(comm_ps, data_size, collective_type, true));
+      nccl_info = get_nccl_Info(comm_ps, data_size, collective_type, true);
+    } else {
+      nccl_info = get_nccl_Info(comm_ps, data_size, collective_type);
+      flow_models = std::static_pointer_cast<MockNccl::FlowModels>(
+          generate_flow_model(comm_ps, data_size, collective_type));
+    }
+
+    MockNccl::MockNcclComm* comm = mock_nccl_comms[comm_ps];
+    switch (nccl_info->algorithm) {
+    case NCCL_ALGO_RING:
+    case NCCL_ALGO_PAT:
+      n_channels = comm->get_rings().size();
+      break;
+    case NCCL_ALGO_TREE:
+    case NCCL_ALGO_NVLS:
+      n_channels = comm->get_treechannels().size();
+      break;
+    case NCCL_ALGO_MSCCL:
+      n_channels = 32;
+      break;
+    default:
+      NcclLog->writeLog(NcclLogLevel::ERROR, "NCCL algorithm %d not supported", nccl_info->algorithm);
+      sys_panic("NCCL algorithm not supported");
+    }
+  }
+
+  if (nccl_info->algorithm == NCCL_ALGO_NVLS) {
+    collective_type = ComType::All_Reduce_NVLS;
+  }
+
+  NcclLog->writeLog(
+      NcclLogLevel::INFO,
+      "rank %d generate FlowModels: algorithm %d, msccl requested %d",
+      id,
+      nccl_info->algorithm,
+      msccl);
+  log_flow_models(flow_models, n_channels);
+
+  if (nccl_info->algorithm == NCCL_ALGO_MSCCL) {
+    if (id == 0) {
+      std::cout << "Using MSCCL Custom Flow" << std::endl;
+    }
+    return CollectivePhase(
+        this,
+        queue_id,
+        new NcclCustom(
+            collective_type,
+            id,
+            layer_num,
+            static_cast<RingTopology*>(topology),
+            data_size,
+            direction,
+            injection_policy,
+            boost_mode,
+            collective_graph,
+            flow_models,
+            32, // TODO: pass n_channels once get_msccl_channels() reports the right count
+            topo_gpus[0]));
+  }
+
+  return CollectivePhase(
+      this,
+      queue_id,
+      new NcclFlowModel(
+          collective_type,
+          id,
+          layer_num,
+          static_cast<RingTopology*>(topology),
+          data_size,
+          direction,
+          injection_policy,
+          boost_mode,
+          flow_models,
+          n_channels,
+          nccl_info->algorithm,
+          nccl_info->protocol));
+}
+
 CollectivePhase Sys::generate_collective_phase(
     ComType collective_type,
     int layer_num,
@@ -985,11 +1145,10 @@ CollectivePhase Sys::generate_collective_phase(
     InjectionPolicy injection_policy,
     CollectiveImplementation* collective_implementation,
     bool boost_mode) {
-  MockNcclLog* NcclLog = MockNcclLog::getInstance();
-
-  if (collective_implementation->type == CollectiveImplementationType::Ring ||
-      collective_implementation->type == CollectiveImplementationType::OneRing) {
-    CollectivePhase vn(
+  switch (collective_implementation->type) {
+  case CollectiveImplementationType::Ring:
+  case CollectiveImplementationType::OneRing:
+    return CollectivePhase(
         this,
         queue_id,
         new Ring(
@@ -1001,11 +1160,9 @@ CollectivePhase Sys::generate_collective_phase(
             direction,
             injection_policy,
             boost_mode));
-    return vn;
-  } else if (
-      collective_implementation->type == CollectiveImplementationType::Direct ||
-      collective_implementation->type == CollectiveImplementationType::OneDirect) {
-    CollectivePhase vn(
+  case CollectiveImplementationType::Direct:
+  case CollectiveImplementationType::OneDirect:
+    return CollectivePhase(
         this,
         queue_id,
         new AllToAll(
@@ -1018,227 +1175,28 @@ CollectivePhase Sys::generate_collective_phase(
             direction,
             InjectionPolicy::Normal,
             boost_mode));
-    return vn;
-  } else if (collective_implementation->type == CollectiveImplementationType::DoubleBinaryTree) {
-    CollectivePhase vn(
+  case CollectiveImplementationType::DoubleBinaryTree:
+    return CollectivePhase(
         this, queue_id, new DoubleBinaryTreeAllReduce(id, layer_num, (BinaryTree*)topology, data_size, boost_mode));
-    return vn;
-  } else if (
-      collective_implementation->type == CollectiveImplementationType::HalvingDoubling ||
-      collective_implementation->type == CollectiveImplementationType::OneHalvingDoubling) {
-    CollectivePhase vn(
+  case CollectiveImplementationType::HalvingDoubling:
+  case CollectiveImplementationType::OneHalvingDoubling:
+    return CollectivePhase(
         this,
         queue_id,
         new HalvingDoubling(collective_type, id, layer_num, (RingTopology*)topology, data_size, boost_mode));
-    return vn;
-  } else if (collective_implementation->type == CollectiveImplementationType::NcclFlowModel) {
-    ParallelStrategy comm_ps;
-    if (workload->current_state == Workload::LoopState::Forward_Pass) {
-      comm_ps = static_cast<ParallelStrategy>(workload->layers[workload->index]->fwd_pass_group_type);
-    } else if (workload->current_state == Workload::LoopState::Input_Gradient) {
-      comm_ps = static_cast<ParallelStrategy>(workload->layers[workload->index]->input_grad_group_type);
-    } else if (workload->current_state == Workload::LoopState::Weight_Gradient) {
-      comm_ps = static_cast<ParallelStrategy>(workload->layers[workload->index]->weight_grad_group_type);
-    }
-    MockNccl::ncclInfo* nccl_info;
-    std::shared_ptr<void> ptr_FlowModels;
-    {
-      SysCriticalSection cs;
-      nccl_info = get_nccl_Info(comm_ps, data_size, collective_type);
-      ptr_FlowModels = generate_flow_model(comm_ps, data_size, collective_type);
-    }
-
-    if (nccl_info->algorithm == NCCL_ALGO_RING) {
-      std::shared_ptr<MockNccl::FlowModels> RingFlowModels =
-          std::static_pointer_cast<MockNccl::FlowModels>(ptr_FlowModels);
-      std::map<int, std::map<int, std::vector<int>>> channels;
-      {
-        SysCriticalSection cs;
-        channels = mock_nccl_comms[comm_ps]->get_rings();
-      }
-      NcclLog->writeLog(NcclLogLevel::DEBUG, "rank %d generate FlowModels", id);
-      if (RingFlowModels != nullptr) {
-        NcclLog->writeLog(
-            NcclLogLevel::DEBUG,
-            "rank %d NcclMock generate  %d channel and flow model count:  %d",
-            id,
-            channels.size(),
-            RingFlowModels->size());
-        for (auto flow : *RingFlowModels) {
-          int prev;
-          int parent_flow_id;
-          int child_flow_id;
-          if (flow.second.prev.size() == 0) {
-            prev = -1;
-          } else {
-            prev = flow.second.prev[0];
-          }
-          if (flow.second.child_flow_id.size() == 0) {
-            child_flow_id = -1;
-          } else {
-            child_flow_id = flow.second.child_flow_id[0];
-          }
-          if (flow.second.parent_flow_id.size() == 0) {
-            parent_flow_id = -1;
-          } else {
-            parent_flow_id = flow.second.parent_flow_id[0];
-          }
-          NcclLog->writeLog(
-              NcclLogLevel::DEBUG,
-              " %d,  %d,  %d to  %d flow_id %d prev rank:  %d parent_flow_id:  %d child_flow_id:  %d chunk_id: "
-              " %d flow_size: %lu chunk_count:  %d ",
-              flow.first.first,
-              flow.first.second,
-              flow.second.src,
-              flow.second.dest,
-              flow.second.flow_id,
-              prev,
-              parent_flow_id,
-              child_flow_id,
-              flow.second.chunk_id,
-              flow.second.flow_size,
-              flow.second.chunk_count);
-        }
-      }
-      CollectivePhase vn(
-          this,
-          queue_id,
-          new NcclFlowModel(
-              collective_type,
-              id,
-              layer_num,
-              (RingTopology*)topology,
-              data_size,
-              direction,
-              injection_policy,
-              boost_mode,
-              RingFlowModels,
-              channels.size(),
-              nccl_info->algorithm,
-              nccl_info->protocol));
-      return vn;
-    } else if (nccl_info->algorithm == NCCL_ALGO_TREE) {
-      std::shared_ptr<MockNccl::FlowModels> TreeFlowModels;
-      MockNccl::TreeChannels treechannels;
-      {
-        SysCriticalSection cs;
-        TreeFlowModels = std::static_pointer_cast<MockNccl::FlowModels>(ptr_FlowModels);
-        treechannels = mock_nccl_comms[comm_ps]->get_treechannels();
-      }
-      CollectivePhase vn(
-          this,
-          queue_id,
-          new NcclFlowModel(
-              collective_type,
-              id,
-              layer_num,
-              (RingTopology*)topology,
-              data_size,
-              direction,
-              injection_policy,
-              boost_mode,
-              TreeFlowModels,
-              treechannels.size(),
-              nccl_info->algorithm,
-              nccl_info->protocol));
-      return vn;
-    } else if (nccl_info->algorithm == NCCL_ALGO_NVLS) {
-      collective_type = ComType::All_Reduce_NVLS;
-      std::shared_ptr<MockNccl::FlowModels> RingFlowModels =
-          std::static_pointer_cast<MockNccl::FlowModels>(ptr_FlowModels);
-      MockNccl::TreeChannels treechannels;
-      {
-        SysCriticalSection cs;
-        treechannels = mock_nccl_comms[comm_ps]->get_treechannels();
-      }
-      NcclLog->writeLog(NcclLogLevel::DEBUG, "rank %d generate FlowModels", id);
-      if (RingFlowModels != nullptr) {
-        NcclLog->writeLog(
-            NcclLogLevel::DEBUG,
-            "rank %d NcclMock generate  %d channel and flow model count:  %d",
-            id,
-            treechannels.size(),
-            RingFlowModels->size());
-        for (auto flow : *RingFlowModels) {
-          int prev;
-          int parent_flow_id;
-          int child_flow_id;
-          if (flow.second.prev.size() == 0) {
-            prev = -1;
-          } else {
-            prev = flow.second.prev[0];
-          }
-          if (flow.second.child_flow_id.size() == 0) {
-            child_flow_id = -1;
-          } else {
-            child_flow_id = flow.second.child_flow_id[0];
-          }
-          if (flow.second.parent_flow_id.size() == 0) {
-            parent_flow_id = -1;
-          } else {
-            parent_flow_id = flow.second.parent_flow_id[0];
-          }
-          NcclLog->writeLog(
-              NcclLogLevel::DEBUG,
-              " %d,  %d,  %d to  %d flow_id %d prev rank:  %d parent_flow_id:  %d child_flow_id:  %d chunk_id: "
-              " %d flow_size: %lu chunk_count:  %d ",
-              flow.first.first,
-              flow.first.second,
-              flow.second.src,
-              flow.second.dest,
-              flow.second.flow_id,
-              prev,
-              parent_flow_id,
-              child_flow_id,
-              flow.second.chunk_id,
-              flow.second.flow_size,
-              flow.second.chunk_count);
-        }
-      }
-      CollectivePhase vn(
-          this,
-          queue_id,
-          new NcclFlowModel(
-              collective_type,
-              id,
-              layer_num,
-              static_cast<RingTopology*>(topology),
-              data_size,
-              direction,
-              injection_policy,
-              boost_mode,
-              RingFlowModels,
-              treechannels.size(),
-              nccl_info->algorithm,
-              nccl_info->protocol));
-      return vn;
-    } else if (nccl_info->algorithm == NCCL_ALGO_PAT) {
-      std::shared_ptr<MockNccl::FlowModels> PATFlowModels =
-          std::static_pointer_cast<MockNccl::FlowModels>(ptr_FlowModels);
-      std::map<int, std::map<int, std::vector<int>>> pat_channels;
-      {
-        SysCriticalSection cs;
-        pat_channels = mock_nccl_comms[comm_ps]->get_rings();
-      }
-      CollectivePhase vn(
-          this,
-          queue_id,
-          new NcclFlowModel(
-              collective_type,
-              id,
-              layer_num,
-              static_cast<RingTopology*>(topology),
-              data_size,
-              direction,
-              injection_policy,
-              boost_mode,
-              PATFlowModels,
-              pat_channels.size(),
-              nccl_info->algorithm,
-              nccl_info->protocol));
-      return vn;
-    }
-  } else {
+  case CollectiveImplementationType::NcclFlowModel:
+  case CollectiveImplementationType::MscclCustomFlow:
+    return generate_nccl_phase(
+        collective_type,
+        layer_num,
+        topology,
+        data_size,
+        queue_id,
+        direction,
+        injection_policy,
+        boost_mode,
+        collective_implementation->type == CollectiveImplementationType::MscclCustomFlow);
+  default:
     std::cerr << "Error: No known collective implementation for collective phase" << std::endl;
     exit(1);
   }
@@ -1332,11 +1290,19 @@ bool Sys::mock_nccl_comms_init() {
   return true;
 }
 
-MockNccl::ncclInfo* Sys::get_nccl_Info(ParallelStrategy comm_ps, uint64_t data_size, ComType collective_type) {
-  return mock_nccl_comms[comm_ps]->get_algo_proto_info(data_size, collective_type);
+MockNccl::ncclInfo* Sys::get_nccl_Info(
+    ParallelStrategy comm_ps,
+    uint64_t data_size,
+    ComType collective_type,
+    bool msccl) {
+  return mock_nccl_comms[comm_ps]->get_algo_proto_info(data_size, collective_type, msccl);
 }
 
-std::shared_ptr<void> Sys::generate_flow_model(ParallelStrategy comm_ps, uint64_t data_size, ComType collective_type) {
+std::shared_ptr<void> Sys::generate_flow_model(
+    ParallelStrategy comm_ps,
+    uint64_t data_size,
+    ComType collective_type,
+    bool msccl) {
   MockNccl::MockNcclComm* pComm = mock_nccl_comms[comm_ps];
   MockNccl::State current_state;
   switch (this->workload->current_state) {
@@ -1354,7 +1320,7 @@ std::shared_ptr<void> Sys::generate_flow_model(ParallelStrategy comm_ps, uint64_
     std::cerr << "This error is fatal. " << std::endl;
     exit(1);
   }
-  return pComm->get_flow_model(data_size, collective_type, this->workload->index, current_state);
+  return pComm->get_flow_model(data_size, collective_type, this->workload->index, current_state, msccl);
 }
 
 DataSet* Sys::generate_collective(

@@ -29,6 +29,7 @@ function compile {
     local ns3_relative_links="$7"
     local ns3_tests="$8"
     local nccl_version="$9"
+    local jobs="${10}"
 
     mkdir -p "${SIM_LOG_DIR}"/inputs/system/
     mkdir -p "${SIM_LOG_DIR}"/inputs/workload/
@@ -38,6 +39,7 @@ function compile {
     mkdir -p "${SIM_LOG_DIR}"/results/
 
     build_dir=${ROOT_DIR}/$(get_build_dir_name $profile)
+    echo "Building with ${jobs} parallel job(s)."
     case "$mode" in
     "ns3")
         mkdir -p "${build_dir}"
@@ -48,17 +50,17 @@ function compile {
           -DNS3_TESTS="${ns3_tests}" \
           -DSIMAI_MODE="$mode" -DSIMAI_NCCL_VERSION="${nccl_version}" -DNS3_MTP=ON \
           -G "Unix Makefiles" -S "${ROOT_DIR}" -B "${build_dir}" || return $?
-        cmake --build "${build_dir}" -j "$(($(lscpu | grep '^CPU(s):' | awk '{print $2}') - 1))"
+        cmake --build "${build_dir}" -j "${jobs}"
         ;;
     "phy")
         mkdir -p "${build_dir}"
         cmake -DSIMAI_MODE="$mode" -DSIMAI_NCCL_VERSION="${nccl_version}" -G "Unix Makefiles" -S "${ROOT_DIR}" -B "${build_dir}" || return $?
-        cmake --build "${build_dir}" -j "$(($(lscpu | grep '^CPU(s):' | awk '{print $2}') - 1))"
+        cmake --build "${build_dir}" -j "${jobs}"
         ;;
     "analytical")
         mkdir -p "${build_dir}"
         cmake -DSIMAI_MODE="$mode" -DSIMAI_NCCL_VERSION="${nccl_version}" -G "Unix Makefiles" -S "${ROOT_DIR}" -B "${build_dir}" || return $?
-        cmake --build "${build_dir}" -j "$(($(lscpu | grep '^CPU(s):' | awk '{print $2}') - 1))"
+        cmake --build "${build_dir}" -j "${jobs}"
         ;;
     esac
 }
@@ -77,7 +79,7 @@ function cleanup_build {
         rm -rf "${NS3_SRC_DIR}/${build_dir_name:?}"
         rm -rf "${NS3_SRC_DIR}/build"
         rm -rf "${NS3_SRC_DIR}/src/applications/astra-sim"
-	rm -rf "${NS3_SRC_DIR}/src/applications/SimCCL"
+        rm -rf "${NS3_SRC_DIR}/src/applications/SimCCL"
         rm -f "${NS3_SRC_DIR}/.lock-ns3_linux_build"
         mkdir -p "${build_dir}"
         set +x
@@ -96,15 +98,16 @@ print_usage() {
     printf -- "-l|--clean <mode>    Clean the build directory.\n"
     printf -- "-lc|-cl <mode>       Clean and then compile.\n"
     printf -- "-d|--build-profile   ns3 build profile debug|default|release|optimized.\n"
+    printf -- "-j|--jobs <N>        Max parallel build jobs (default: \$JOBS if set, else CPUs - 1).\n"
     printf -- "--sys-asserts        Enable asserts() in any build profile.\n"
     printf -- "--ns3-asserts        Enable NS3_ASSERT in any build profile.\n"
     printf -- "--ns3-stub-headers   Set NS3_EXPORT_HEADERS_AS_STUBS=ON (exports stubs in place of symlinks).\n"
     printf -- "--ns3-relative-links Set NS3_USE_RELATIVE_PATHS_SYMLINKS=ON (use relative paths for symlinks/stubs).\n"
-    printf -- "--nccl-version <version> Select 2.20 or 2.30 (also accepts v prefix; default: 2.20).\n"
+    printf -- "--nccl-version <version> Select 2.20 or 2.30 (also accepts v prefix; default: 2.30).\n"
     printf -- "--ns3-tests          Enable the native ns-3 test suites (default: OFF).\n"
     printf -- "-h|--help            Show this help message.\n"
     printf -- "\n"
-    printf -- "Example: %s -lc ns3 -d optimized --sys-asserts\n" "$0"
+    printf -- "Example: %s -lc ns3 -d optimized --sys-asserts -j 8\n" "$0"
 }
 
 profile=
@@ -117,7 +120,8 @@ ns3_asserts=
 ns3_stub_headers=OFF
 ns3_relative_links=OFF
 ns3_tests=OFF
-nccl_version=v2.20
+nccl_version=v2.30
+jobs="${JOBS:-}"
 
 # Expand -lc <mode> into -l <mode> -c <mode>
 processed_args=()
@@ -134,8 +138,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-OPTS=$(getopt -o c:l:d:h \
-  --long compile:,clean:,help,build-profile:,sys-asserts,ns3-asserts,ns3-stub-headers,ns3-relative-links,ns3-tests,nccl-version: \
+OPTS=$(getopt -o c:l:d:j:h \
+  --long compile:,clean:,help,build-profile:,jobs:,sys-asserts,ns3-asserts,ns3-stub-headers,ns3-relative-links,ns3-tests,nccl-version: \
   -n "$0" -- "${processed_args[@]}")
 if [ $? != 0 ]; then
   echo "Failed parsing options." >&2; print_usage; exit 1
@@ -150,6 +154,7 @@ while true; do
                                 optimized) profile=release; native=ON ;;
                                 *) profile=default ;;
                               esac;                                       shift 2 ;;
+    -j|--jobs)                jobs="$2";                                  shift 2 ;;
     --nccl-version)          nccl_version="$2";                          shift 2 ;;
     --ns3-tests)             ns3_tests=ON;                               shift ;;
     --sys-asserts)            sys_asserts=ON;                             shift ;;
@@ -172,6 +177,15 @@ case "$nccl_version" in
     ;;
 esac
 
+# Parallel build jobs: -j/--jobs > $JOBS > (CPUs - 1), never below 1
+if [[ -z "$jobs" ]]; then
+  jobs=$(( $(nproc 2>/dev/null || lscpu | grep '^CPU(s):' | awk '{print $2}') - 1 ))
+  (( jobs < 1 )) && jobs=1
+elif ! [[ "$jobs" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Error: --jobs must be a positive integer (got '$jobs')." >&2
+  exit 1
+fi
+
 profile="${profile:-default}"
 if [[ "$ns3_tests" == ON && "$mode" != ns3 ]]; then
   echo "Error: --ns3-tests requires ns3 mode." >&2
@@ -182,5 +196,5 @@ if [[ $clean == "ON" ]]; then
   cleanup_build "$mode" "$profile"
 fi
 if [[ $compile == "ON" ]]; then
-  compile "$mode" "$profile" "$native" "$sys_asserts" "$ns3_asserts" "$ns3_stub_headers" "$ns3_relative_links" "$ns3_tests" "$nccl_version"
+  compile "$mode" "$profile" "$native" "$sys_asserts" "$ns3_asserts" "$ns3_stub_headers" "$ns3_relative_links" "$ns3_tests" "$nccl_version" "$jobs"
 fi

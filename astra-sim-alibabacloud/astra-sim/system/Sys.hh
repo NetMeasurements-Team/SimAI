@@ -104,6 +104,7 @@ public:
 
   int priority_counter;
   bool boost_mode;
+  bool collective_graph;
   bool rendezvous_enabled;
   bool initialized;
 
@@ -221,6 +222,19 @@ public:
   bool post_process_inputs();
   std::vector<CollectiveImplementation*> generate_collective_implementation_from_input(std::string input);
   int break_dimension(int model_parallel_npu_group);
+    // NCCL / MSCCL shared path
+  ParallelStrategy current_comm_ps() const;
+  void log_flow_models(const std::shared_ptr<MockNccl::FlowModels>& flow_models, size_t n_channels) const;
+  CollectivePhase generate_nccl_phase(
+      ComType collective_type,
+      int layer_num,
+      BasicLogicalTopology* topology,
+      uint64_t data_size,
+      int queue_id,
+      RingTopology::Direction direction,
+      InjectionPolicy injection_policy,
+      bool boost_mode,
+      bool msccl);
   int front_end_sim_send(
       Tick delay,
       void* buffer,
@@ -375,8 +389,17 @@ public:
   std::map<ParallelStrategy, MockNccl::MockNcclComm*> mock_nccl_comms;
   static std::map<std::pair<int, int>, MockNccl::SingleFlow> generate_net_test_flow_model(uint64_t data_size, int nums);
   static std::map<std::pair<int, int>, MockNccl::SingleFlow> generate_nvl_test_flow_model(uint64_t data_size, int nums);
-  std::shared_ptr<void> generate_flow_model(ParallelStrategy comm_ps, uint64_t data_size, ComType collective_type);
-  MockNccl::ncclInfo* get_nccl_Info(ParallelStrategy comm_ps, uint64_t data_size, ComType collective_type);
+    MockNccl::ncclInfo* get_nccl_Info(
+      ParallelStrategy comm_ps,
+      uint64_t data_size,
+      ComType collective_type,
+      bool msccl = false);
+
+  std::shared_ptr<void> generate_flow_model(
+      ParallelStrategy comm_ps,
+      uint64_t data_size,
+      ComType collective_type,
+      bool msccl = false);
   bool mock_nccl_comms_init();
   bool mock_nccl_grobal_group_init() const;
 };

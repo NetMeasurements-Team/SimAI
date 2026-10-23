@@ -44,3 +44,7 @@ astra-sim-alibabacloud/inputs/topo/Rail_Opti_SingleToR_*
 *.swp
 *.swo
 *~
+
+#msccl
+astra-sim-alibabacloud/inputs/msccl/*
+msccl-algorithms*
