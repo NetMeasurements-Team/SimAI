@@ -1033,8 +1033,9 @@ void Sys::log_flow_models(const std::shared_ptr<MockNccl::FlowModels>& flow_mode
 }
 
 // Shared path for NcclFlowModel and MscclCustomFlow.
-// With msccl == true the mock comm returns NCCL_ALGO_MSCCL when a custom schedule exists,
-// otherwise it falls back to a regular NCCL algorithm and we take exactly the NCCL path.
+// With msccl == true the mock tries a custom MSCCL schedule first. If none matches (or the
+// collective never uses MSCCL, e.g. AllReduce) it clears `msccl`, and the collective then
+// takes exactly the NCCL path: same algorithm/protocol selection, NcclFlowModel, same latencies.
 CollectivePhase Sys::generate_nccl_phase(
     ComType collective_type,
     int layer_num,
@@ -1053,16 +1054,11 @@ CollectivePhase Sys::generate_nccl_phase(
   size_t n_channels = 0;
   {
     SysCriticalSection cs;
-    if (msccl) {
-      // generate_flow_model decides whether an MSCCL schedule exists (or falls back), so it runs first.
-      flow_models = std::static_pointer_cast<MockNccl::FlowModels>(
-          generate_flow_model(comm_ps, data_size, collective_type, true));
-      nccl_info = get_nccl_Info(comm_ps, data_size, collective_type, true);
-    } else {
-      nccl_info = get_nccl_Info(comm_ps, data_size, collective_type);
-      flow_models = std::static_pointer_cast<MockNccl::FlowModels>(
-          generate_flow_model(comm_ps, data_size, collective_type));
-    }
+    // generate_flow_model decides whether an MSCCL schedule exists and clears `msccl` on
+    // fallback, so it runs first; the algorithm/protocol are then selected accordingly.
+    flow_models = std::static_pointer_cast<MockNccl::FlowModels>(
+        generate_flow_model(comm_ps, data_size, collective_type, msccl));
+    nccl_info = get_nccl_Info(comm_ps, data_size, collective_type, msccl);
 
     MockNccl::MockNcclComm* comm = mock_nccl_comms[comm_ps];
     switch (nccl_info->algorithm) {
@@ -1304,7 +1300,7 @@ std::shared_ptr<void> Sys::generate_flow_model(
     ParallelStrategy comm_ps,
     uint64_t data_size,
     ComType collective_type,
-    bool msccl) {
+    bool& msccl) {
   MockNccl::MockNcclComm* pComm = mock_nccl_comms[comm_ps];
   MockNccl::State current_state;
   switch (this->workload->current_state) {

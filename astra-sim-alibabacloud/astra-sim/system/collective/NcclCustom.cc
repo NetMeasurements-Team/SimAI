@@ -333,7 +333,11 @@ void NcclCustom::run(EventType event, CallData* data) {
             // --- PHASE 3: RECEIVE POSTING ---
             // Post all staged receives. The blocking call `front_end_sim_recv` will
             // now happen safely outside of any lock, preventing deadlocks.
-            ///static std::map<int, std::tuple<int, int, int, int>> tag_id_tracker;
+            // A receive whose data already arrived completes synchronously inside front_end_sim_recv
+            // (PacketReceived runs before the call returns). posting_receives keeps that nested
+            // PacketReceived from finishing the collective (and deleting this object) mid-loop;
+            // completion is checked once, after every receive has been posted.
+            posting_receives = true;
             for (const auto& flow : receives_to_post) {
                 // Create the event handler data for this receive operation.
                 auto* rcv_ehd = new RecvPacketEventHadndlerData(
@@ -350,6 +354,11 @@ void NcclCustom::run(EventType event, CallData* data) {
                 // FIXME this is never used
                 sim_request rcv_req;
 
+                // Count the receive as in flight before posting it: if it completes synchronously,
+                // PacketReceived decrements the counter back instead of driving it negative.
+                ++recv_packets_in_flight;
+                NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Increasing recv_packets_in_flight to %d for flow %d.", id, recv_packets_in_flight.load(), flow.flow_id);
+
                 // Make the potentially blocking call. This is now safe.
                 NcclLog->writeLog(NcclLogLevel::DEBUG, "[RECV] ID %d: Preparing to receive flow %d on channel %d.", id, flow.flow_id, flow.channel_id);
                 stream->owner->front_end_sim_recv(
@@ -362,13 +371,13 @@ void NcclCustom::run(EventType event, CallData* data) {
                     &rcv_req,
                     &Sys::handleEvent,
                     rcv_ehd);
-
-                // Increment the atomic counter for in-flight packets.
-                ++recv_packets_in_flight;
-                NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Increasing recv_packets_in_flight to %d for flow %d.", id, recv_packets_in_flight.load(), flow.flow_id);
             }
+            posting_receives = false;
 
             NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: StreamInit EXIT.", id);
+            if (check_completion()) {
+                return; //this should trigger if and only if the rank has 0 sends and if all the packets were already received or if it has 0 sends and 0 receives
+            }
             break;
         }
         case EventType::PacketReceived: {
@@ -426,73 +435,82 @@ void NcclCustom::run(EventType event, CallData* data) {
                     }
                 }
             }
-            check_completion();
+            if (!posting_receives && check_completion()) { //avoids a node with 0 sends from completing during StreamInit
+                return; // this object has been deleted
+            }
             break;
         }
         case EventType::PacketSentFinshed: {
             NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Taking critical section for PacketSentFinshed.", id);
-            NcclCustom::FlowCriticalSection cs;
-            auto snd_ehd = static_cast<SendPacketEventHandlerData*>(data);
-            Tick current_time = Sys::boostedTick();
-            NcclLog->writeLog(
-                NcclLogLevel::DEBUG,
-                "ID %d: Packet sent finished for flow %d, with source/dest (%d/%d) with channel %d at tick %llu.",
-                id, snd_ehd->flow_id, snd_ehd->senderNodeId,
-                snd_ehd->receiverNodeId, snd_ehd->channel_id, current_time);
+            {
+                // The lock must be released before check_completion(): exit() synchronously starts the
+                // next waiting stream (proceed_to_next_vnet_baseline -> SchedulerUnit -> StreamBaseline::init),
+                // whose NcclCustom::run(StreamInit) takes this same global spinlock -> self-deadlock.
+                NcclCustom::FlowCriticalSection cs;
+                auto snd_ehd = static_cast<SendPacketEventHandlerData*>(data);
+                Tick current_time = Sys::boostedTick();
+                NcclLog->writeLog(
+                    NcclLogLevel::DEBUG,
+                    "ID %d: Packet sent finished for flow %d, with source/dest (%d/%d) with channel %d at tick %llu.",
+                    id, snd_ehd->flow_id, snd_ehd->senderNodeId,
+                    snd_ehd->receiverNodeId, snd_ehd->channel_id, current_time);
 
-            // Check if flow exists to avoid crash
-            if (_flow_models.find({snd_ehd->channel_id, snd_ehd->flow_id}) == _flow_models.end()) {
-                 NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: Sent packet for non-existent flow %d.", id, snd_ehd->flow_id);
-                 break; 
-            }
-            const auto& sent_flow = _flow_models.at({snd_ehd->channel_id, snd_ehd->flow_id});
+                // Check if flow exists to avoid crash
+                if (_flow_models.find({snd_ehd->channel_id, snd_ehd->flow_id}) == _flow_models.end()) {
+                     NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: Sent packet for non-existent flow %d.", id, snd_ehd->flow_id);
+                     break; // releases the lock
+                }
+                const auto& sent_flow = _flow_models.at({snd_ehd->channel_id, snd_ehd->flow_id});
             
-            if (collective_graph == true){
-                // Record the end time for this flow under a thread-safe lock.
-                {
-                    std::lock_guard<std::mutex> lg(g_graph_data_per_layer[layer_num].mtx);
-                    g_graph_data_per_layer[layer_num].end_times[sent_flow.flow_id] = current_time;
-                }
-            }
-
-            for(auto& child_flow: sent_flow.child_flow_id){
-                // we can have child which are not directed to us, so we need to check if the child flow is directed to us
-                if(flow_id_to_channel_id_map.count(child_flow) == 0) {
-                    //not ours (might be a child of another thread/node)
-                    continue;
-                }
-                if (_flow_models.find({flow_id_to_channel_id_map.at(child_flow), child_flow}) == _flow_models.end()) {
-                    NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: FATAL: Could not find flow model for child flow %d on channel %d!", id, child_flow, flow_id_to_channel_id_map.at(child_flow));
-                }
-                const auto& child_flow_model = _flow_models.at({flow_id_to_channel_id_map.at(child_flow), child_flow});
-                if (child_flow_model.src != this->id) {
-                    NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: Child flow %d is not sent by this node (src: %d). Skipping indegree decrease.", id, child_flow, child_flow_model.src);
-                    continue;
-                }
-                // if the child flow has been sent by us we can decrease its indegree
-                if(indegree_mapping.count(child_flow) > 0) {
-                    int old_indegree = indegree_mapping[child_flow];
-                    indegree_mapping[child_flow]--;
-                    NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Flow %d sent (immediate), decreasing indegree for child flow %d. New indegree: %d (old %d).", id, sent_flow.flow_id, child_flow, indegree_mapping[child_flow], old_indegree);
-                    if (indegree_mapping[child_flow] == 0) {
-                        if (flow_id_to_channel_id_map.count(child_flow)) {
-                            int child_channel_id = flow_id_to_channel_id_map.at(child_flow);
-                            NcclLog->writeLog(NcclLogLevel::INFO, "ID %d: Dependencies met for flow %d on its correct channel %d. Initiating send.", id, child_flow, child_channel_id);
-                            send_flow_unlocked(child_channel_id, child_flow);
-                        } else {
-                            NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: FATAL: Could not find channel for child flow %d in helper map!", id, child_flow);
-                        }
+                if (collective_graph == true){
+                    // Record the end time for this flow under a thread-safe lock.
+                    {
+                        std::lock_guard<std::mutex> lg(g_graph_data_per_layer[layer_num].mtx);
+                        g_graph_data_per_layer[layer_num].end_times[sent_flow.flow_id] = current_time;
                     }
-                } else {
-                    NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: FATAL: Could not find indegree mapping for child flow %d!", id, child_flow);
                 }
-            }
 
-            sends_completed++;
-            send_packets_in_flight--;
-            NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Decreasing send_packets_in_flight to %d for flow %d on channel %d. Total sends completed: %d/%d.",
-                id, send_packets_in_flight.load(), sent_flow.flow_id, sent_flow.channel_id, sends_completed.load(), total_sends_to_initiate);
-            check_completion();
+                for(auto& child_flow: sent_flow.child_flow_id){
+                    // we can have child which are not directed to us, so we need to check if the child flow is directed to us
+                    if(flow_id_to_channel_id_map.count(child_flow) == 0) {
+                        //not ours (might be a child of another thread/node)
+                        continue;
+                    }
+                    if (_flow_models.find({flow_id_to_channel_id_map.at(child_flow), child_flow}) == _flow_models.end()) {
+                        NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: FATAL: Could not find flow model for child flow %d on channel %d!", id, child_flow, flow_id_to_channel_id_map.at(child_flow));
+                    }
+                    const auto& child_flow_model = _flow_models.at({flow_id_to_channel_id_map.at(child_flow), child_flow});
+                    if (child_flow_model.src != this->id) {
+                        NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: Child flow %d is not sent by this node (src: %d). Skipping indegree decrease.", id, child_flow, child_flow_model.src);
+                        continue;
+                    }
+                    // if the child flow has been sent by us we can decrease its indegree
+                    if(indegree_mapping.count(child_flow) > 0) {
+                        int old_indegree = indegree_mapping[child_flow];
+                        indegree_mapping[child_flow]--;
+                        NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Flow %d sent (immediate), decreasing indegree for child flow %d. New indegree: %d (old %d).", id, sent_flow.flow_id, child_flow, indegree_mapping[child_flow], old_indegree);
+                        if (indegree_mapping[child_flow] == 0) {
+                            if (flow_id_to_channel_id_map.count(child_flow)) {
+                                int child_channel_id = flow_id_to_channel_id_map.at(child_flow);
+                                NcclLog->writeLog(NcclLogLevel::INFO, "ID %d: Dependencies met for flow %d on its correct channel %d. Initiating send.", id, child_flow, child_channel_id);
+                                send_flow_unlocked(child_channel_id, child_flow);
+                            } else {
+                                NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: FATAL: Could not find channel for child flow %d in helper map!", id, child_flow);
+                            }
+                        }
+                    } else {
+                        NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: FATAL: Could not find indegree mapping for child flow %d!", id, child_flow);
+                    }
+                }
+
+                sends_completed++;
+                send_packets_in_flight--;
+                NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Decreasing send_packets_in_flight to %d for flow %d on channel %d. Total sends completed: %d/%d.",
+                    id, send_packets_in_flight.load(), sent_flow.flow_id, sent_flow.channel_id, sends_completed.load(), total_sends_to_initiate);
+            } // lock released here
+            if (check_completion()) {
+                return; // this object has been deleted
+            }
             break;
         }
         case EventType::General: {
@@ -562,7 +580,10 @@ void NcclCustom::run(EventType event, CallData* data) {
     NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: run() finished.", id);
 }
 
-void NcclCustom::check_completion() {
+// Returns true when the collective finished: exit() then deletes this object (via
+// proceed_to_next_vnet_baseline), so the caller must return without touching any member.
+// Must be called without holding the FlowCriticalSection (see PacketSentFinshed).
+bool NcclCustom::check_completion() {
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
     NcclLog->writeLog(NcclLogLevel::INFO, "ID %d: check_completion ENTRY. Sends completed: %d/%d, Recvs completed: %d/%d, sendInAir: %d, recvInAir: %d",
                         id, sends_completed.load(), total_sends_to_initiate,    
@@ -575,7 +596,9 @@ void NcclCustom::check_completion() {
                         recvs_completed.load(), total_recvs_initiated,
                         send_packets_in_flight.load(), recv_packets_in_flight.load());
         exit();
+        return true;
     }
+    return false;
 }
 
 void NcclCustom::exit() {
@@ -636,10 +659,11 @@ void NcclCustom::exit() {
         }
     }
 
+    NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: exit() EXIT.", id);
+    // proceed_to_next_vnet_baseline deletes this algorithm: it must be the last statement.
     if (stream && stream->owner) {
         stream->owner->proceed_to_next_vnet_baseline(static_cast<StreamBaseline*>(stream));
     }
-    NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: exit() EXIT.", id);
 }
 
 #ifdef PHY_MTP

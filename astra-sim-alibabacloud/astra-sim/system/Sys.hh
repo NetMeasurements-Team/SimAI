@@ -395,11 +395,12 @@ public:
       ComType collective_type,
       bool msccl = false);
 
+  // `msccl` is in/out: requested on input, cleared by the mock when it falls back to NCCL.
   std::shared_ptr<void> generate_flow_model(
       ParallelStrategy comm_ps,
       uint64_t data_size,
       ComType collective_type,
-      bool msccl = false);
+      bool& msccl);
   bool mock_nccl_comms_init();
   bool mock_nccl_grobal_group_init() const;
 };

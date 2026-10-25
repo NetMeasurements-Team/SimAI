@@ -72,6 +72,7 @@ public:
     MockNccl::FlowModels _flow_models; //
     uint32_t m_channels; //
     std::map<int, FlowState> flow_states; // Map to track the state of each flow_id
+    bool posting_receives = false; // true while StreamInit posts receives (see run())
 
     // Added for timed graph generation
     std::map<int, Tick> send_start_times;
@@ -108,7 +109,7 @@ public:
 
     virtual void run(EventType event, CallData* data) override;
     void init_indegree_mapping(); //
-    void check_completion();
+    bool check_completion();
     int flow_tag(const MockNccl::SingleFlow& flow) const;
     void send_flow_unlocked(int channel_id, int flow_id);
     void release_packet(int channel_id, int flow_id);
