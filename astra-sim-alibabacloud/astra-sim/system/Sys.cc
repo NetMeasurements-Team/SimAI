@@ -138,6 +138,7 @@ Sys::Sys(
   round_robin_inter_dimension_scheduler = 0;
   this->last_scheduled_collective = 0;
   this->dim_to_break = -1;
+  this->msccl_path="";
 
   start_sim_time = std::chrono::high_resolution_clock::now();
   this->collective_graph=false;
@@ -660,6 +661,8 @@ bool Sys::parse_var(std::string var, std::string value) {
       intra_dimension_scheduling = IntraDimensionScheduling::SmallestFirst;
     } else if (tmp == "lessRemainingPhaseFirst") {
       intra_dimension_scheduling = IntraDimensionScheduling::LessRemainingPhaseFirst;
+    } else if (var == "msccl-path:") {
+      msccl_path = value;
     } else {
       sys_panic("unknown value for intra-dimension-scheduling  in sys input file");
     }
@@ -1257,7 +1260,7 @@ bool Sys::mock_nccl_grobal_group_init() const {
     int EP_size = workload->expert_parallel_npu_group;
     int DP_EP_size = DP_size / EP_size;
     GlobalGroup = new MockNccl::MockNcclGroup(
-        topo_gpus[0], ngpus_per_node, TP_size, DP_size, PP_size, EP_size, DP_EP_size, NVSwitchs, gpu_type);
+        topo_gpus[0], ngpus_per_node, TP_size, DP_size, PP_size, EP_size, DP_EP_size, NVSwitchs, gpu_type, msccl_path);
     return true;
   }
 }

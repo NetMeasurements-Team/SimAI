@@ -146,6 +146,8 @@ public:
   uint64_t streams_finished;
   int stream_counter;
   bool enabled;
+  std::string msccl_path;
+
 
   std::string inp_scheduling_policy;
   std::string inp_all_reduce_implementation;
