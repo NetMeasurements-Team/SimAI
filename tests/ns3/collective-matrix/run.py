@@ -24,7 +24,7 @@ GAPS = [
     'Broadcast: no workload issue path in this frontend.',
     'PAT LL/LL128: PAT always selects Simple; a forced protocol does not override it.',
     'NVLS LL/LL128: excluded from the supported matrix (NVLS is Simple-only in NCCL).',
-    'v2.20: no PAT or protocol selection; flow labels supply weaker selection evidence than v2.30.',
+    'v2.20: no PAT selection (PAT cases are v2.30-only).',
     'Completion does not validate reduced tensor values, schedule dependency correctness, or timing accuracy.',
 ]
 BASE_ENV = {'AS_NVLS_ENABLE': '0', 'AS_NVLS_MIN_BYTES': '2097152',
@@ -37,11 +37,12 @@ def cases_for(version):
     cases = []
     def add(name, op, ranks=4, ppn=2, size=786432, algo='Ring', proto=None, **env):
         cases.append(dict(name=name, op=op, ranks=ranks, ppn=ppn, bytes=size,
-                          algorithm=algo, protocol=proto or ('LL' if version == 'v2.30' else 'UNDEF'),
+                          algorithm=algo, protocol=proto or 'LL',
                           environment=env))
-    protocols = ['LL', 'LL128', 'Simple'] if version == 'v2.30' else ['UNDEF']
-    for proto in protocols:
-        force = {'SIMAI_FORCE_PROTO': proto} if version == 'v2.30' else {}
+    # Both mocks select the protocol (SIMAI_PROTO_AWARE / SIMAI_FORCE_PROTO) and write
+    # algorithm/protocol to the flow CSV; only v2.30 has PAT.
+    for proto in ['LL', 'LL128', 'Simple']:
+        force = {'SIMAI_FORCE_PROTO': proto}
         for location, ppn in [('local', 4), ('cross', 2)]:
             for op in OPS:
                 add(f'{location}-{op.lower()}-{proto}', op, ppn=ppn, proto=proto, **force)
@@ -50,7 +51,10 @@ def cases_for(version):
     for op in OPS:
         add(f'odd3-{op.lower()}', op, ranks=3, ppn=1)
     add('nvls-allreduce', 'ALLREDUCE', ranks=8, ppn=8, size=4194304,
-        algo='NVLS', proto='Simple' if version == 'v2.30' else 'UNDEF', AS_NVLS_ENABLE='1')
+        algo='NVLS', proto='Simple', AS_NVLS_ENABLE='1')
+    for proto, size in [('LL', 4194304), ('LL128', 4194308), ('Simple', 16777220)]:
+        add(f'auto-proto-{proto}', 'ALLGATHER', ranks=2, ppn=1, size=size, proto=proto)
+    add('protocol-disabled', 'ALLREDUCE', proto='UNDEF', SIMAI_PROTO_AWARE='0')
     if version == 'v2.30':
         for ranks in [2, 3, 4]:
             for op in ['ALLGATHER', 'REDUCESCATTER']:
@@ -66,9 +70,6 @@ def cases_for(version):
         for force in ['LL', 'LL128']:
             add(f'pat-ignores-forced-{force}', 'ALLGATHER', ppn=1, algo='PAT',
                 proto='Simple', SIMAI_PAT_ENABLE='1', SIMAI_FORCE_PROTO=force)
-        for proto, size in [('LL', 4194304), ('LL128', 4194308), ('Simple', 16777220)]:
-            add(f'auto-proto-{proto}', 'ALLGATHER', ranks=2, ppn=1, size=size, proto=proto)
-        add('protocol-disabled', 'ALLREDUCE', proto='UNDEF', SIMAI_PROTO_AWARE='0')
     return cases
 
 
@@ -120,14 +121,12 @@ def check_outputs(folder, run_name, case, version):
         rows = list(reader)
     if not rows:
         raise ValueError('empty generated flow model: cannot count a no-op as PASS')
-    has_selection = {'algorithm', 'protocol'} <= fields
-    if has_selection != (version == 'v2.30'):
-        raise ValueError('flow CSV schema does not match requested SimCCL version; rebuild first')
-    if has_selection:
-        selected = {(int(r['algorithm']), int(r['protocol'])) for r in rows}
-        expected = {(ALGOS[case['algorithm']], PROTOS[case['protocol']])}
-        if selected != expected:
-            raise ValueError(f'algorithm/protocol fallback: expected {expected}, observed {selected}')
+    if not {'algorithm', 'protocol'} <= fields:
+        raise ValueError('flow CSV has no algorithm/protocol columns: SimCCL build is too old; rebuild first')
+    selected = {(int(r['algorithm']), int(r['protocol'])) for r in rows}
+    expected = {(ALGOS[case['algorithm']], PROTOS[case['protocol']])}
+    if selected != expected:
+        raise ValueError(f'algorithm/protocol fallback: expected {expected}, observed {selected}')
     labels = {r['conn_type'] for r in rows}
     required_label = {'NVLS': 'NVLS', 'PAT': 'PAT'}.get(case['algorithm'])
     if required_label and labels != {required_label}:
@@ -171,7 +170,7 @@ def check_outputs(folder, run_name, case, version):
         raise ValueError(f'completed messages do not cover all GPU ranks: {sorted(ranks)}')
     return dict(generated_flows=len(rows), completed_messages=sum(completed.values()),
                 rank0_streams=int(injected[1]), flow_types=sorted(labels),
-                selection_evidence='CSV algorithm/protocol' if has_selection else 'flow types (v2.20 has no selection columns)')
+                selection_evidence='CSV algorithm/protocol')
 
 
 def sha256(path):
