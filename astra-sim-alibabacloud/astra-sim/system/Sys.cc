@@ -663,6 +663,11 @@ bool Sys::parse_var(std::string var, std::string value) {
       intra_dimension_scheduling = IntraDimensionScheduling::LessRemainingPhaseFirst;
     } else if (var == "msccl-path:") {
       msccl_path = value;
+    } else if (var == "collective-graph:") {
+      std::stringstream mval(value);
+      int int_to_bool = 0;
+      mval >> int_to_bool;
+      this->collective_graph = (int_to_bool != 0);
     } else {
       sys_panic("unknown value for intra-dimension-scheduling  in sys input file");
     }

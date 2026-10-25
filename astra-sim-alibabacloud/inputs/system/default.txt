@@ -3,9 +3,11 @@ endpoint-delay: 10
 active-chunks-per-dimension: 1
 preferred-dataset-splits: 1
 boost-mode: 0
+collective-graph: 0
 separate-log: 1
 all-reduce-implementation: NcclFlowModel
-all-gather-implementation: NcclFlowModel
-reduce-scatter-implementation: NcclFlowModel
-all-to-all-implementation: NcclFlowModel
+all-gather-implementation: MscclCustomFlow
+reduce-scatter-implementation: MscclCustomFlow
+all-to-all-implementation: MscclCustomFlow
 collective-optimization: baseline
+msccl-path: msccl-algorithms/
