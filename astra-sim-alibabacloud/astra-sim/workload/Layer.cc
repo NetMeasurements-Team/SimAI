@@ -1059,6 +1059,9 @@ void Layer::issue_forward_pass_comm(
   DataSet* fp = NULL;
   fwd_barrier = barrier;
   collective_counter++;
+  if (generator->id == 0) {
+    std::cout << "issue_forward_pass_comm for layer: " << id << ", layer_num: " << layer_num << std::endl;
+  }
   if (fwd_pass_comm_type == ComType::All_Reduce) {
     #ifdef PHY_MTP
     fp = generator->generate_all_reduce(
@@ -1240,6 +1243,9 @@ void Layer::issue_input_grad_comm(
   DataSet* ig = NULL;
   ig_barrier = barrier;
   collective_counter++;
+  if (generator->id == 0) {
+    std::cout << "issue_input_grad_comm for layer: " << id << ", layer_num: " << layer_num << std::endl;
+  }
   if (input_grad_comm_type == ComType::All_Reduce) {
     #ifdef PHY_MTP
         ig = generator->generate_all_reduce(
@@ -1422,6 +1428,9 @@ void Layer::issue_weight_grad_comm(
   DataSet* wg = NULL;
   wg_barrier = barrier;
   collective_counter++;
+  if (generator->id == 0) {
+    std::cout << "issue_weight_grad_comm for layer: " << id << ", layer_num: " << layer_num << std::endl;
+  }
   if (weight_grad_comm_type == ComType::All_Reduce) {
     #ifdef PHY_MTP
     wg = generator->generate_all_reduce(

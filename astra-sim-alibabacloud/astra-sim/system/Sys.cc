@@ -26,7 +26,8 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/topology/LocalRingGlobalBinaryTree.hh"
 #include "astra-sim/workload/Layer.hh"
 #include "calbusbw.h"
-
+#include <algorithm> // Required for std::transform
+#include <cctype>    // Required for std::tolower
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -558,11 +559,15 @@ std::vector<CollectiveImplementation*> Sys::generate_collective_implementation_f
   std::vector<std::string> inputs_per_dimension = split_string(input, "_");
   std::vector<CollectiveImplementation*> result;
   for (std::string dimension_input : inputs_per_dimension) {
+    // Convert dimension_input to lowercase in-place
+    std::transform(dimension_input.begin(), dimension_input.end(), dimension_input.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
     if (dimension_input == "ring") {
       result.push_back(new CollectiveImplementation(CollectiveImplementationType::Ring));
-    } else if (dimension_input == "oneRing") {
+    } else if (dimension_input == "onering") {
       result.push_back(new CollectiveImplementation(CollectiveImplementationType::OneRing));
-    } else if (dimension_input == "doubleBinaryTree") {
+    } else if (dimension_input == "doublebinarytree") {
       result.push_back(new CollectiveImplementation(CollectiveImplementationType::DoubleBinaryTree));
     } else if (dimension_input.rfind("direct", 0) == 0) {
       int window = -1;
@@ -570,21 +575,21 @@ std::vector<CollectiveImplementation*> Sys::generate_collective_implementation_f
         window = std::stoi(dimension_input.substr(6, 5));
       }
       result.push_back(new DirectCollectiveImplementation(CollectiveImplementationType::Direct, window));
-    } else if (dimension_input.rfind("oneDirect", 0) == 0) {
+    } else if (dimension_input.rfind("onedirect", 0) == 0) {
       int window = -1;
-      if (dimension_input != "oneDirect") {
+      if (dimension_input != "onedirect") {
         window = std::stoi(dimension_input.substr(9, 5));
       }
       result.push_back(new DirectCollectiveImplementation(CollectiveImplementationType::OneDirect, window));
-    } else if (dimension_input == "halvingDoubling") {
+    } else if (dimension_input == "halvingdoubling") {
       result.push_back(new CollectiveImplementation(CollectiveImplementationType::HalvingDoubling));
-    } else if (dimension_input == "oneHalvingDoubling") {
+    } else if (dimension_input == "onehalvingdoubling") {
       result.push_back(new CollectiveImplementation(CollectiveImplementationType::OneHalvingDoubling));
-    } else if (dimension_input == "NcclFlowModel") {
+    } else if (dimension_input == "ncclflowmodel") {
       result.push_back(new CollectiveImplementation(CollectiveImplementationType::NcclFlowModel));
-    } else if (dimension_input == "ncclRingTreeModel") {
+    } else if (dimension_input == "ncclringtreemodel") {
       result.push_back(new CollectiveImplementation(CollectiveImplementationType::NcclFlowModel));
-    } else if (dimension_input == "MscclCustomFlow") {
+    } else if (dimension_input == "mscclcustomflow") {
       result.push_back(new CollectiveImplementation(CollectiveImplementationType::MscclCustomFlow));
     } else {
       sys_panic(
@@ -1273,7 +1278,22 @@ bool Sys::mock_nccl_grobal_group_init() const {
 bool Sys::mock_nccl_comms_init() {
   int TP_size = workload->model_parallel_npu_group == 0 ? total_nodes : workload->model_parallel_npu_group;
   int PP_size = workload->pipeline_model_parallelism;
-  int DP_size = total_nodes / (TP_size * PP_size);
+  if (workload->all_gpus == topo_gpus[0]*PP_size) {
+    // only simulate one stage of the pipeline
+    PP_size = 1;
+  } else if (workload->all_gpus != topo_gpus[0]) {
+    std::cerr << "Workload has " << workload->all_gpus
+              << " GPUs with PP " << PP_size
+              << ", which is not compatible with the simulated topology (" << topo_gpus[0] << " GPUs)"
+              << std::endl;
+    std::cerr << "This error is fatal. Please check your workload and topology." << std::endl;
+    exit(1);
+  } else {
+    std::cout << "WARNING: PP=" << PP_size
+              << ", but pipeline communication is not simulated currently."
+              << std::endl;
+  }
+  int DP_size = topo_gpus[0] / (TP_size * PP_size);
   int EP_size = workload->expert_parallel_npu_group;
   int DP_EP_size = DP_size / EP_size;
   MockNccl::MockNcclComm* pComm;

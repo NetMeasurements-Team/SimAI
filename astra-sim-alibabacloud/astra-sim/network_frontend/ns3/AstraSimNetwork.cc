@@ -35,7 +35,7 @@
 #include "SimCCL/mock/MockNcclLog.h"
 #include "entry.h"
 
-#define RESULT_PATH "./ncclFlowModel_"
+#define RESULT_PATH "./csv_files/ncclFlowModel_"
 
 using namespace std;
 using namespace ns3;

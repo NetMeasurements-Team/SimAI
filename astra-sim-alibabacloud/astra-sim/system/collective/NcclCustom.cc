@@ -333,11 +333,6 @@ void NcclCustom::run(EventType event, CallData* data) {
             // --- PHASE 3: RECEIVE POSTING ---
             // Post all staged receives. The blocking call `front_end_sim_recv` will
             // now happen safely outside of any lock, preventing deadlocks.
-            // A receive whose data already arrived completes synchronously inside front_end_sim_recv
-            // (PacketReceived runs before the call returns). posting_receives keeps that nested
-            // PacketReceived from finishing the collective (and deleting this object) mid-loop;
-            // completion is checked once, after every receive has been posted.
-            posting_receives = true;
             for (const auto& flow : receives_to_post) {
                 // Create the event handler data for this receive operation.
                 auto* rcv_ehd = new RecvPacketEventHadndlerData(
@@ -372,12 +367,8 @@ void NcclCustom::run(EventType event, CallData* data) {
                     &Sys::handleEvent,
                     rcv_ehd);
             }
-            posting_receives = false;
 
             NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: StreamInit EXIT.", id);
-            if (check_completion()) {
-                return; //this should trigger if and only if the rank has 0 sends and if all the packets were already received or if it has 0 sends and 0 receives
-            }
             break;
         }
         case EventType::PacketReceived: {
@@ -435,7 +426,7 @@ void NcclCustom::run(EventType event, CallData* data) {
                     }
                 }
             }
-            if (!posting_receives && check_completion()) { //avoids a node with 0 sends from completing during StreamInit
+            if (check_completion()) {
                 return; // this object has been deleted
             }
             break;
