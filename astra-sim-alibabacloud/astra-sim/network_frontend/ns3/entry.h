@@ -477,10 +477,12 @@ inline void print_fct_entry(FILE *fout, Ptr<RdmaQueuePair> q, const uint64_t msg
  */
 inline void message_finish(FILE* fout, Ptr<RdmaQueuePair> q, const RdmaQueuePair::RdmaMessage& msg) {
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
+  // Continuous flow: messages still queued on the QP = not yet sent + sent but not yet ACKed
+  const size_t flows_left = q->m_pendingMessages.size() + q->m_inFlightMessages.size();
   NcclLog->writeLog(
       NcclLogLevel::INFO,
       "message_finish, %u -> %u, flow_id %u, tag %u, %u flows left in qp, at the tick %u",
-      q->m_src, q->m_dest, msg.m_flow_id, msg.m_tag, q->m_messages.size(), frontend_tick());
+      q->m_src, q->m_dest, msg.m_flow_id, msg.m_tag, flows_left, frontend_tick());
   const uint32_t sid = ip_to_node_id(q->sip), did = ip_to_node_id(q->dip);
   print_fct_entry(fout, q, msg.m_size);
 
