@@ -1,0 +1,25 @@
+<?xml version="1.0" ?>
+<algo name="NCCLStyle" proto="Simple" nchannels="1" ngpus="2" inplace="1" outofplace="0" minBytes="1" maxBytes="0" coll="allgather" nchunksperloop="2" groupType="DP_EP">
+  <gpu id="0" i_chunks="1" o_chunks="2">
+    <tb id="0" chan="0">
+      <step s="0" type="cpy" srcbuf="i" srcoff="0" dstbuf="o" dstoff="0" cnt="1" hasdep="1"/>
+    </tb>
+    <tb id="1" send="1" chan="0">
+      <step s="0" type="s" srcbuf="o" srcoff="0" dstbuf="o" dstoff="0" cnt="1" depid="0" deps="0"/>
+    </tb>
+    <tb id="2" recv="1" chan="0">
+      <step s="0" type="r" srcbuf="o" srcoff="1" dstbuf="o" dstoff="1" cnt="1" hasdep="1"/>
+    </tb>
+  </gpu>
+  <gpu id="1" i_chunks="1" o_chunks="2">
+    <tb id="0" chan="0">
+      <step s="0" type="cpy" srcbuf="i" srcoff="0" dstbuf="o" dstoff="1" cnt="1" hasdep="1"/>
+    </tb>
+    <tb id="1" send="0" chan="0">
+      <step s="0" type="s" srcbuf="o" srcoff="1" dstbuf="o" dstoff="1" cnt="1" depid="0" deps="0"/>
+    </tb>
+    <tb id="2" recv="0" chan="0">
+      <step s="0" type="r" srcbuf="o" srcoff="0" dstbuf="o" dstoff="0" cnt="1" hasdep="1"/>
+    </tb>
+  </gpu>
+</algo>
