@@ -10,6 +10,7 @@ LICENSE file in the root directory of this source tree.
 #include <fstream>
 #include <list>
 #include <map>
+#include <set>
 #include <tuple>
 #include <vector>
 #include "AstraMemoryAPI.hh"
@@ -105,6 +106,7 @@ public:
   int priority_counter;
   bool boost_mode;
   bool collective_graph;
+  std::set<int> collective_graph_ranks;
   bool rendezvous_enabled;
   bool initialized;
 
@@ -147,6 +149,9 @@ public:
   int stream_counter;
   bool enabled;
   std::string msccl_path;
+  // msccl-channels: channel ids allowed in MSCCL schedules (channel stride of the NcclCustom tags).
+  int msccl_channels;
+  int nccl_collective_counter;
 
 
   std::string inp_scheduling_policy;
@@ -226,6 +231,7 @@ public:
   int break_dimension(int model_parallel_npu_group);
     // NCCL / MSCCL shared path
   ParallelStrategy current_comm_ps() const;
+  std::string next_collective_graph_key(ComType collective_type, int layer_num);
   void log_flow_models(const std::shared_ptr<MockNccl::FlowModels>& flow_models, size_t n_channels) const;
   CollectivePhase generate_nccl_phase(
       ComType collective_type,

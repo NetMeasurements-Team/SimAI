@@ -170,6 +170,24 @@ int ASTRASimNetwork::sim_send(
   std::vector<Ptr<RdmaClient>> clients =
       get_clients(rank, dst, pg, dport, ehd->channel_id, send_lat, ehd->nvls_on, qps_per_flow);
 
+  // A flow key still in flight would merge this message's completion with the previous one's
+  // (see FlowIdKey): report it once instead of silently stalling.
+  {
+    #ifdef NS3_MTP
+    MtpInterface::CriticalSection cs;
+    #endif
+    if (waiting_to_notify_receiver.count(flow_key(ehd->flow_id, tag, send_event.src, send_event.dst))) {
+      static std::once_flag reported;
+      std::call_once(reported, [&] {
+        std::cerr << "ERROR: flow " << ehd->flow_id << " (tag " << tag << ", " << send_event.src << " -> "
+                  << send_event.dst << ") is sent again while the previous message with the same flow id and tag"
+                  << " is still in flight; the simulation may stall. Reported once." << std::endl;
+      });
+      NcclLog->writeLog(NcclLogLevel::ERROR, "flow %d tag %d %d -> %d sent again while still in flight",
+                        ehd->flow_id, tag, send_event.src, send_event.dst);
+    }
+  }
+
   // Schedule the flow within the ns3 simulator
   const uint64_t base_size = message_size / qps_per_flow;
   const uint64_t last_size = base_size + message_size % qps_per_flow;
@@ -186,9 +204,10 @@ int ASTRASimNetwork::sim_send(
       #ifdef NS3_MTP
       MtpInterface::CriticalSection cs;
       #endif
-      waiting_to_sent_callback[FlowIdKey{ehd->flow_id, {send_event.src, send_event.dst}}]++;
-      waiting_to_notify_receiver[FlowIdKey{ehd->flow_id, {send_event.src, send_event.dst}}]++;
-      waiting_to_message_finish[FlowIdKey{ehd->flow_id, {send_event.src, send_event.dst}}]++;
+      const FlowIdKey key = flow_key(ehd->flow_id, tag, send_event.src, send_event.dst);
+      waiting_to_sent_callback[key]++;
+      waiting_to_notify_receiver[key]++;
+      waiting_to_message_finish[key]++;
     }
 
     Simulator::ScheduleWithContext(

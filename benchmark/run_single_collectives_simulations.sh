@@ -9,7 +9,7 @@ set -e
 
 export AS_LOG_LEVEL=2
 export AS_PXN_ENABLE=1
-export AS_SEND_LAT=3
+export AS_SEND_LAT=3000
 
 # Configuration
 BASE_DIR="astra-sim-alibabacloud"

@@ -18,6 +18,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/collective/AllToAll.hh"
 #include "astra-sim/system/collective/DoubleBinaryTreeAllReduce.hh"
 #include "astra-sim/system/collective/NcclCustom.hh"
+#include "astra-sim/system/collective/CollectiveGraph.hh"
 #include "astra-sim/system/collective/HalvingDoubling.hh"
 #include "astra-sim/system/collective/NcclFlowModel.hh"
 #include "astra-sim/system/collective/Ring.hh"
@@ -28,6 +29,7 @@ LICENSE file in the root directory of this source tree.
 #include "calbusbw.h"
 #include <algorithm> // Required for std::transform
 #include <cctype>    // Required for std::tolower
+#include <cstdio>
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -140,6 +142,8 @@ Sys::Sys(
   this->last_scheduled_collective = 0;
   this->dim_to_break = -1;
   this->msccl_path="";
+  this->msccl_channels = 128;
+  this->nccl_collective_counter = 0;
 
   start_sim_time = std::chrono::high_resolution_clock::now();
   this->collective_graph=false;
@@ -686,6 +690,30 @@ bool Sys::parse_var(std::string var, std::string value) {
     }
   } else if (var == "msccl-path:") {
     msccl_path = value;
+  } else if (var == "msccl-channels:") {
+    std::stringstream mval(value);
+    int channels = 0;
+    if (!(mval >> channels) || channels <= 0) {
+      sys_panic("msccl-channels in the sys input file must be a positive integer");
+    }
+    msccl_channels = channels;
+  } else if (var == "collective-graph-ranks:") {
+    // Comma (or underscore) separated rank ids, e.g. "0,9".
+    collective_graph_ranks.clear();
+    std::string item;
+    std::stringstream list(value);
+    while (std::getline(list, item, ',')) {
+      std::stringstream parts(item);
+      std::string token;
+      while (std::getline(parts, token, '_')) {
+        token.erase(std::remove_if(token.begin(), token.end(), [](unsigned char c) { return std::isspace(c); }), token.end());
+        if (token.empty()) continue;
+        if (token.find_first_not_of("0123456789") != std::string::npos) {
+          sys_panic("collective-graph-ranks in the sys input file must be a comma separated list of rank ids");
+        }
+        collective_graph_ranks.insert(std::stoi(token));
+      }
+    }
   } else if (var == "collective-graph:") {
     std::stringstream mval(value);
     int int_to_bool = 0;
@@ -1010,6 +1038,49 @@ ParallelStrategy Sys::current_comm_ps() const {
   return static_cast<ParallelStrategy>(0); // unreachable
 }
 
+std::string Sys::next_collective_graph_key(ComType collective_type, int layer_num) {
+  const int seq = nccl_collective_counter++;
+  if (!collective_graph || GlobalGroup == nullptr) {
+    return "";
+  }
+  const MockNccl::GroupType group_type = static_cast<MockNccl::GroupType>(current_comm_ps());
+  auto gi = GlobalGroup->GroupIndex.find(std::make_pair(id, group_type));
+  if (gi == GlobalGroup->GroupIndex.end()) {
+    return "";
+  }
+  const MockNccl::GroupInfo& group = GlobalGroup->AllGroups[gi->second];
+  if (!collective_graph_ranks.empty()
+      && std::none_of(group.Ranks.begin(), group.Ranks.end(),
+                      [this](int r) { return collective_graph_ranks.count(r) != 0; })) {
+    return "";
+  }
+  int group_number = 0;  // position among the groups of the same type
+  for (const auto& [index, other] : GlobalGroup->AllGroups) {
+    if (other.type == group_type && index < gi->second) ++group_number;
+  }
+  const char* phase = "unknown";
+  switch (workload->current_state) {
+  case Workload::LoopState::Forward_Pass:        phase = "fwd"; break;
+  case Workload::LoopState::Input_Gradient:      phase = "ig";  break;
+  case Workload::LoopState::Weight_Gradient:     phase = "wg";  break;
+  case Workload::LoopState::Forward_In_BackPass: phase = "fwd_in_bwd"; break;
+  default: break;
+  }
+  std::string layer_name = workload->layers[workload->index]->id;
+  for (char& ch : layer_name) {
+    if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '-' && ch != '.') ch = '_';
+  }
+  const char* op = collective_type == ComType::All_Reduce_NVLS ? "allreduce_nvls" : to_cstr(collective_type);
+  char seq_str[16];
+  std::snprintf(seq_str, sizeof(seq_str), "%03d", seq);
+  const std::string key =
+      std::string(seq_str) + "_layer" + std::to_string(layer_num) + "_" + layer_name + "_" + phase + "_" + op
+      + "_" + MockNccl::to_cstr(group_type) + std::to_string(group_number);
+  // The graph is complete, and written, once every rank of the group has finished.
+  CollectiveGraph::begin(key, group.nRanks);
+  return key;
+}
+
 // Debug dump of every flow in a flow model (was copy-pasted once per algorithm).
 void Sys::log_flow_models(const std::shared_ptr<MockNccl::FlowModels>& flow_models, size_t n_channels) const {
   if (flow_models == nullptr) {
@@ -1084,7 +1155,7 @@ CollectivePhase Sys::generate_nccl_phase(
       n_channels = comm->get_treechannels().size();
       break;
     case NCCL_ALGO_MSCCL:
-      n_channels = 32;
+      n_channels = msccl_channels;
       break;
     default:
       NcclLog->writeLog(NcclLogLevel::ERROR, "NCCL algorithm %d not supported", nccl_info->algorithm);
@@ -1095,6 +1166,7 @@ CollectivePhase Sys::generate_nccl_phase(
   if (nccl_info->algorithm == NCCL_ALGO_NVLS) {
     collective_type = ComType::All_Reduce_NVLS;
   }
+  const std::string graph_key = next_collective_graph_key(collective_type, layer_num);
 
   NcclLog->writeLog(
       NcclLogLevel::INFO,
@@ -1120,9 +1192,9 @@ CollectivePhase Sys::generate_nccl_phase(
             direction,
             injection_policy,
             boost_mode,
-            collective_graph,
+            graph_key,
             flow_models,
-            32, // TODO: pass n_channels once get_msccl_channels() reports the right count
+            n_channels,
             topo_gpus[0],
             nccl_info->algorithm,
             nccl_info->protocol));
@@ -1140,6 +1212,7 @@ CollectivePhase Sys::generate_nccl_phase(
           direction,
           injection_policy,
           boost_mode,
+          graph_key,
           flow_models,
           n_channels,
           nccl_info->algorithm,

@@ -14,6 +14,7 @@
 */
 
 #include "NcclCustom.hh"
+#include "CollectiveGraph.hh"
 #include "astra-sim/system/RecvPacketEventHadndlerData.hh"
 #include "SimCCL/mock/MockNcclLog.h"
 #include "astra-sim/system/Sys.hh"
@@ -39,10 +40,6 @@ namespace AstraSim {
 
 std::atomic<bool> NcclCustom::g_flow_inCriticalSection_ncclCustom(false);
 
-// Define the static members for graph generation
-std::map<int, NcclCustom::GlobalGraphData> NcclCustom::g_graph_data_per_layer;
-std::map<int, std::atomic<int>> NcclCustom::g_finished_nodes_per_layer = {};
-
 NcclCustom::NcclCustom(
     ComType type,
     int id,
@@ -52,7 +49,7 @@ NcclCustom::NcclCustom(
     RingTopology::Direction direction,
     InjectionPolicy injection_policy,
     bool boost_mode,
-    bool collective_graph,
+    const std::string& graph_key,
     std::shared_ptr<MockNccl::FlowModels> ptr_flow_models,
     int treechannels,
     int tot_gpus,
@@ -69,7 +66,7 @@ NcclCustom::NcclCustom(
     this->nodes_in_ring = ring_topology->get_nodes_in_ring();
     this->m_channels = treechannels;
     this->tot_gpus = tot_gpus;
-    this->collective_graph = collective_graph;
+    this->graph_key = graph_key;
     this->m_algorithm = algorithm;
     this->m_protocol = protocol;
 
@@ -101,35 +98,7 @@ NcclCustom::NcclCustom(
     }
     
     NcclLog->writeLog(NcclLogLevel::INFO, "ID %d: Initialized with total_sends_to_initiate: %d, total_recvs_initiated: %d", id, total_sends_to_initiate, total_recvs_initiated);
-    if (collective_graph == true){
-        static std::map<int, bool> layer_reset;
-        static std::mutex init_mutex;
-
-        // Part 1: Reset global state ONCE per layer.
-        // A lock ensures this section runs only for the first node that gets here for a new layer.
-        {
-            std::lock_guard<std::mutex> lg(init_mutex);
-            if (layer_reset.find(layer_num) == layer_reset.end()) {
-                g_finished_nodes_per_layer[layer_num].store(0);
-                g_graph_data_per_layer[layer_num].start_times.clear();
-                g_graph_data_per_layer[layer_num].end_times.clear();
-                g_graph_data_per_layer[layer_num].flow_details.clear();
-                layer_reset[layer_num] = true;
-                NcclLog->writeLog(NcclLogLevel::INFO, "ID %d: Initialized and reset global data for layer %d.", id, layer_num);
-            }
-        }
-
-        // Part 2: Aggregate flow models from EVERY node.
-        // This part runs for each node to contribute its flows to the shared map.
-        {
-            std::lock_guard<std::mutex> lg(g_graph_data_per_layer[layer_num].mtx);
-            for (const auto& flow_pair : _flow_models) {
-                // Use try_emplace to add this node's flows. This correctly builds the complete map
-                // from all nodes' perspectives.
-                g_graph_data_per_layer[layer_num].flow_details.try_emplace(flow_pair.second.flow_id, flow_pair.second);
-            }
-        }
-    }
+    CollectiveGraph::add_flows(graph_key, _flow_models);
 
     init_indegree_mapping();
 
@@ -178,13 +147,21 @@ void NcclCustom::init_indegree_mapping() {
 // Sender and receiver must compute the same value, so every term comes either from the flow
 // itself (identical on both ranks) or from m_channels, which is the same on every rank.
 int NcclCustom::flow_tag(const MockNccl::SingleFlow& flow) const {
-    assert(flow.channel_id >= 0 && flow.channel_id < static_cast<int>(m_channels));
-    assert(flow.chunk_id >= 0 && flow.chunk_id < flow.chunk_count);
     const int64_t tag =
         static_cast<int64_t>(layer_num) * flow.chunk_count * m_channels
       + static_cast<int64_t>(flow.channel_id) * flow.chunk_count
       + flow.chunk_id;
-    assert(tag >= 0 && tag <= INT_MAX); // the tag is an int down to the frontend
+    // Checked in every build: out of range values silently alias the tags of other flows.
+    if (flow.channel_id < 0 || flow.channel_id >= static_cast<int>(m_channels)
+        || flow.chunk_id < 0 || flow.chunk_id >= flow.chunk_count
+        || tag < 0 || tag > INT_MAX) { // the tag is an int down to the frontend
+        std::cerr << "NcclCustom: cannot build a unique tag for flow " << flow.flow_id
+                  << " (channel " << flow.channel_id << ", msccl-channels " << m_channels
+                  << "; chunk " << flow.chunk_id << "/" << flow.chunk_count
+                  << "; layer " << layer_num << ")."
+                  << " Channel ids in the MSCCL schedule must be below msccl-channels (sys file)." << std::endl;
+        Sys::sys_panic("NcclCustom flow tag out of range");
+    }
     return static_cast<int>(tag);
 }
 
@@ -269,21 +246,43 @@ void NcclCustom::send_flow_unlocked(int channel_id, int flow_id) {
 
     auto& flow= _flow_models.at({channel_id, flow_id});
     Tick current_time = Sys::boostedTick();
+    CollectiveGraph::record(graph_key, flow.flow_id, CollectiveGraph::Event::Posted, current_time);
     
-    if (collective_graph == true){
-        // Record the start time for this flow under a thread-safe lock.
-        {
-            std::lock_guard<std::mutex> lg(g_graph_data_per_layer[layer_num].mtx);
-            g_graph_data_per_layer[layer_num].start_times[flow.flow_id] = current_time;
-        }
-    }
-
     NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Packet sent for flow %d with chunk_id/source/dest (%d/%d/%d) on channel %d at tick %llu.",
             id, flow.flow_id, flow.chunk_id, flow.src, flow.dest, flow.channel_id, current_time);
 
     release_packet(channel_id, flow_id);
 
     NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: send_flow_unlocked EXIT.", id);
+}
+
+// Children sent by this rank (the TB's next send, or the proxy's next PXN relay) wait for this
+// flow to be released (MemBus done, General event), not for it to finish sending: the GPU hands
+// the data over and moves on to its next step, and the QP keeps the order. Waiting for the
+// release rather than the post makes a backlog (data that arrived before this rank started the
+// collective) drain one flow per MemBus release, like NcclFlowModel, which registers the receive
+// feeding its next send in ready().
+void NcclCustom::release_local_children_unlocked(int channel_id, int flow_id) {
+    assert(NcclCustom::FlowCriticalSection::is_locked());
+    MockNcclLog* NcclLog = MockNcclLog::getInstance();
+    const auto& flow = _flow_models.at({channel_id, flow_id});
+    for (int child_flow_id : flow.child_flow_id) {
+        auto ch_it = flow_id_to_channel_id_map.find(child_flow_id);
+        if (ch_it == flow_id_to_channel_id_map.end()) continue; // not ours
+        auto child_it = _flow_models.find({ch_it->second, child_flow_id});
+        if (child_it == _flow_models.end() || child_it->second.src != this->id) continue;
+        auto indeg_it = indegree_mapping.find(child_flow_id);
+        if (indeg_it == indegree_mapping.end()) {
+            NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: FATAL: Could not find indegree mapping for child flow %d!", id, child_flow_id);
+            continue;
+        }
+        NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Flow %d released, decreasing indegree for child flow %d. New indegree: %d.",
+            id, flow_id, child_flow_id, indeg_it->second - 1);
+        if (--indeg_it->second == 0) {
+            NcclLog->writeLog(NcclLogLevel::INFO, "ID %d: Dependencies met for flow %d on channel %d. Initiating send.", id, child_flow_id, ch_it->second);
+            send_flow_unlocked(ch_it->second, child_flow_id);
+        }
+    }
 }
 
 void NcclCustom::run(EventType event, CallData* data) {
@@ -453,46 +452,10 @@ void NcclCustom::run(EventType event, CallData* data) {
                 }
                 const auto& sent_flow = _flow_models.at({snd_ehd->channel_id, snd_ehd->flow_id});
             
-                if (collective_graph == true){
-                    // Record the end time for this flow under a thread-safe lock.
-                    {
-                        std::lock_guard<std::mutex> lg(g_graph_data_per_layer[layer_num].mtx);
-                        g_graph_data_per_layer[layer_num].end_times[sent_flow.flow_id] = current_time;
-                    }
-                }
+                CollectiveGraph::record(graph_key, sent_flow.flow_id, CollectiveGraph::Event::Sent, current_time);
 
-                for(auto& child_flow: sent_flow.child_flow_id){
-                    // we can have child which are not directed to us, so we need to check if the child flow is directed to us
-                    if(flow_id_to_channel_id_map.count(child_flow) == 0) {
-                        //not ours (might be a child of another thread/node)
-                        continue;
-                    }
-                    if (_flow_models.find({flow_id_to_channel_id_map.at(child_flow), child_flow}) == _flow_models.end()) {
-                        NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: FATAL: Could not find flow model for child flow %d on channel %d!", id, child_flow, flow_id_to_channel_id_map.at(child_flow));
-                    }
-                    const auto& child_flow_model = _flow_models.at({flow_id_to_channel_id_map.at(child_flow), child_flow});
-                    if (child_flow_model.src != this->id) {
-                        NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: Child flow %d is not sent by this node (src: %d). Skipping indegree decrease.", id, child_flow, child_flow_model.src);
-                        continue;
-                    }
-                    // if the child flow has been sent by us we can decrease its indegree
-                    if(indegree_mapping.count(child_flow) > 0) {
-                        int old_indegree = indegree_mapping[child_flow];
-                        indegree_mapping[child_flow]--;
-                        NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Flow %d sent (immediate), decreasing indegree for child flow %d. New indegree: %d (old %d).", id, sent_flow.flow_id, child_flow, indegree_mapping[child_flow], old_indegree);
-                        if (indegree_mapping[child_flow] == 0) {
-                            if (flow_id_to_channel_id_map.count(child_flow)) {
-                                int child_channel_id = flow_id_to_channel_id_map.at(child_flow);
-                                NcclLog->writeLog(NcclLogLevel::INFO, "ID %d: Dependencies met for flow %d on its correct channel %d. Initiating send.", id, child_flow, child_channel_id);
-                                send_flow_unlocked(child_channel_id, child_flow);
-                            } else {
-                                NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: FATAL: Could not find channel for child flow %d in helper map!", id, child_flow);
-                            }
-                        }
-                    } else {
-                        NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: FATAL: Could not find indegree mapping for child flow %d!", id, child_flow);
-                    }
-                }
+                // Children sent by this rank were already released when this flow was released
+                // (General); children on other ranks wait for their receive.
 
                 sends_completed++;
                 send_packets_in_flight--;
@@ -508,13 +471,11 @@ void NcclCustom::run(EventType event, CallData* data) {
             BasicEventHandlerData* ehd = static_cast<BasicEventHandlerData*>(data);
             int channel_id = ehd->channel_id;
             int flow_id = ehd->flow_id;
-            if (collective_graph == true){
-                // Record the start time for this flow under a thread-safe lock.
-                {
-                    std::lock_guard<std::mutex> lg(g_graph_data_per_layer[layer_num].mtx);
-                    auto current_time = Sys::boostedTick();
-                    g_graph_data_per_layer[layer_num].start_times[flow_id] = current_time;
-                }
+            {
+                // MemBus release done: this rank's dependent sends may now be posted (before this
+                // send is handed to the network, as NcclFlowModel::ready() does with its receives).
+                NcclCustom::FlowCriticalSection cs;
+                release_local_children_unlocked(channel_id, flow_id);
             }
             {
                 NcclLog->writeLog(NcclLogLevel::DEBUG, "[SEND] ID %d: Sending packet for flow %d on channel %d.", id, flow_id, channel_id);
@@ -534,6 +495,7 @@ void NcclCustom::run(EventType event, CallData* data) {
                 // Selection used by the frontend's send-latency model (as in NcclFlowModel).
                 snd_ehd->algorithm = m_algorithm;
                 snd_ehd->protocol = m_protocol;
+                CollectiveGraph::released(graph_key, id, flow.dest, flow.flow_id, snd_ehd->tag, Sys::boostedTick());
 
                 // TODO is this needed? It is used only by the physical frontend
                 sim_request snd_req;
@@ -599,56 +561,7 @@ void NcclCustom::exit() {
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
     NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: Communication Latency: %lld us", id, duration.count());
 
-    if (collective_graph == true){
-        // Atomically increment the finished nodes counter. If this is the last node, generate the graph.
-        int total_nodes = this->nodes_in_ring;
-        if (g_finished_nodes_per_layer[layer_num].fetch_add(1, std::memory_order_relaxed) + 1 == total_nodes) {
-            NcclLog->writeLog(NcclLogLevel::INFO, "ID %d: Last node finished. Generating collective graph.", id);
-
-            std::string filename = "collective_graph_layer_" + std::to_string(layer_num) + ".dot";
-            std::ofstream dot_file(filename);
-            if (!dot_file.is_open()) {
-                NcclLog->writeLog(NcclLogLevel::ERROR, "ID %d: Failed to open graph file '%s' for writing.", id, filename.c_str());
-            } else {
-                dot_file << "digraph CollectiveGraph {\n";
-                dot_file << "  rankdir=LR;\n";
-                dot_file << "  label=\"Collective Communication Graph - Layer " << layer_num << "\";\n";
-                dot_file << "  node [shape=box, style=rounded];\n\n";
-
-                std::map<int, std::stringstream> chunk_subgraphs;
-                
-                // Lock the global data to safely read it for graph generation.
-                std::lock_guard<std::mutex> lg(g_graph_data_per_layer[layer_num].mtx);
-
-                // Group all flows into subgraphs by their chunk ID.
-                for (const auto& flow_pair : g_graph_data_per_layer[layer_num].flow_details) {
-                    int flow_id = flow_pair.first;
-                    const auto& flow = flow_pair.second;
-
-                    if (g_graph_data_per_layer[layer_num].start_times.count(flow_id) && g_graph_data_per_layer[layer_num].end_times.count(flow_id)) {
-                        Tick start_tick = g_graph_data_per_layer[layer_num].start_times.at(flow_id);
-                        Tick end_tick = g_graph_data_per_layer[layer_num].end_times.at(flow_id);
-                        chunk_subgraphs[flow.chunk_id] << "    " << flow.src << " -> " << flow.dest
-                                                    << " [label=\"" << start_tick << " / " << end_tick <<" on ch: " << flow.channel_id << " with size: " << flow.flow_size << "\"];\n";
-                    }
-                }
-
-                // Write the clustered subgraphs to the DOT file.
-                for (auto const& [chunk_id, ss] : chunk_subgraphs) {
-                    dot_file << "  subgraph cluster_chunk_" << chunk_id << " {\n";
-                    dot_file << "    label = \"Chunk " << chunk_id << "\";\n";
-                    dot_file << "    style=filled;\n";
-                    dot_file << "    color=lightgrey;\n";
-                    dot_file << ss.str();
-                    dot_file << "  }\n\n";
-                }
-
-                dot_file << "}\n";
-                dot_file.close();
-                NcclLog->writeLog(NcclLogLevel::INFO, "ID %d: Collective graph saved to %s", id, filename.c_str());
-            }
-        }
-    }
+    CollectiveGraph::rank_finished(graph_key, id);
 
     NcclLog->writeLog(NcclLogLevel::DEBUG, "ID %d: exit() EXIT.", id);
     // proceed_to_next_vnet_baseline deletes this algorithm: it must be the last statement.

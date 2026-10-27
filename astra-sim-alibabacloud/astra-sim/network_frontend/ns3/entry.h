@@ -22,6 +22,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -35,6 +36,7 @@
 
 #include "SimCCL/mock/MockNcclLog.h"
 #include "common.h"
+#include "astra-sim/system/collective/CollectiveGraph.hh"
 
 using namespace ns3;
 using namespace std;
@@ -99,10 +101,16 @@ typedef pair<int, pair<int, int>> MsgEventKey;
 /**
  * FlowIdKey is a key to uniquely identify a flow
  * (might refer to multiple messages in case of flow stripping).
- *  - Pair <flow_id, Pair <src_id, dst_id>>
- * TODO: Isn't flow_id enough?
+ *  - Tuple <flow_id, tag, src_id, dst_id>
+ * The tag contains the layer (layer_num * chunk_count * channels + ...), so a flow id reused by
+ * another layer's collective, while a message of the previous one is still in flight, does not
+ * share the counters below with it.
  */
-typedef pair<int, pair<int, int>> FlowIdKey;
+typedef std::tuple<int, int, int, int> FlowIdKey;
+
+inline FlowIdKey flow_key(uint64_t flow_id, uint64_t tag, uint32_t src, uint32_t dst) {
+  return FlowIdKey(static_cast<int>(flow_id), static_cast<int>(tag), static_cast<int>(src), static_cast<int>(dst));
+}
 
 /**
  * Stores a MsgEvent for sim_recv events and its callback handler.
@@ -135,20 +143,20 @@ inline map<MsgEventKey, MsgEvent> sentHash;
  */
 inline std::map<std::pair<int, int>, uint64_t> nodeHash;
 
-inline std::map<std::pair<int, std::pair<int, int>>, int> waiting_to_sent_callback;
-inline std::map<std::pair<int, std::pair<int, int>>, int> waiting_to_notify_receiver;
-inline std::map<std::pair<int, std::pair<int, int>>, int> waiting_to_message_finish;
+inline std::map<FlowIdKey, int> waiting_to_sent_callback;
+inline std::map<FlowIdKey, int> waiting_to_notify_receiver;
+inline std::map<FlowIdKey, int> waiting_to_message_finish;
 
 /**
  * Cumulates the size of received messages before triggering notify_receiver_receive_data.
  * This is needed in the case the same flow_id was stripped into multiple flows.
  */
-inline std::map<std::pair<int, std::pair<int, int>>, uint64_t> received_chunksize;
+inline std::map<FlowIdKey, uint64_t> received_chunksize;
 
 /**
  * Similar to received_chunksize, but sender-size (for triggering notify_sender_sending_finished).
  */
-inline std::map<std::pair<int, std::pair<int, int>>, uint64_t> sent_chunksize;
+inline std::map<FlowIdKey, uint64_t> sent_chunksize;
 
 static std::once_flag sim_finished;
 static std::atomic<bool> waiting_sim_finish(false);
@@ -160,35 +168,35 @@ inline AstraSim::Tick frontend_tick() {
 }
 
 
-inline bool is_sending_finished(int src, int dst, int flow_id) {
-  if (waiting_to_sent_callback.count(FlowIdKey{flow_id, {src, dst}})) {
-    if (--waiting_to_sent_callback[FlowIdKey{flow_id, {src, dst}}] == 0) {
-      waiting_to_sent_callback.erase(FlowIdKey{flow_id, {src, dst}});
+inline bool is_sending_finished(int src, int dst, int flow_id, int tag) {
+  if (waiting_to_sent_callback.count(flow_key(flow_id, tag, src, dst))) {
+    if (--waiting_to_sent_callback[flow_key(flow_id, tag, src, dst)] == 0) {
+      waiting_to_sent_callback.erase(flow_key(flow_id, tag, src, dst));
       return true;
     }
   }
   return false;
 }
 
-inline bool is_receive_finished(int src, int dst, int flow_id) {
+inline bool is_receive_finished(int src, int dst, int flow_id, int tag) {
   MockNcclLog* NcclLog = MockNcclLog::getInstance();
-  if (waiting_to_notify_receiver.count(FlowIdKey{flow_id, {src, dst}})) {
+  if (waiting_to_notify_receiver.count(flow_key(flow_id, tag, src, dst))) {
     NcclLog->writeLog(
         NcclLogLevel::DEBUG,
         " is_receive_finished waiting_to_notify_receiver  flow_id %d src %d dst %d count %d",
-        flow_id, src, dst, waiting_to_notify_receiver[FlowIdKey{flow_id, {src, dst}}]);
-    if (--waiting_to_notify_receiver[FlowIdKey{flow_id, {src, dst}}] == 0) {
-      waiting_to_notify_receiver.erase(FlowIdKey{flow_id, {src, dst}});
+        flow_id, src, dst, waiting_to_notify_receiver[flow_key(flow_id, tag, src, dst)]);
+    if (--waiting_to_notify_receiver[flow_key(flow_id, tag, src, dst)] == 0) {
+      waiting_to_notify_receiver.erase(flow_key(flow_id, tag, src, dst));
       return true;
     }
   }
   return false;
 }
 
-inline bool is_message_finished(int src, int dst, int flow_id) {
-  if (waiting_to_message_finish.count(FlowIdKey{flow_id, {src, dst}})) {
-    if (--waiting_to_message_finish[FlowIdKey{flow_id, {src, dst}}] == 0) {
-      waiting_to_message_finish.erase(FlowIdKey{flow_id, {src, dst}});
+inline bool is_message_finished(int src, int dst, int flow_id, int tag) {
+  if (waiting_to_message_finish.count(flow_key(flow_id, tag, src, dst))) {
+    if (--waiting_to_message_finish[flow_key(flow_id, tag, src, dst)] == 0) {
+      waiting_to_message_finish.erase(flow_key(flow_id, tag, src, dst));
       return true;
     }
   }
@@ -264,7 +272,13 @@ inline void push_msg_to_client(
       NcclLogLevel::INFO,
       "push_msg_to_client, %u -> %u, flow_id %u, tag %u, port %u, at the tick %u",
       client->m_qp->m_src, client->m_qp->m_dest, flow_id, tag, client->m_qp->sport, frontend_tick());
+  const bool qp_idle = client->m_qp->m_pendingMessages.empty();
   client->PushMessageToQp(size, flow_id, tag);
+  if (qp_idle) {
+    AstraSim::CollectiveGraph::network_event(
+        ip_to_node_id(client->m_qp->sip), ip_to_node_id(client->m_qp->dip), flow_id, tag,
+        AstraSim::CollectiveGraph::Event::Started, frontend_tick());
+  }
 }
 
 /**
@@ -490,10 +504,13 @@ inline void message_finish(FILE* fout, Ptr<RdmaQueuePair> q, const RdmaQueuePair
     #ifdef NS3_MTP
     MtpInterface::CriticalSection cs;
     #endif
-    if (!is_message_finished(sid, did, msg.m_flow_id)) {
+    if (!is_message_finished(sid, did, msg.m_flow_id, msg.m_tag)) {
       return;
     }
   }
+  // ACK of the whole flow received: "acked" in the collective graph.
+  AstraSim::CollectiveGraph::network_event(
+      sid, did, msg.m_flow_id, msg.m_tag, AstraSim::CollectiveGraph::Event::Acked, frontend_tick());
   Simulator::Schedule(Time(0), &check_sim_finish);
 }
 
@@ -528,17 +545,23 @@ inline void send_finish(FILE* fout, Ptr<RdmaQueuePair> q, const RdmaQueuePair::R
       NcclLogLevel::INFO,
       "send_finish, %d -> %d, flow_id %d, tag %u, port %d, total bytes %llu, at the tick %d",
       sid,  did, msg.m_flow_id, msg.m_tag, q->sport, msg.m_size, frontend_tick());
+  // ns-3 moved msg to in-flight: the next pending message of the QP starts now ("started").
+  if (!q->m_pendingMessages.empty()) {
+    const RdmaQueuePair::RdmaMessage& next = q->m_pendingMessages.front();
+    AstraSim::CollectiveGraph::network_event(
+        sid, did, next.m_flow_id, next.m_tag, AstraSim::CollectiveGraph::Event::Started, frontend_tick());
+  }
   uint64_t notify_size;
   {
 #ifdef NS3_MTP
     MtpInterface::CriticalSection cs;
 #endif
-    sent_chunksize[FlowIdKey{msg.m_flow_id, {sid, did}}] += msg.m_size;
-    if (!is_sending_finished(sid, did, msg.m_flow_id)) {
+    sent_chunksize[flow_key(msg.m_flow_id, msg.m_tag, sid, did)] += msg.m_size;
+    if (!is_sending_finished(sid, did, msg.m_flow_id, msg.m_tag)) {
       return;
     }
-    notify_size = sent_chunksize[FlowIdKey{msg.m_flow_id, {sid, did}}];
-    sent_chunksize.erase(FlowIdKey{msg.m_flow_id, {sid, did}});
+    notify_size = sent_chunksize[flow_key(msg.m_flow_id, msg.m_tag, sid, did)];
+    sent_chunksize.erase(flow_key(msg.m_flow_id, msg.m_tag, sid, did));
   }
   notify_sender_sending_finished(sid, did, notify_size, msg.m_tag);
 }
@@ -560,13 +583,16 @@ inline void recv_finish(FILE* fout, Ptr<RdmaRxQueuePair> rx_q, const RdmaRxQueue
     #ifdef NS3_MTP
     MtpInterface::CriticalSection cs;
     #endif
-    received_chunksize[FlowIdKey{msg.m_flow_id, {sid, did}}] += msg.m_size;
-    if (!is_receive_finished(sid,did,msg.m_flow_id)) {
+    received_chunksize[flow_key(msg.m_flow_id, msg.m_tag, sid, did)] += msg.m_size;
+    if (!is_receive_finished(sid, did, msg.m_flow_id, msg.m_tag)) {
       return;
     }
-    notify_size = received_chunksize[FlowIdKey{msg.m_flow_id, {sid, did}}];
-    received_chunksize.erase(FlowIdKey{msg.m_flow_id, {sid, did}});
+    notify_size = received_chunksize[flow_key(msg.m_flow_id, msg.m_tag, sid, did)];
+    received_chunksize.erase(flow_key(msg.m_flow_id, msg.m_tag, sid, did));
   }
+  // Whole flow received by the destination NIC: "arrived" in the collective graph.
+  AstraSim::CollectiveGraph::network_event(
+      sid, did, msg.m_flow_id, msg.m_tag, AstraSim::CollectiveGraph::Event::Arrived, frontend_tick());
   notify_receiver_receive_data(sid, did, notify_size, msg.m_tag);
 }
 
@@ -579,6 +605,8 @@ inline int setup_ns3_simulation(const string& network_topo, const string& networ
   }
   SetConfig();
   SetupNetwork(qp_finish, message_finish, send_finish, recv_finish);
+  // This frontend reports arrived/acked: collective graphs wait for the last ACK before being written.
+  AstraSim::CollectiveGraph::enable_network_events();
 
   std::cout << "Running Simulation.\n";
   fflush(stdout);

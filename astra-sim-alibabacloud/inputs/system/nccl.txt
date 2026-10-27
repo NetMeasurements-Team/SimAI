@@ -9,4 +9,6 @@ all-gather-implementation: mscclCustomFlow
 reduce-scatter-implementation: mscclCustomFlow
 all-to-all-implementation: mscclCustomFlow
 msccl-path: astra-sim-alibabacloud/inputs/msccl/nccl/
+collective-graph: 0
+collective-graph-ranks: 0
 collective-optimization: baseline

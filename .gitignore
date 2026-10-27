@@ -1,5 +1,6 @@
 csv_files
 *.dot
+collective_graph_*
 .vscode
 .idea
 .gemini

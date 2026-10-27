@@ -291,3 +291,41 @@ python3 tests/ns3/collective-matrix/test_validation.py
 Use a clean build when switching SimCCL versions. The ns-3 build exports
 versioned mock sources through shared symlink paths, and an incremental build
 can retain stale objects after a version change.
+
+### MSCCL vs NCCL equivalence
+
+`tests/ns3/msccl-nccl-equivalence/run.sh` checks that the custom-collective path
+(`mscclCustomFlow`, `NcclCustom`) reproduces the NCCL flow model (`ncclFlowModel`,
+`NcclFlowModel`) when it is given an MSCCL schedule that encodes the NCCL algorithm.
+Each single-collective workload runs twice on the 16-GPU (2 x 8) topology and its
+failure variants:
+
+- `inputs/system/nccl.txt`: all-gather and all-to-all through `mscclCustomFlow`, with
+  the schedules in `inputs/msccl/nccl/` (ring AllGather on the SimCCL rings, P2P
+  AllToAll on the SimCCL PXN channel map).
+- `inputs/system/simai_native.txt`: the same collectives through `ncclFlowModel`.
+
+The test passes when every pair finishes with the same simulated end time, the
+`nccl` run used the MSCCL schedules (no fallback to NCCL), and the `simai_native`
+run did not use MSCCL.
+
+```bash
+bash scripts/build.sh -c ns3
+tests/ns3/msccl-nccl-equivalence/run.sh        # 4 workloads x 4 topologies
+tests/ns3/msccl-nccl-equivalence/run.sh -q     # no_failure, 256MB only (~30 s)
+tests/ns3/msccl-nccl-equivalence/run.sh -h     # options (binary, output, jobs, subsets)
+```
+
+The script fixes `AS_PXN_ENABLE=1` (the topology is rail-only), `AS_SEND_LAT=3000`
+(ns) and `SIMAI_PROTO_AWARE=0`. The last one selects `NCCL_PROTO_UNDEF`, which
+disables MSCCL pipelining: by default the MSCCL path splits every step into 512KB
+chunks as NCCL does, while `NcclFlowModel` sends each step as one flow. Both models then keep the
+bottleneck links equally busy, but with chunking the first inter-node transfer
+starts earlier (after one 512KB chunk has crossed NVLink to the PXN proxy instead of
+a whole step), so the MSCCL times are lower by that pipeline fill. Without
+`SIMAI_PROTO_AWARE=0` the test is expected to fail. For the paper MCCL, we used always the ncclCustom backend in all the configurations.
+
+Each simulation runs in its own directory under the output folder
+(`simai-test-results-msccl-nccl-<timestamp>` by default) with its `run.log`;
+`results.csv` lists both end times and the verdict per pair. The script exits with
+status 1 if any pair differs or fails.

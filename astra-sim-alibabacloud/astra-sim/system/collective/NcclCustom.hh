@@ -56,7 +56,8 @@ public:
     std::atomic<int> recvs_completed;
     int total_sends_to_initiate;
     std::map<int, int> flow_id_to_channel_id_map;
-    bool collective_graph;
+    // Collective graph of this collective (see CollectiveGraph); empty when collective-graph is off.
+    std::string graph_key;
     // NCCL algorithm / protocol selected for this collective, forwarded to the
     // network frontend through SendPacketEventHandlerData (send-latency model).
     int m_algorithm;
@@ -70,23 +71,10 @@ public:
     std::map<int, int> non_zero_latency_packets;
     std::map<int, int> indegree_mapping; //
     MockNccl::FlowModels _flow_models; //
-    uint32_t m_channels; //
+    // Channel stride of flow_tag(), from msccl-channels in the sys file: every channel id in the
+    // MSCCL schedule must be below it. Identical on every rank (sender and receiver compute the tag).
+    uint32_t m_channels;
     std::map<int, FlowState> flow_states; // Map to track the state of each flow_id
-
-    // Added for timed graph generation
-    std::map<int, Tick> send_start_times;
-    std::map<int, Tick> recv_end_times;
-    
-    // Holds all timing and flow data for graph generation, shared across all NcclCustom instances.
-    struct GlobalGraphData {
-        std::mutex mtx;
-        std::map<int, MockNccl::SingleFlow> flow_details;
-        std::map<int, Tick> start_times;
-        std::map<int, Tick> end_times;
-    };
-    static std::map<int, GlobalGraphData> g_graph_data_per_layer;
-    // Atomic counter to track when all nodes have finished.
-    static std::map<int, std::atomic<int>> g_finished_nodes_per_layer; // Layer-wise finished
 
     NcclCustom(
         ComType type,
@@ -97,7 +85,7 @@ public:
         RingTopology::Direction direction,
         InjectionPolicy injection_policy,
         bool boost_mode,
-        bool collective_graph,
+        const std::string& graph_key,
         std::shared_ptr<MockNccl::FlowModels> ptr_flow_models,
         int treechannels,
         int tot_gpus,
@@ -111,6 +99,8 @@ public:
     bool check_completion();
     int flow_tag(const MockNccl::SingleFlow& flow) const;
     void send_flow_unlocked(int channel_id, int flow_id);
+    // Posts this rank's sends that depend on the given flow, once it has been released (General).
+    void release_local_children_unlocked(int channel_id, int flow_id);
     void release_packet(int channel_id, int flow_id);
     virtual void exit() override;
 

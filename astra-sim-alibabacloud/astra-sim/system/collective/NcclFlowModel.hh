@@ -24,6 +24,7 @@
 #include <map>
 #include <set>
 #include <atomic>
+#include <string>
 #include "Algorithm.hh"
 #include "astra-sim/system/Common.hh"
 #include "astra-sim/system/MemBus.hh"
@@ -60,6 +61,9 @@ public:
   uint32_t len_channel;
   int m_algorithm = -1;   // NCCL algorithm (RING/TREE/NVLS/PAT)
   int m_protocol = -1;    // NCCL protocol (LL/LL128/Simple)
+
+  // Collective graph of this collective (see CollectiveGraph); empty when collective-graph is off.
+  std::string graph_key;
 #if PHY_RDMA
   std::atomic<bool> judge_exit_flag;
 #endif
@@ -76,6 +80,7 @@ public:
       RingTopology::Direction direction,
       InjectionPolicy injection_policy,
       bool boost_mode,
+      const std::string& graph_key,
       std::shared_ptr<MockNccl::FlowModels> ptr_flow_models,
       int treechannels,
       int algorithm = -1,

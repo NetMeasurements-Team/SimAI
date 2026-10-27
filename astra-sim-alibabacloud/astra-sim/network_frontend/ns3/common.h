@@ -927,6 +927,8 @@ inline void SetupNetwork(
       uint64_t rtt = delay * 2 + txDelay;
       uint64_t bw = pairBw[i][j];
       uint64_t bdp = rtt * bw / 1000000000 / 8;
+      const uint64_t mtu = packet_payload_size;
+      bdp = ((bdp + mtu - 1) / mtu) * mtu + mtu;
       pairBdp[n.Get(i)][n.Get(j)] = bdp;
       pairRtt[i][j] = rtt;
       if (bdp > maxBdp)

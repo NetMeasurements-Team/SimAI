@@ -8,5 +8,7 @@ all-reduce-implementation: ncclFlowModel
 all-gather-implementation: ncclFlowModel
 reduce-scatter-implementation: ncclFlowModel
 all-to-all-implementation: ncclFlowModel
+collective-graph: 0
+collective-graph-ranks: 0
 collective-optimization: baseline
 

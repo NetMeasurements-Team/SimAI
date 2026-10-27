@@ -19,6 +19,7 @@
 #endif
 #include <chrono>
 
+#include "CollectiveGraph.hh"
 #include "NcclFlowModel.hh"
 #include "SimCCL/mock/MockNcclLog.h"
 #include "astra-sim/system/Sys.hh"
@@ -41,6 +42,7 @@ NcclFlowModel::NcclFlowModel(
     RingTopology::Direction direction,
     InjectionPolicy injection_policy,
     bool boost_mode,
+    const std::string& graph_key,
     std::shared_ptr<MockNccl::FlowModels> ptr_flow_models,
     int treechannels,
     int algorithm,
@@ -59,6 +61,7 @@ NcclFlowModel::NcclFlowModel(
   this->m_channels = treechannels;
   this->m_algorithm = algorithm;
   this->m_protocol = protocol;
+  this->graph_key = graph_key;
 #if PHY_RDMA
   this->judge_exit_flag.store(false);
 #endif
@@ -94,6 +97,7 @@ NcclFlowModel::NcclFlowModel(
       }
     }
   }
+  CollectiveGraph::add_flows(graph_key, _flow_models);
   for (uint32_t channel_id = 0; channel_id < m_channels; channel_id++) {
     assert(zero_latency_packets->find(channel_id) == zero_latency_packets->end());
     (*zero_latency_packets)[channel_id] = 0;
@@ -300,6 +304,7 @@ void NcclFlowModel::run(EventType event, CallData* data) {
     const auto snd_ehd = static_cast<SendPacketEventHandlerData*>(ehd);
     const auto& sent_flow = _flow_models[std::make_pair(snd_ehd->channel_id, snd_ehd->flow_id)];
     std::vector<int> next_flow_list = sent_flow.child_flow_id;
+    CollectiveGraph::record(graph_key, sent_flow.flow_id, CollectiveGraph::Event::Sent, Sys::boostedTick());
     NcclLog->writeLog(
         NcclLogLevel::DEBUG,
         "PacketSentFinshed src %d dst %d channel_id %d flow_id %d",
@@ -526,6 +531,9 @@ void NcclFlowModel::insert_packets(int channel_id, int flow_id) {
   assert(_flow_models.count(std::make_pair(channel_id, flow_id)) != 0);
 
   const MockNccl::SingleFlow f = _flow_models[std::make_pair(channel_id, flow_id)];
+  if (f.src == id) {
+    CollectiveGraph::record(graph_key, flow_id, CollectiveGraph::Event::Posted, Sys::boostedTick());
+  }
   assert(zero_latency_packets->count(channel_id) != 0 && non_zero_latency_packets->count(channel_id) != 0);
   if ((*zero_latency_packets)[channel_id] == 0 && (*non_zero_latency_packets)[channel_id] == 0) {
     (*zero_latency_packets)[channel_id] = parallel_reduce * 1;
@@ -705,6 +713,7 @@ bool NcclFlowModel::ready(int channel_id, int flow_id) {
   snd_ehd->algorithm = m_algorithm;
   snd_ehd->protocol = m_protocol;
 
+  CollectiveGraph::released(graph_key, id, flow_model.dest, flow_model.flow_id, snd_ehd->tag, Sys::boostedTick());
   stream->owner->front_end_sim_send(
       0,
       Sys::dummy_data,
@@ -735,8 +744,10 @@ void NcclFlowModel::exit() {
       packet.second.clear();
   }
 #endif
-  stream->owner->proceed_to_next_vnet_baseline(reinterpret_cast<StreamBaseline*>(stream));
+  CollectiveGraph::rank_finished(graph_key, id);
   NcclLog->writeLog(NcclLogLevel::DEBUG, "NcclFlowModel exit");
+  // proceed_to_next_vnet_baseline deletes this algorithm: it must be the last statement.
+  stream->owner->proceed_to_next_vnet_baseline(reinterpret_cast<StreamBaseline*>(stream));
 }
 
 #ifdef PHY_RDMA
