@@ -10,11 +10,11 @@ the H200 hardware prototype, which are not part of this artifact.)
 | | |
 |---|---|
 | Archived artifact (DOI) | **ZENODO-DOI-TODO** |
-| Code | https://github.com/NetMeasurements-Team/SimAI, tag `conext26-ae` (branch `custom-collectives`) |
-| Hardware | any x86-64 Linux machine, no GPU; ≥ 2 cores, ≥ 4 GB RAM (≈ 0.7 GB per parallel simulation), ≈ 3 GB disk |
-| Software | Ubuntu 22.04/24.04 (or Docker), GCC ≥ 11, CMake ≥ 3.13, libxml2-dev, Python 3 (matplotlib optional) |
+| Code | https://github.com/NetMeasurements-Team/SimAI, branch/tag `conext26-ae` |
+| Hardware | any x86-64 Linux machine, no GPU; ≥ 2 cores, ≥ 8 GB RAM (≈ 0.7 GB per parallel E1/E2 simulation, up to ≈ 3 GB per E3 simulation), ≈ 3 GB disk |
+| Software | Ubuntu 22.04/24.04 (or Docker), GCC ≥ 11, CMake ≥ 3.13, libxml2-dev, Python 3 (matplotlib optional; pandas for the paper-style E3 plots) |
 | Proprietary software / hardware | none |
-| Time | build ≈ 30 min on 2 cores; smoke test 15 s; all experiments ≈ 8 min on 2 cores |
+| Time | build ≈ 30 min on 2 cores; smoke test 15 s; E1 + E2 ≈ 6 min; E3 ≈ 1 h (2 cores) |
 
 ---
 
@@ -34,7 +34,7 @@ What we added on top of upstream SimAI (ns-3 backend):
 | `mscclCustomFlow` implementation | `astra-sim/system/Sys.{hh,cc}` | New value for `all-gather-implementation`, `all-to-all-implementation`, `reduce-scatter-implementation`, `all-reduce-implementation` in the system file; new keys `msccl-path`, `msccl-channels`, `collective-graph*`. |
 | MSCCL schedule lookup | `SimCCL/src/mock/v2.{20,30}/MockNcclGroup.cc`, `XmlReader.cc` | Finds the schedule matching collective type, group size, data size, group type and first rank; falls back to SimAI's NCCL model if none matches. |
 | Collective graph | `astra-sim/system/collective/CollectiveGraph.{hh,cc}` | Optional dump of the executed dependency graph (debugging). |
-| Inputs used in the paper | `astra-sim-alibabacloud/inputs/` | NCCL-equivalent MSCCL schedules (`msccl/nccl/`), rail-optimized HPN topologies with the three failure profiles (`topo/`), single-collective workloads (`workloads/single_collective/`), system files (`system/`). |
+| Inputs used in the paper | `astra-sim-alibabacloud/inputs/` | NCCL-equivalent MSCCL schedules (`msccl/nccl/`), rail-optimized HPN topologies with the three failure profiles (`topo/`), single-collective and DeepSeek-671B training workloads (`workloads/`), system files (`system/`). |
 | Tests and runners | `tests/ns3/msccl-nccl-equivalence/`, `artifact/` | Equivalence test, experiment runner, summarizer, Docker image, archive script. |
 
 ### Claims supported by this artifact
@@ -42,7 +42,8 @@ What we added on top of upstream SimAI (ns-3 backend):
 | # | Claim (paper) | Experiment | Expected result |
 |---|---|---|---|
 | C1 | The custom-schedule path preserves SimAI's accuracy: an NCCL ring/P2P schedule fed through it reproduces SimAI's native NCCL completion times (Sec. 2.3). | **E1** | Identical simulated end time (to the ns) for every workload × topology pair; `PASS 16/16`. |
-| C2 | Under the three gray-failure profiles, static schedules collapse to the speed of the degraded link (Sec. 2.3, 6.1; "Orig"/"No reopt" in Fig. 1 and 8). | **E2** | Static schedules slow down to the degraded link: AllGather ≈2× (Fail1), ≈10× (Fail2), ≈32× (Fail3); AllToAll ≈10× (Fail2), ≈8× (Fail3), unchanged under Fail1 (the degraded NVLink is not on its bottleneck cut). |
+| C2 | Under the three gray-failure profiles, static schedules collapse to the speed of the degraded link (Sec. 2.3, 6.1; "Orig"/"No reopt" in Fig. 1 and 8). | **E2** | Static schedules slow down to the degraded link: AllGather ≈ 3.4× (Fail1), ≈ 7× (Fail2), ≈ 55× (Fail3); AllToAll unchanged (Fail1, degraded NVLink not on its bottleneck), ≈ 8× (Fail2), ≈ 14× (Fail3). |
+| C3 | Full LLM training (DeepSeek-671B, one of 16 pipeline stages on 128 GPUs, i.e. a 2048-GPU job) runs through the custom-schedule path under every failure profile, and the training time on one batch is reconstructed from the simulated phases as in the paper (Sec. 6.3; NCCL bars of Fig. 11c,d and Fig. 17). | **E3** | All 8 simulations `SUCCESS` with the MSCCL schedules in use; reconstructed training time on one batch 18.66 s with no failure; unchanged under Fail1 (1.00×), ≈ 5.5× under Fail2 and ≈ 5.3× under Fail3. |
 
 ### Not in this artifact (out of scope)
 
@@ -51,10 +52,9 @@ What we added on top of upstream SimAI (ns-3 backend):
   MCCL bars of Fig. 1, 8 and 11.
 * The **hardware prototype** (measurement module, hot-swap; Fig. 9, 10, Tables 2–3), which needs
   H200 GPUs, ConnectX-7 NICs and a modified NCCL/MSCCL.
-* The **end-to-end training simulations** (Llama-405B and DeepSeek-671B, 128–2048 GPUs;
-  Sec. 6.3, Fig. 11, 16, 17). The work-in-progress workload and topology files under
-  `inputs/workloads/end_to_end/` and `inputs/topo/end_to_end/` are not part of the evaluated
-  artifact. The same custom-schedule path runs them; workloads can be generated with AICB (§6).
+* Llama-405B workloads and cluster sizes other than 128 GPUs for the training simulations
+  (Fig. 11a,b and the 256–2048-GPU points); they run through the same path and can be generated
+  with AICB (§6).
 
 Any MSCCL-XML schedule (e.g. from MSCCL, MSCCLang, TACCL, TE-CCL or ForestColl exporters) can be
 dropped in and evaluated, see §6.
@@ -75,13 +75,14 @@ git clone --recurse-submodules --branch conext26-ae https://github.com/NetMeasur
 cd SimAI
 ```
 (The submodules `SimCCL` and `ns-3-alibabacloud` are pinned to commits on their
-`custom-collectives` / `RDMA-Push` branches; `--recurse-submodules` fetches the right ones.)
+`custom-collectives` / `RDMA-Push` branches; `--recurse-submodules` fetches the right ones.
+The Zenodo archive is preferred: it cannot change after publication.)
 
 ## 3. Building (≈ 30 min on 2 cores)
 
 **Native (Ubuntu 22.04/24.04):**
 ```bash
-sudo apt-get install -y build-essential cmake libxml2-dev python3 python3-matplotlib
+sudo apt-get install -y build-essential cmake libxml2-dev python3 python3-matplotlib python3-pandas
 bash scripts/build.sh -c ns3            # add -j N to set build parallelism
 ls -l bin/SimAI_simulator               # the simulator binary
 ```
@@ -104,8 +105,8 @@ Runs the 256 MB AllGather and AllToAll on 16 GPUs with no failure, once through 
 custom-schedule path and once through SimAI's native NCCL model. Expected tail of the output:
 ```
 workload               failure       nccl_msccl_ns simai_native_ns  status
-ag-268435456_bytes     no_failure          1327384         1327384  PASS
-a2a-268435456_bytes    no_failure          5388473         5388473  PASS
+ag-268435456_bytes     no_failure           735808          735808  PASS
+a2a-268435456_bytes    no_failure          3035739         3035739  PASS
 
 PASS: 2/2 pairs identical. Results: .../smoke-<timestamp>/E1-equivalence/results.csv
 ```
@@ -116,15 +117,20 @@ Each command writes to a fresh `artifact/results/<experiment>-<timestamp>/` dire
 `provenance.txt` (git commits, binary hash, host), one sub-directory per simulation
 (`command.txt`, `run.log`, `exit_code`, `wall_seconds`) and a `results.csv`.
 `-j N` sets the number of parallel simulations (default: all CPUs);
-`-f no_failure,failure2` restricts the failure profiles.
+`-f no_failure,failure_2` restricts the failure profiles.
 
 ```bash
-artifact/run.sh equiv     # E1  32 sims   ≈ 4 min
+artifact/run.sh equiv     # E1  32 sims   ≈ 2 min
 artifact/run.sh single    # E2  32 sims   ≈ 4 min
-artifact/run.sh all       # E1 + E2 into one directory
+artifact/run.sh e2e       # E3   8 sims   ≈ 1 h (up to ≈ 3 GB RAM per simulation)
+artifact/run.sh all       # E1 + E2 + E3 into one directory
 python3 artifact/summarize.py artifact/results/<dir> [--plots]   # tables -> summary.md
 ```
-Times were measured on a 2-vCPU / 8 GB cloud VM (Ubuntu 24.04, GCC 13.3), all with `-j 2`; they scale down roughly linearly with more cores.
+A run exits non-zero if any simulation does not finish. Status `STALLED` means the simulator ran
+out of events with messages still pending (it lists them in `run.log`); it is deterministic, so
+retrying does not help.
+Times were measured on a 2-vCPU / 8 GB cloud VM (Ubuntu 24.04, GCC 13.3) with `-j 2`; they
+shrink roughly linearly with more cores.
 
 ### E1 – Custom-schedule path vs native NCCL model (claim C1)
 
@@ -141,32 +147,85 @@ pipelines steps into 512 KB chunks (NCCL's native flow model sends each step as 
 
 Same workloads and topologies, with the configuration used for all MCCL experiments in the paper
 (protocol-aware MSCCL path with 512 KB chunking, PXN on, 3 µs send latency). Both the
-custom-schedule path (`nccl`) and SimAI native are run. Expected (reference values,
-`nccl` path):
+custom-schedule path (`nccl`) and SimAI native are run. Expected slowdown vs no failure
+(reference values, `nccl` path):
 
-| Collective | Fail1 | Fail2 | Fail3 |
-|---|---|---|---|
-| AllGather (256 MB, 1 GB) | ≈ 2.0× slower | ≈ 10× slower | ≈ 32× slower |
-| AllToAll (256 MB, 1 GB) | unchanged (1.00×) | ≈ 10× slower | ≈ 8× slower |
+| Collective (256 MB and 1 GB) | no failure | Fail1 | Fail2 | Fail3 |
+|---|---|---|---|---|
+| AllGather | 0.76 / 2.92 ms | ≈ 3.4× slower | ≈ 7× slower | ≈ 54–56× slower |
+| AllToAll | 2.72 / 10.86 ms | unchanged (1.00×) | ≈ 8× slower | ≈ 14× slower |
 
-AllToAll is unaffected by Fail1 because the degraded 800 Gbps NVLink of GPU 0 is still faster
-than the NIC links that bound the P2P schedule. All runs must be `SUCCESS` and the `nccl` runs
-must report `schedule used = msccl`. With the protocol-aware chunking the custom path is slightly
-faster than SimAI native (NCCL pipelining is modelled), which is why E1 disables it.
+AllToAll on the custom-schedule path is unaffected by Fail1: its P2P schedule is bounded by the
+NIC links, and the degraded 800 Gbps NVLink of GPU 0 is still faster (SimAI native shows
+≈ 1.56× in that cell). With protocol-aware chunking the two paths are not identical (NCCL's
+512 KB pipelining is modelled only on the custom path, so it is up to ≈ 20 % faster on AllToAll),
+which is why E1 disables chunking.
+
+All runs must be `SUCCESS` and the `nccl` runs must report `schedule used = msccl`.
 
 `summarize.py` compares every simulated time against our reference run in
 [`artifact/expected/`](artifact/expected/) and reports `N/N runs identical`; the simulator is
 deterministic, so with the archived commits and the default build profile the times match to
 the nanosecond (a different compiler could introduce small differences).
 
-Failure profiles as encoded in `inputs/topo/single_collective/1x2x8-failure{1,2,3}` (each GPU
-has an 18-lane NVSwitch link of 2880 Gbps and two 200 Gbps rail ports):
+Failure profiles as encoded in the topology files `*-failure_{1,2,3}` (each GPU has an 18-lane
+NVSwitch link of 2880 Gbps and one 400 Gbps NIC to its rail ToR; the same changes are applied
+to the 2×8 topology of E1/E2 and the 1×16×8 topology of E3):
 
-| Profile | Paper definition | Topology file change |
+| Profile | Paper definition (Sec. 6.1) | Topology file change |
 |---|---|---|
 | Fail1 | 13 of 18 NVSwitch lanes of GPU 0 fail | GPU 0 ↔ NVSwitch 2880 → 800 Gbps |
-| Fail2 | NIC link of GPU 0 degraded | one GPU 0 rail port 200 → 20 Gbps |
-| Fail3 | GPU 0 replaced by a backup in another rack (+1 µs) | GPU 0 ↔ NVSwitch and both rail ports → 50 Gbps, 1.5 µs |
+| Fail2 | GPU 0's link to its ToR degraded | GPU 0 ↔ ToR 400 → 50 Gbps |
+| Fail3 | GPU 0 replaced by a backup in another rack (+1 µs ToR latency) | GPU 0 ↔ NVSwitch 50 Gbps, GPU 0 ↔ ToR 100 Gbps, latency 0.5 → 1.5 µs |
+
+### E3 – DeepSeek-671B training under gray failures (claim C3)
+
+DeepSeek-v3 671B (256 experts; EP = 64, PP = 16), 16K-token batch, forward and backward pass of
+one pipeline stage simulated on 128 GPUs (1 segment × 16 hosts × 8 GPUs, HPN rail-optimized,
+`inputs/topo/end_to_end/HPN/1x16x8*`), which corresponds to a 2048-GPU training job (Sec. 6.3).
+The iteration is simulated as two runs per failure profile, the transformer phase (MoE AllToAll
+and AllGather on EP groups) and the gradient-synchronization phase (DP and DP_EP
+AllGather/ReduceScatter). AllGather, ReduceScatter and AllToAll go through the custom-schedule
+path with the NCCL-equivalent schedules (any collective without a matching schedule falls back
+to SimAI's NCCL model and is reported as `msccl+fallback`), i.e. this is the NCCL baseline of
+Fig. 11(c,d) and Fig. 17 at 128 GPUs.
+
+**Reconstruction of the full training.** The transformer workload simulates one transformer
+block for the per-GPU share of the batch, so the training time on one 16K-token batch of the
+stage is reconstructed as in the paper:
+
+```
+T_batch = T_transformer × 3 (transformer blocks per stage) × 16384 / (128 GPUs / TP 1) + T_grad
+```
+
+`summarize.py` prints this per failure profile together with the slowdown vs no failure.
+`benchmark/analyze_results.py` applies the same reconstruction and produces the paper-style bar
+plots (one per failure profile, as in Fig. 16–17); it also accepts the CSVs of
+`benchmark/run_all_simulations.sh` for other GPU counts and algorithms, and `--no-grad` leaves
+the gradient phase out:
+
+```bash
+python3 benchmark/analyze_results.py artifact/results/<dir>/E3-e2e/results.csv
+# -> <dir>/E3-e2e/combined_results.csv and <dir>/E3-e2e/plots/DeepSeek671B_<failure>.{png,pdf}
+```
+
+Expected (reference values; all 8 runs `SUCCESS` with `schedule used = msccl`):
+
+| Failure | transformer pass (ms) | gradient phase (ms) | training time on one batch (s) | vs no failure |
+|---|---|---|---|---|
+| no failure | 48.45 | 59.44 | 18.66 | 1.00× |
+| Fail1 | 48.45 | 86.94 | 18.69 | 1.00× |
+| Fail2 | 266.87 | 339.68 | 102.82 | 5.51× |
+| Fail3 | 257.02 | 756.40 | 99.45 | 5.33× |
+
+Fail1 barely matters for the training: the gradient phase slows down (59 → 87 ms) but the
+transformer pass, which dominates the batch time, does not. As for E1/E2, `summarize.py` checks
+every simulated time against `artifact/expected/E3-e2e.csv`.
+
+E3 is much longer than E1/E2 (≈ 1 h on 2 cores with `-j 2`; the gradient-phase simulations
+are the longest). The 8 simulations are independent, so with ≥ 8 cores and `-j 8` it takes about
+as long as the slowest one. To check a subset, e.g. only no failure and Fail2:
+`artifact/run.sh e2e -f no_failure,failure_2`.
 
 ## 6. Reuse: evaluating your own schedules
 

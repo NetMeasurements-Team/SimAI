@@ -1,0 +1,9 @@
+workload,failure_type,algorithm,sim_time_ns,wall_seconds,schedule,status
+DeepSeek671B-transformer,no_failure,nccl,48447649,652,msccl,SUCCESS
+DeepSeek671B-transformer,failure_1,nccl,48453829,669,msccl,SUCCESS
+DeepSeek671B-transformer,failure_2,nccl,266873831,609,msccl,SUCCESS
+DeepSeek671B-transformer,failure_3,nccl,257021786,753,msccl,SUCCESS
+DeepSeek671B-grad,no_failure,nccl,59443037,1022,msccl,SUCCESS
+DeepSeek671B-grad,failure_1,nccl,86941678,982,msccl,SUCCESS
+DeepSeek671B-grad,failure_2,nccl,339679682,1004,msccl,SUCCESS
+DeepSeek671B-grad,failure_3,nccl,756402673,921,msccl,SUCCESS

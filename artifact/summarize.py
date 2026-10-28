@@ -3,7 +3,8 @@
 
 Usage:  python3 artifact/summarize.py <results dir> [--plots]
 
-Looks for E1-equivalence/results.csv and E2-single/results.csv under the given directory, prints Markdown tables and writes them to <results dir>/summary.md.
+Looks for E1-equivalence/, E2-single/ and E3-e2e/results.csv under the given directory, prints
+Markdown tables, compares simulated times with artifact/expected/, and writes <dir>/summary.md.
 With --plots (requires matplotlib) it also writes PNG bar charts next to summary.md.
 Only the Python standard library is needed otherwise.
 """
@@ -13,13 +14,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-FAILURE_ORDER = ["no_failure", "failure1", "failure2", "failure3"]
-FAILURE_LABEL = {
-    "no_failure": "No failure",
-    "failure1": "Fail1 (NVSwitch lanes of GPU 0 degraded)",
-    "failure2": "Fail2 (GPU 0 NIC link degraded)",
-    "failure3": "Fail3 (GPU 0 replaced in remote rack)",
-}
+FAILURE_ORDER = ["no_failure", "failure_1", "failure_2", "failure_3"]
 
 
 def forder(f):
@@ -108,7 +103,6 @@ def summarize_e2(path, plots, outdir):
     return "\n".join(text), ok
 
 
-
 def _plot_e2(by, outdir):
     import matplotlib
     matplotlib.use("Agg")
@@ -131,6 +125,63 @@ def _plot_e2(by, outdir):
     fig.tight_layout()
     fig.savefig(outdir / "e2_single.png", dpi=150)
 
+
+# Full-batch reconstruction, identical to benchmark/analyze_results.py (paper Sec. 6.3):
+#   T_batch = T_transformer * TRANSFORMERS_PER_STAGE * BATCH_SIZE / (num_gpus / TP) + T_grad
+E3_TP, E3_TRANSFORMERS_PER_STAGE, E3_BATCH_SIZE, E3_GPUS = 1, 3, 16384, 128
+E3_SCALE = E3_TRANSFORMERS_PER_STAGE * E3_BATCH_SIZE / (E3_GPUS / E3_TP)
+
+
+def summarize_e3(path, plots, outdir):
+    rows = read_csv(path)
+    by = defaultdict(dict)
+    ok = True
+    for r in rows:
+        by[r["failure_type"]][r["workload"]] = r
+        ok &= r["status"] == "SUCCESS"
+    fails = sorted(by, key=forder)
+    totals, table = {}, []
+    for ft in fails:
+        tr = by[ft].get("DeepSeek671B-transformer", {})
+        gr = by[ft].get("DeepSeek671B-grad", {})
+        tt, tg = ns(tr.get("sim_time_ns")), ns(gr.get("sim_time_ns"))
+        totals[ft] = int(tt * E3_SCALE) + tg if (tt and tg) else None
+        table.append([ft,
+                      f"{tt / 1e6:.3f}" if tt else tr.get("status", "-"),
+                      f"{tg / 1e6:.3f}" if tg else gr.get("status", "-"),
+                      f"{totals[ft] / 1e9:.2f}" if totals[ft] else "-"])
+    base = totals.get("no_failure")
+    for row, ft in zip(table, fails):
+        row.append(f"{totals[ft] / base:.2f}x" if (totals[ft] and base) else "-")
+    text = ["## E3 - DeepSeek-671B training under gray failures (one pipeline stage, 128 GPUs)",
+            "",
+            "One of the 16 pipeline stages (1 segment x 16 hosts x 8 GPUs, HPN; equivalent to a "
+            "2048-GPU job), with the NCCL-equivalent schedules through the custom-schedule path "
+            "(NCCL baseline of Fig. 11 and Fig. 17). The training time on one 16K-token batch is "
+            "reconstructed from the two simulated phases as in `benchmark/analyze_results.py`: "
+            f"transformer pass x {E3_TRANSFORMERS_PER_STAGE} transformer blocks per stage x "
+            f"{E3_BATCH_SIZE} / ({E3_GPUS} GPUs / TP {E3_TP}) + gradient phase.",
+            "",
+            md_table(["failure", "transformer pass (ms)", "gradient phase (ms)",
+                      "training time on one batch (s)", "vs no failure"], table),
+            ""]
+    if plots and any(totals.values()):
+        _plot_e3(totals, outdir)
+        text += ["![E3](e3_e2e.png)", ""]
+    return "\n".join(text), ok
+
+
+def _plot_e3(totals, outdir):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fails = sorted(totals, key=forder)
+    fig, ax = plt.subplots(figsize=(5, 3.5))
+    ax.bar(fails, [(totals[f] or 0) / 1e9 for f in fails])
+    ax.set_ylabel("Training time on one batch (s)")
+    ax.set_title("DeepSeek-671B, 128 GPUs, NCCL schedules")
+    fig.tight_layout()
+    fig.savefig(outdir / "e3_e2e.png", dpi=150)
 
 
 EXPECTED_DIR = Path(__file__).resolve().parent / "expected"
@@ -171,7 +222,7 @@ def main():
         return 2
     root = Path(args[0])
     sections, all_ok, found = [f"# MCCL artifact results: `{root.name}`", ""], True, False
-    for name, fn in (("E1-equivalence", None), ("E2-single", summarize_e2)):
+    for name, fn in (("E1-equivalence", None), ("E2-single", summarize_e2), ("E3-e2e", summarize_e3)):
         p = root / name / "results.csv"
         if not p.exists():
             continue
@@ -183,7 +234,7 @@ def main():
         if ref.exists():
             sections.append(compare_with_reference(p, ref))
     if not found:
-        print(f"No E1-equivalence/E2-single results.csv under {root}", file=sys.stderr)
+        print(f"No E1-equivalence/E2-single/E3-e2e results.csv under {root}", file=sys.stderr)
         return 2
     report = "\n".join(sections)
     (root / "summary.md").write_text(report + "\n")

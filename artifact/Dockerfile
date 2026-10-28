@@ -11,7 +11,7 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake libxml2-dev python3 python3-matplotlib git ca-certificates \
+        build-essential cmake libxml2-dev python3 python3-matplotlib python3-pandas git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace/SimAI

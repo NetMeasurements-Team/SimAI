@@ -7,19 +7,25 @@ The artifact is the extended SimAI simulator (ns-3 backend) used for the simulat
 the paper. We added the ability to execute arbitrary collective communication schedules written
 in the MSCCL XML format (NcclCustom / mscclCustomFlow collective implementation and MSCCL
 schedule lookup in SimCCL), reusing SimAI's validated point-to-point primitives. The artifact
-ships NCCL-equivalent MSCCL schedules, the 2x8 rail-optimized HPN topology with the paper's
-three gray-failure profiles, and 256 MB / 1 GB AllGather and AllToAll workloads on 16 GPUs.
-Two experiments exercise it: (E1) an equivalence test showing that NCCL schedules fed through
+ships NCCL-equivalent MSCCL schedules, rail-optimized HPN topologies (2x8 and 1x16x8 GPUs) with
+the paper's three gray-failure profiles, 256 MB / 1 GB AllGather and AllToAll workloads on 16
+GPUs, and a DeepSeek-671B training workload (one of 16 pipeline stages on 128 GPUs).
+
+Three experiments exercise it: (E1) an equivalence test showing that NCCL schedules fed through
 the custom-schedule path finish at exactly the same simulated time as SimAI's native NCCL model
 (paper Sec. 2.3); (E2) single collectives under each gray failure, showing how static schedules
-collapse to the speed of the degraded link (baselines of Fig. 1 and 8). A smoke test takes
-~15 s and both experiments ~8 min on 2 cores; scripts produce CSV/Markdown summaries and compare
-every simulated time with the provided reference outputs (the simulator is deterministic).
+collapse to the speed of the degraded link (baselines of Fig. 1 and 8); (E3) DeepSeek-671B
+training under each failure profile through the custom-schedule path, with the training time on
+one batch reconstructed from the simulated phases as in the paper (NCCL baseline of Fig. 11 and
+17, with paper-style plots). A smoke test takes ~15 s; E1 + E2 take ~6 min and E3 ~1 h on
+2 cores (E3 can be run on a subset of failure profiles). Scripts produce CSV/Markdown summaries
+and compare every simulated time with the provided reference outputs (the simulator is
+deterministic).
 
 Requirements: x86-64 Linux (or Docker), GCC >= 11, CMake >= 3.13, libxml2-dev, Python 3. No
-GPU, no proprietary software or hardware. >= 2 cores, >= 4 GB RAM, ~3 GB disk. The build takes
-~30 min on 2 cores (less with more cores).
+GPU, no proprietary software or hardware. >= 2 cores, >= 8 GB RAM (E3 simulations use up to
+~3 GB each), ~3 GB disk. pandas/matplotlib are needed only for plots. The build takes ~30 min on 2 cores (less with more cores).
 
 Not included (out of scope): the MCCL schedule synthesizers (Fig. 7, Table 5, MCCL bars of
-Fig. 1/8/11), the end-to-end training simulations (Sec. 6.3, Fig. 11/16/17) and the H200
-hardware prototype (Fig. 9/10).
+Fig. 1/8/11), Llama-405B and cluster sizes other than 128 GPUs in the training simulations,
+and the H200 hardware prototype (Fig. 9/10).

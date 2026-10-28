@@ -4,24 +4,27 @@
 # Usage: artifact/run.sh <experiment> [options]
 #
 # Experiments
-#   smoke   E1-quick: MSCCL-vs-native equivalence, no failure, 256 MB AG + A2A   (4 sims,  ~15 s)
-#   equiv   E1:       MSCCL-vs-native equivalence, 4 workloads x 4 topologies    (32 sims, ~4 min)
+#   smoke   E1-quick: MSCCL-vs-native equivalence, no failure, 256 MB AG + A2A   (4 sims)
+#   equiv   E1:       MSCCL-vs-native equivalence, 4 workloads x 4 topologies    (32 sims)
 #   single  E2:       16-GPU single collectives (AG/A2A, 256 MB and 1 GB) on the
 #                     2x8 rail-optimized topology, no failure + Fail1/2/3,
-#                     through the custom-schedule path (nccl) and SimAI native  (32 sims, ~4 min)
-#   all     equiv + single
-#   (times measured with 2 CPUs)
+#                     through the custom-schedule path (nccl) and SimAI native  (32 sims)
+#   e2e     E3:       DeepSeek-671B training, one pipeline stage on 128 GPUs
+#                     (1x16x8 HPN), transformer + gradient phases,
+#                     no failure + Fail1/2/3                                     (8 sims)
+#   all     equiv + single + e2e
+#   (see ARTIFACT.md for run times)
 #
 # Options
 #   -b PATH   simulator binary            (default: bin/SimAI_simulator)
 #   -o DIR    output directory            (default: artifact/results/<experiment>-<timestamp>)
 #   -j N      parallel simulations        (default: number of CPUs)
-#   -f LIST   failure types (comma list)  (default: all four for the experiment)
+#   -f LIST   failure types (comma list)  (default: no_failure,failure_1,failure_2,failure_3)
 #   -h        help
 #
-# Every simulation runs in its own directory (run.log, exit_code, csv_files/), so runs never
-# overwrite each other. A results.csv is written per experiment; summarize it with
-#   python3 artifact/summarize.py <output dir>
+# Every simulation runs in its own directory (command.txt, run.log, exit_code, wall_seconds,
+# csv_files/), so runs never overwrite each other. A results.csv is written per experiment;
+# summarize with:  python3 artifact/summarize.py <output dir>
 
 set -u
 
@@ -30,13 +33,13 @@ BASE="$ROOT/astra-sim-alibabacloud"
 BINARY="$ROOT/bin/SimAI_simulator"
 OUT=""
 JOBS="$(nproc 2>/dev/null || echo 2)"
-FAILURE_OVERRIDE=""
+FAILURES="no_failure,failure_1,failure_2,failure_3"
 
-usage() { sed -n '2,24p' "$0"; }
+usage() { sed -n '2,27p' "$0"; }
 
 EXP="${1:-}"
 [ -n "$EXP" ] || { usage >&2; exit 2; }
-[ "$EXP" = "-h" ] || [ "$EXP" = "--help" ] && { usage; exit 0; }
+if [ "$EXP" = "-h" ] || [ "$EXP" = "--help" ]; then usage; exit 0; fi
 shift
 
 while getopts "b:o:j:f:h" opt; do
@@ -44,13 +47,13 @@ while getopts "b:o:j:f:h" opt; do
     b) BINARY="$(realpath "$OPTARG")" ;;
     o) OUT="$OPTARG" ;;
     j) JOBS="$OPTARG" ;;
-    f) FAILURE_OVERRIDE="$OPTARG" ;;
+    f) FAILURES="$OPTARG" ;;
     h) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
   esac
 done
 
-case "$EXP" in smoke|equiv|single|all) ;; *) echo "Unknown experiment: $EXP" >&2; usage >&2; exit 2 ;; esac
+case "$EXP" in smoke|equiv|single|e2e|all) ;; *) echo "Unknown experiment: $EXP" >&2; usage >&2; exit 2 ;; esac
 [ -x "$BINARY" ] || { echo "Simulator not found: $BINARY (build with: bash scripts/build.sh -c ns3)" >&2; exit 2; }
 
 [ -n "$OUT" ] || OUT="$ROOT/artifact/results/${EXP}-$(date +%Y%m%d_%H%M%S)"
@@ -59,6 +62,7 @@ mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 
 NET_CONF="$BASE/inputs/config/SimAI.conf"
+IFS=',' read -r -a FAILURE_LIST <<< "$FAILURES"
 
 # Record provenance of this run.
 {
@@ -71,6 +75,7 @@ NET_CONF="$BASE/inputs/config/SimAI.conf"
   echo "binary_sha:  $(sha256sum "$BINARY" | cut -d' ' -f1)"
   echo "git:         $(git -C "$ROOT" rev-parse HEAD 2>/dev/null) $(git -C "$ROOT" status --porcelain 2>/dev/null | grep -q . && echo '(dirty)')"
   git -C "$ROOT" submodule status 2>/dev/null | sed 's/^/submodule:   /'
+  [ -f "$ROOT/ARCHIVE_PROVENANCE.txt" ] && sed 's/^/archive:     /' "$ROOT/ARCHIVE_PROVENANCE.txt"
 } > "$OUT/provenance.txt"
 
 end_time() { grep -oP 'All messages finished. Stopping simulation at time \K[0-9]+' "$1" 2>/dev/null | tail -n 1; }
@@ -83,7 +88,7 @@ run_sim() {
   mkdir -p "$dir/csv_files"
   ln -sfn "$BASE" "$dir/astra-sim-alibabacloud"
   for f in "$wl" "$topo" "$sys"; do
-    [ -f "$f" ] || { echo "missing input: $f" > "$dir/run.log"; echo 2 > "$dir/exit_code"; return; }
+    [ -f "$f" ] || { echo "missing input: $f" > "$dir/run.log"; echo 127 > "$dir/exit_code"; return; }
   done
   echo "$BINARY -t 1 -w $wl -n $topo -c $NET_CONF -s $sys -r $name" > "$dir/command.txt"
   local t0=$SECONDS
@@ -94,23 +99,35 @@ run_sim() {
 
 throttle() { while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n; done; }
 
-# collect <csv> <dir>... : one line per run directory, from its run.log
+# collect_row <run dir> <leading csv fields>: one CSV line from the run's log and exit code.
+# Exit code 2 = the simulator ran out of events with messages still pending (it lists them).
 collect_row() {
   local dir="$1"; shift
-  local log="$dir/run.log" t status schedule
+  local log="$dir/run.log" t status schedule rc
   t="$(end_time "$log")"
-  if [ -z "$t" ]; then status="FAILED"; else status="SUCCESS"; fi
+  rc="$(cat "$dir/exit_code" 2>/dev/null || echo -)"
+  if [ "$rc" = 0 ] && [ -n "$t" ]; then status="SUCCESS"
+  elif [ "$rc" = 2 ]; then status="STALLED"
+  elif [ "$rc" = 127 ]; then status="MISSING_INPUT"
+  else status="FAILED"; fi
   if grep -q "Found matching MSCCL XML algorithm" "$log" 2>/dev/null; then schedule="msccl"; else schedule="native"; fi
   if grep -q "No matching MSCCL XML algorithm" "$log" 2>/dev/null; then schedule="${schedule}+fallback"; fi
   echo "$*,${t:-},$(cat "$dir/wall_seconds" 2>/dev/null),$schedule,$status"
+}
+
+show_csv() { (command -v column >/dev/null && column -s, -t < "$1") || cat "$1"; }
+
+# Paper configuration for E2/E3: protocol-aware MSCCL path (512 KB chunking), PXN, 3 us send latency.
+paper_env() {
+  export AS_LOG_LEVEL=2 AS_PXN_ENABLE=1 AS_SEND_LAT=3000 SIMAI_DUMP_DETAILED_FLOWS=0
+  unset SIMAI_PROTO_AWARE
 }
 
 # ---------------------------------------------------------------- E1 equivalence
 run_equiv() {
   local quick="$1" out="$2"
   local args=(-b "$BINARY" -o "$out" -j "$JOBS")
-  if [ "$quick" = 1 ]; then args+=(-q); fi
-  [ -n "$FAILURE_OVERRIDE" ] && [ "$quick" = 0 ] && args+=(-f "$FAILURE_OVERRIDE")
+  if [ "$quick" = 1 ]; then args+=(-q); else args+=(-f "$FAILURES"); fi
   echo "== E1: MSCCL-vs-native equivalence ($([ "$quick" = 1 ] && echo quick || echo full))"
   "$ROOT/tests/ns3/msccl-nccl-equivalence/run.sh" "${args[@]}"
 }
@@ -118,16 +135,13 @@ run_equiv() {
 # ---------------------------------------------------------------- E2 single collectives
 run_single() {
   local out="$1"
-  # Paper configuration: protocol-aware MSCCL path (512 KB chunking), PXN, 3 us send latency.
-  export AS_LOG_LEVEL=2 AS_PXN_ENABLE=1 AS_SEND_LAT=3000 SIMAI_DUMP_DETAILED_FLOWS=0
-  unset SIMAI_PROTO_AWARE
+  paper_env
   local wl_dir="$BASE/inputs/workloads/single_collective/16_gpus"
   local topo_base="$BASE/inputs/topo/single_collective/1x2x8"
   local workloads=(ag-268435456_bytes ag-1073741824_bytes a2a-268435456_bytes a2a-1073741824_bytes)
   local algs=(nccl simai_native)
-  local failures; IFS=',' read -r -a failures <<< "${FAILURE_OVERRIDE:-no_failure,failure1,failure2,failure3}"
-  echo "== E2: single collectives, 16 GPUs (1x2x8): $(( ${#workloads[@]} * ${#algs[@]} * ${#failures[@]} )) simulations, $JOBS in parallel"
-  for wl in "${workloads[@]}"; do for ft in "${failures[@]}"; do for alg in "${algs[@]}"; do
+  echo "== E2: single collectives, 16 GPUs (1x2x8): $(( ${#workloads[@]} * ${#algs[@]} * ${#FAILURE_LIST[@]} )) simulations, $JOBS in parallel"
+  for wl in "${workloads[@]}"; do for ft in "${FAILURE_LIST[@]}"; do for alg in "${algs[@]}"; do
     local topo="$topo_base"; [ "$ft" != no_failure ] && topo="$topo_base-$ft"
     throttle
     run_sim "$out/$wl/$ft/$alg" "$wl_dir/$wl" "$topo" "$BASE/inputs/system/$alg.txt" "e2_${wl}_${ft}_${alg}" &
@@ -135,10 +149,36 @@ run_single() {
   wait
   local csv="$out/results.csv"
   echo "workload,failure_type,algorithm,sim_time_ns,wall_seconds,schedule,status" > "$csv"
-  for wl in "${workloads[@]}"; do for ft in "${failures[@]}"; do for alg in "${algs[@]}"; do
+  for wl in "${workloads[@]}"; do for ft in "${FAILURE_LIST[@]}"; do for alg in "${algs[@]}"; do
     collect_row "$out/$wl/$ft/$alg" "$wl,$ft,$alg" >> "$csv"
   done; done; done
-  (command -v column >/dev/null && column -s, -t < "$csv") || cat "$csv"
+  show_csv "$csv"
+}
+
+# ---------------------------------------------------------------- E3 full training
+run_e2e() {
+  local out="$1"
+  paper_env
+  local wl_root="$BASE/inputs/workloads/end_to_end/partials"
+  local topo_base="$BASE/inputs/topo/end_to_end/HPN/1x16x8"
+  # 128 simulated GPUs = one pipeline stage (PP=16) of a 2048-GPU DeepSeek-671B job.
+  # The iteration is split into its transformer (fwd/bwd) and gradient-synchronization phases.
+  local parts=(DeepSeek671B-transformer DeepSeek671B-grad)
+  local alg=nccl
+  echo "== E3: DeepSeek-671B training, 128 GPUs (1x16x8): $(( ${#parts[@]} * ${#FAILURE_LIST[@]} )) simulations, $JOBS in parallel"
+  for p in "${parts[@]}"; do for ft in "${FAILURE_LIST[@]}"; do
+    local wl; wl="$(find "$wl_root/$p" -name '*world_size2048*' -type f 2>/dev/null | head -n 1)"
+    local topo="$topo_base"; [ "$ft" != no_failure ] && topo="$topo_base-$ft"
+    throttle
+    run_sim "$out/$p/$ft/$alg" "${wl:-$wl_root/$p/missing}" "$topo" "$BASE/inputs/system/$alg.txt" "e3_${p}_${ft}_${alg}" &
+  done; done
+  wait
+  local csv="$out/results.csv"
+  echo "workload,failure_type,algorithm,sim_time_ns,wall_seconds,schedule,status" > "$csv"
+  for p in "${parts[@]}"; do for ft in "${FAILURE_LIST[@]}"; do
+    collect_row "$out/$p/$ft/$alg" "$p,$ft,$alg" >> "$csv"
+  done; done
+  show_csv "$csv"
 }
 
 rc=0
@@ -146,12 +186,16 @@ case "$EXP" in
   smoke)  run_equiv 1 "$OUT/E1-equivalence" || rc=1 ;;
   equiv)  run_equiv 0 "$OUT/E1-equivalence" || rc=1 ;;
   single) run_single "$OUT/E2-single" ;;
+  e2e)    run_e2e "$OUT/E3-e2e" ;;
   all)
     run_equiv 0 "$OUT/E1-equivalence" || rc=1
     run_single "$OUT/E2-single"
+    run_e2e "$OUT/E3-e2e"
     ;;
 esac
-if [ -f "$OUT/E2-single/results.csv" ] && grep -q ",FAILED$" "$OUT/E2-single/results.csv"; then rc=1; fi
+for csv in "$OUT/E2-single/results.csv" "$OUT/E3-e2e/results.csv"; do
+  if [ -f "$csv" ] && tail -n +2 "$csv" | grep -qv ",SUCCESS$"; then rc=1; fi
+done
 
 echo
 echo "Results in: $OUT"
