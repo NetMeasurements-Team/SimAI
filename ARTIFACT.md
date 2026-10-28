@@ -14,7 +14,7 @@ the H200 hardware prototype, which are not part of this artifact.)
 | Hardware | any x86-64 Linux machine, no GPU; ≥ 2 cores, ≥ 8 GB RAM (≈ 0.7 GB per parallel E1–E3 simulation, up to ≈ 3 GB per E4 simulation), ≈ 3 GB disk |
 | Software | Ubuntu 22.04/24.04 (or Docker), GCC ≥ 11, CMake ≥ 3.13, libxml2-dev, Python 3 (matplotlib optional; pandas for the paper-style E4 plots) |
 | Proprietary software / hardware | none |
-| Time | build ≈ 30 min on 2 cores; smoke test 15 s; E1 + E2 ≈ 6 min; E3 ≈ 8 min; E4 ≈ 1 h (2 cores) |
+| Time | build ≈ 30 min on 2 cores; smoke test 15 s; E1 + E2 ≈ 4 min; E3 ≈ 8 min; E4 ≈ 1 h (2 cores) |
 
 ---
 
@@ -123,7 +123,7 @@ Each command writes to a fresh `artifact/results/<experiment>-<timestamp>/` dire
 
 ```bash
 artifact/run.sh equiv     # E1  32 sims   ≈ 2 min
-artifact/run.sh single    # E2  32 sims   ≈ 4 min
+artifact/run.sh single    # E2  16 sims   ≈ 2 min
 artifact/run.sh mccl      # E3  22 sims   ≈ 8 min
 artifact/run.sh e2e       # E4   8 sims   ≈ 1 h (up to ≈ 3 GB RAM per simulation)
 artifact/run.sh all       # E1 + E2 + E3 + E4 into one directory
@@ -149,22 +149,21 @@ pipelines steps into 512 KB chunks (NCCL's native flow model sends each step as 
 ### E2 – Single collectives under gray failures (claim C2)
 
 Same workloads and topologies, with the configuration used for all MCCL experiments in the paper
-(protocol-aware MSCCL path with 512 KB chunking, PXN on, 3 µs send latency). Both the
-custom-schedule path (`nccl`) and SimAI native are run. Expected slowdown vs no failure
-(reference values, `nccl` path):
+(protocol-aware MSCCL path with 512 KB chunking, PXN on, 3 µs send latency), through the
+custom-schedule path with the NCCL-equivalent schedules. Expected slowdown vs no failure
+(reference values):
 
 | Collective (256 MB and 1 GB) | no failure | Fail1 | Fail2 | Fail3 |
 |---|---|---|---|---|
 | AllGather | 0.76 / 2.92 ms | ≈ 3.4× slower | ≈ 7× slower | ≈ 54–56× slower |
 | AllToAll | 2.72 / 10.86 ms | unchanged (1.00×) | ≈ 8× slower | ≈ 14× slower |
 
-AllToAll on the custom-schedule path is unaffected by Fail1: its P2P schedule is bounded by the
-NIC links, and the degraded 800 Gbps NVLink of GPU 0 is still faster (SimAI native shows
-≈ 1.56× in that cell). With protocol-aware chunking the two paths are not identical (NCCL's
-512 KB pipelining is modelled only on the custom path, so it is up to ≈ 20 % faster on AllToAll),
-which is why E1 disables chunking.
+AllToAll is unaffected by Fail1 because, with 512 KB chunking, its NVLink hop to the PXN proxy
+overlaps with the NIC transfer, which hides the degraded NVLink of GPU 0. (E1 runs without
+chunking to compare against SimAI's native model, which does not model NCCL's pipelining; there
+the hops are sequential and Fail1 does cost AllToAll ≈ 1.56×.)
 
-All runs must be `SUCCESS` and the `nccl` runs must report `schedule used = msccl`.
+All runs must be `SUCCESS` and report `schedule used = msccl`.
 
 `summarize.py` compares every simulated time against our reference run in
 [`artifact/expected/`](artifact/expected/) and reports `N/N runs identical`; the simulator is

@@ -7,8 +7,8 @@
 #   smoke   E1-quick: MSCCL-vs-native equivalence, no failure, 256 MB AG + A2A   (4 sims)
 #   equiv   E1:       MSCCL-vs-native equivalence, 4 workloads x 4 topologies    (32 sims)
 #   single  E2:       16-GPU single collectives (AG/A2A, 256 MB and 1 GB) on the
-#                     2x8 rail-optimized topology, no failure + Fail1/2/3,
-#                     through the custom-schedule path (nccl) and SimAI native  (32 sims)
+#                     2x8 rail-optimized topology, no failure + Fail1/2/3, with the
+#                     NCCL-equivalent schedules through the custom-schedule path (16 sims)
 #   mccl    E3:       MCCL schedules vs NCCL, 2 GB AllGather and AllToAll (128 MB per source)
 #                     on 1x2x8: NCCL, MCCL no-reopt (no-failure schedule) and
 #                     MCCL reopt (schedule synthesized for that failure),
@@ -143,7 +143,7 @@ run_single() {
   local wl_dir="$BASE/inputs/workloads/single_collective/16_gpus"
   local topo_base="$BASE/inputs/topo/single_collective/1x2x8"
   local workloads=(ag-268435456_bytes ag-1073741824_bytes a2a-268435456_bytes a2a-1073741824_bytes)
-  local algs=(nccl simai_native)
+  local algs=(nccl)
   echo "== E2: single collectives, 16 GPUs (1x2x8): $(( ${#workloads[@]} * ${#algs[@]} * ${#FAILURE_LIST[@]} )) simulations, $JOBS in parallel"
   for wl in "${workloads[@]}"; do for ft in "${FAILURE_LIST[@]}"; do for alg in "${algs[@]}"; do
     local topo="$topo_base"; [ "$ft" != no_failure ] && topo="$topo_base-$ft"

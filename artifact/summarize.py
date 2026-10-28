@@ -89,9 +89,9 @@ def summarize_e2(path, plots, outdir):
                           f"{t / 1e6:.3f}" if t else "FAILED", algbw, slow, r["schedule"]])
     text = ["## E2 - Single collectives on 16 GPUs (2 hosts x 8, rail-optimized) under gray failures",
             "",
-            "`nccl` = NCCL-equivalent MSCCL schedules through the custom-schedule path "
-            "(the configuration used for all MCCL experiments in the paper); `simai_native` = SimAI's "
-            "built-in NCCL flow model. AlgBW = collective size / completion time (GB/s). "
+            "NCCL-equivalent MSCCL schedules through the custom-schedule path, with the "
+            "configuration used for all MCCL experiments in the paper (512 KB chunking, PXN, "
+            "3 us send latency). AlgBW = collective size / completion time (GB/s). "
             "Slowdown is relative to the same workload and algorithm with no failure: static "
             "schedules collapse to the speed of the degraded link (the \"Orig\"/\"No reopt\" "
             "baselines of Fig. 1 and Fig. 8).",
