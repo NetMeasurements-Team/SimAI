@@ -1,0 +1,57 @@
+cff-version: 1.2.0
+title: "SimAI with custom collective schedules (MCCL artifact)"
+message: >-
+  If you use this software, please cite the MCCL paper (preferred-citation)
+  and the original SimAI paper.
+type: software
+license: Apache-2.0
+repository-code: "https://github.com/NetMeasurements-Team/SimAI"
+authors:
+  - family-names: Ferrero
+    given-names: Michele
+    affiliation: EURECOM
+  - family-names: Castellano
+    given-names: Gabriele
+  - family-names: Medagliani
+    given-names: Paolo
+  - family-names: Martin
+    given-names: Sebastien
+    affiliation: "LCOMS, Université de Lorraine"
+  - family-names: Morabito
+    given-names: Roberto
+    affiliation: EURECOM
+  - family-names: Gallo
+    given-names: Massimo
+preferred-citation:
+  type: article
+  title: "MCCL: Measurement-based Collective Communication Library"
+  authors:
+    - family-names: Ferrero
+      given-names: Michele
+    - family-names: Castellano
+      given-names: Gabriele
+    - family-names: Medagliani
+      given-names: Paolo
+    - family-names: Martin
+      given-names: Sebastien
+    - family-names: Morabito
+      given-names: Roberto
+    - family-names: Gallo
+      given-names: Massimo
+  journal: "Proceedings of the ACM on Networking"
+  volume: 4
+  issue: "CoNEXT4"
+  start: 55
+  year: 2026
+  month: 12
+  doi: "10.1145/3856969"
+references:
+  - type: conference-paper
+    title: "SimAI: Unifying Architecture Design and Performance Tuning for Large-Scale Large Language Model Training with Scalability and Precision"
+    authors:
+      - family-names: Wang
+        given-names: Xizheng
+      - name: "et al."
+    conference:
+      name: "22nd USENIX Symposium on Networked Systems Design and Implementation (NSDI 25)"
+    year: 2025

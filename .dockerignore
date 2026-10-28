@@ -1,0 +1,12 @@
+# Keep host build trees and results out of the artifact image (artifact/Dockerfile).
+cmake-cache*
+bin/
+csv_files/
+artifact/results/
+simai-test-results-*
+ns-3-alibabacloud/simulation/build/
+ns-3-alibabacloud/simulation/cmake-cache*/
+ns-3-alibabacloud/simulation/src/applications/astra-sim
+ns-3-alibabacloud/simulation/src/applications/SimCCL
+benchmark/results/
+*.tar.gz

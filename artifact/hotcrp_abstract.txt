@@ -1,0 +1,25 @@
+MCCL: Measurement-based Collective Communication Library -- artifact abstract
+(for https://conext26artifacts.hotcrp.com/, Window 3)
+
+Badges requested: Artifact Available, Artifact Evaluated - Functional.
+
+The artifact is the extended SimAI simulator (ns-3 backend) used for the simulation results in
+the paper. We added the ability to execute arbitrary collective communication schedules written
+in the MSCCL XML format (NcclCustom / mscclCustomFlow collective implementation and MSCCL
+schedule lookup in SimCCL), reusing SimAI's validated point-to-point primitives. The artifact
+ships NCCL-equivalent MSCCL schedules, the 2x8 rail-optimized HPN topology with the paper's
+three gray-failure profiles, and 256 MB / 1 GB AllGather and AllToAll workloads on 16 GPUs.
+Two experiments exercise it: (E1) an equivalence test showing that NCCL schedules fed through
+the custom-schedule path finish at exactly the same simulated time as SimAI's native NCCL model
+(paper Sec. 2.3); (E2) single collectives under each gray failure, showing how static schedules
+collapse to the speed of the degraded link (baselines of Fig. 1 and 8). A smoke test takes
+~15 s and both experiments ~8 min on 2 cores; scripts produce CSV/Markdown summaries and compare
+every simulated time with the provided reference outputs (the simulator is deterministic).
+
+Requirements: x86-64 Linux (or Docker), GCC >= 11, CMake >= 3.13, libxml2-dev, Python 3. No
+GPU, no proprietary software or hardware. >= 2 cores, >= 4 GB RAM, ~3 GB disk. The build takes
+~30 min on 2 cores (less with more cores).
+
+Not included (out of scope): the MCCL schedule synthesizers (Fig. 7, Table 5, MCCL bars of
+Fig. 1/8/11), the end-to-end training simulations (Sec. 6.3, Fig. 11/16/17) and the H200
+hardware prototype (Fig. 9/10).

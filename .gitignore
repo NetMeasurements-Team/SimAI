@@ -49,3 +49,7 @@ astra-sim-alibabacloud/inputs/topo/Rail_Opti_SingleToR_*
 #msccl
 astra-sim-alibabacloud/inputs/msccl/*
 msccl-algorithms*
+
+# MCCL artifact outputs
+artifact/results/
+SimAI-MCCL-artifact-*.tar.gz

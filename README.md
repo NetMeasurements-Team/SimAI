@@ -4,6 +4,9 @@
 
 # SimAI
 
+> **CoNEXT 2026 artifact evaluation (MCCL):** this branch extends SimAI with custom collective
+> schedules in the MSCCL XML format. Reviewers: start from **[ARTIFACT.md](ARTIFACT.md)**.
+
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![NSDI'25](https://img.shields.io/badge/NSDI'25-SimAI-blue.svg)](https://ennanzhai.github.io/pub/nsdi25spring-simai.pdf)
 
