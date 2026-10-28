@@ -1,0 +1,12 @@
+scheduling-policy: LIFO
+endpoint-delay: 10
+active-chunks-per-dimension: 1
+preferred-dataset-splits: 1
+boost-mode: 0
+separate-log: 0
+all-reduce-implementation: ncclFlowModel
+all-gather-implementation: mscclCustomFlow
+reduce-scatter-implementation: mscclCustomFlow
+all-to-all-implementation: mscclCustomFlow
+collective-optimization: baseline
+msccl-path: astra-sim-alibabacloud/inputs/msccl/mccl/failure_1/
