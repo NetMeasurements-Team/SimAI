@@ -160,6 +160,11 @@ inline std::map<FlowIdKey, uint64_t> sent_chunksize;
 
 static std::once_flag sim_finished;
 static std::atomic<bool> waiting_sim_finish(false);
+static std::atomic<bool> sim_completed(false);
+// System-layer events (compute delays, workload steps, ...) scheduled through sim_schedule and not run yet.
+inline std::atomic<uint64_t> pending_system_events(0);
+static std::atomic<bool> deadlock_detected(false);
+static std::atomic<uint64_t> deadlock_tick(0);
 
 // ACKs and completion callbacks may outlive every Sys object. Read the backend
 // clock directly while preserving the tick conversion and logical offset.
@@ -452,6 +457,25 @@ inline void finish() {
   }
 }
 
+inline void check_deadlock() {
+  if (sim_completed || deadlock_detected) return;
+  {
+    #ifdef NS3_MTP
+    MtpInterface::CriticalSection cs;
+    #endif
+    const bool idle = pending_system_events.load() == 0 && waiting_to_sent_callback.empty() &&
+        waiting_to_notify_receiver.empty() && waiting_to_message_finish.empty();
+    const bool finished = waiting_sim_finish && sentHash.empty() && expeRecvHash.empty() && recvHash.empty();
+    if (!idle || finished || deadlock_detected.exchange(true)) return;
+    deadlock_tick = frontend_tick();
+    std::cerr << "Deadlock detected at time " << deadlock_tick
+              << " ns: no message in the network and no system event left, but the simulation is not finished."
+              << std::endl;
+  }
+  finish();
+  Simulator::Stop();
+}
+
 inline void check_sim_finish() {
   if (waiting_sim_finish && waiting_to_notify_receiver.empty() && waiting_to_sent_callback.empty() &&
       waiting_to_message_finish.empty() && sentHash.empty() && expeRecvHash.empty() && recvHash.empty()) {
@@ -464,10 +488,59 @@ inline void check_sim_finish() {
                   << frontend_tick() << "."
                   << std::endl;
       }
+      sim_completed = true;
       finish();
     });
     Simulator::Stop();
+  } else {
+    check_deadlock();
   }
+}
+
+inline bool report_unfinished_simulation(std::ostream& os, size_t max_entries = 20) {
+  if (sim_completed) return true;
+  // After Run() the clock of the calling thread is not the end of the simulation with MTP: use the
+  // detection time when there is one.
+  const uint64_t end_tick = deadlock_detected ? deadlock_tick.load() : static_cast<uint64_t>(frontend_tick());
+  os << "ERROR: simulation stalled: it ended at time " << end_tick << " ns without every message finishing"
+     << " (workload ended on at least one rank: " << (waiting_sim_finish ? "yes" : "no")
+     << (deadlock_detected ? ", stopped by the deadlock detection" : "") << ")." << std::endl;
+  os << "  pending sends (sentHash): " << sentHash.size()
+     << ", expected receives (expeRecvHash): " << expeRecvHash.size()
+     << ", arrived without receive (recvHash): " << recvHash.size() << std::endl;
+  os << "  flows waiting for send callback: " << waiting_to_sent_callback.size()
+     << ", for receiver notification: " << waiting_to_notify_receiver.size()
+     << ", for ACK: " << waiting_to_message_finish.size() << std::endl;
+  auto print_msg_keys = [&](const char* name, const auto& m, auto&& value) {
+    size_t n = 0;
+    for (const auto& [k, v] : m) {
+      if (n++ == max_entries) {
+        os << "    ... " << (m.size() - max_entries) << " more" << std::endl;
+        break;
+      }
+      os << "    " << name << " tag " << k.first << ", " << k.second.first << " -> " << k.second.second << value(v)
+         << std::endl;
+    }
+  };
+  print_msg_keys("send pending ", sentHash, [](const MsgEvent& e) {
+    return ", " + std::to_string(e.remaining_bytes) + " B left";
+  });
+  print_msg_keys("recv expected", expeRecvHash, [](const MsgEvent& e) {
+    return ", " + std::to_string(e.remaining_bytes) + " B left";
+  });
+  print_msg_keys("recv orphan  ", recvHash, [](uint64_t bytes) {
+    return ", " + std::to_string(bytes) + " B arrived";
+  });
+  size_t n = 0;
+  for (const auto& [k, c] : waiting_to_notify_receiver) {
+    if (n++ == max_entries) {
+      os << "    ... " << (waiting_to_notify_receiver.size() - max_entries) << " more" << std::endl;
+      break;
+    }
+    os << "    not delivered flow " << std::get<0>(k) << " tag " << std::get<1>(k) << ", " << std::get<2>(k) << " -> "
+       << std::get<3>(k) << " (" << c << " message(s))" << std::endl;
+  }
+  return false;
 }
 
 inline void print_fct_entry(FILE *fout, Ptr<RdmaQueuePair> q, const uint64_t msg_size) {

@@ -13,6 +13,7 @@ These variables control the behavior of `SimAI_simulator` (ns3 mode).
 | `AS_NVLSTREE_ENABLE` | `0` | - | MockNcclGroup.cc | Enable NVLS Tree algorithm |
 | `AS_PXN_ENABLE` | `0` | - | MockNcclGroup.cc | Enable PXN cross-node proxy |
 | `AS_LOG_LEVEL` | `INFO` | - | System-wide | Log verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `AS_SCHEDULING_TRACE` | Not set (off) | file path | Sys.cc | Write a CSV with the issue/start/finish time of every collective stream on every rank (see [scheduling.md](scheduling.md#scheduling-trace)) |
 
 ### AS_SEND_LAT Details
 

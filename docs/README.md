@@ -12,6 +12,7 @@
 | **Configuration** | [env-variables.md](configuration/env-variables.md) | Environment variable reference |
 | | [build-options.md](configuration/build-options.md) | Build configuration options |
 | | [send-lat-analysis.md](configuration/send-lat-analysis.md) | Send latency mechanism deep dive |
+| | [scheduling.md](configuration/scheduling.md) | Collective scheduling (LIFO/FIFO), scheduling trace, retransmission timeout and stall reports |
 
 ### 中文 (Chinese)
 

@@ -15,7 +15,7 @@
 #   -b PATH   simulator binary            (default: bin/SimAI_simulator)
 #   -o DIR    output directory            (default: simai-test-results-msccl-nccl-<timestamp>)
 #   -j N      parallel simulations        (default: number of CPUs)
-#   -f LIST   failure types, comma list   (default: no_failure,failure1,failure2,failure3)
+#   -f LIST   failure types, comma list   (default: no_failure,failure_1,failure_2,failure_3)
 #   -w LIST   workloads, comma list       (default: ag/a2a at 256MB and 1GB)
 #   -q        quick: no_failure, 256MB workloads only
 #   -h        help
@@ -28,7 +28,7 @@ BASE="$ROOT/astra-sim-alibabacloud"
 BINARY="$ROOT/bin/SimAI_simulator"
 OUT=""
 JOBS="$(nproc 2>/dev/null || echo 2)"
-FAILURES="no_failure,failure1,failure2,failure3"
+FAILURES="no_failure,failure_1,failure_2,failure_3"
 WORKLOADS="ag-268435456_bytes,a2a-268435456_bytes,ag-1073741824_bytes,a2a-1073741824_bytes"
 
 while getopts "b:o:j:f:w:qh" opt; do
