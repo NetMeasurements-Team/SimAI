@@ -29,7 +29,7 @@ from plot_results import plot_all
 TP = {'Llama405B': 16, 'DeepSeek671B': 1}
 TRANSFORMERS_PER_STAGE = {'Llama405B': 8, 'DeepSeek671B': 3}
 BATCH_SIZE = 16384
-ARTIFACT_E3_GPUS = 128  # artifact/run.sh e2e simulates one pipeline stage on 128 GPUs
+ARTIFACT_E4_GPUS = 128  # artifact/run.sh e2e simulates one pipeline stage on 128 GPUs
 
 # Add algorithms to this list to filter them out from the plots
 EXCLUDED_ALGORITHMS = ['ForestColl']
@@ -42,7 +42,7 @@ def load(paths):
         if 'sim_time_ns' in df.columns and 'simulation_time_ns' not in df.columns:
             df = df.rename(columns={'sim_time_ns': 'simulation_time_ns'})
         if 'num_gpus' not in df.columns:
-            df['num_gpus'] = ARTIFACT_E3_GPUS
+            df['num_gpus'] = ARTIFACT_E4_GPUS
         frames.append(df)
     return pd.concat(frames, ignore_index=True)
 

@@ -9,10 +9,14 @@
 #   single  E2:       16-GPU single collectives (AG/A2A, 256 MB and 1 GB) on the
 #                     2x8 rail-optimized topology, no failure + Fail1/2/3,
 #                     through the custom-schedule path (nccl) and SimAI native  (32 sims)
-#   e2e     E3:       DeepSeek-671B training, one pipeline stage on 128 GPUs
+#   mccl    E3:       MCCL schedules vs NCCL, 2 GB AllGather and AllToAll (128 MB per source)
+#                     on 1x2x8: NCCL, MCCL no-reopt (no-failure schedule) and
+#                     MCCL reopt (schedule synthesized for that failure),
+#                     no failure + Fail1/2/3                                     (22 sims)
+#   e2e     E4:       DeepSeek-671B training, one pipeline stage on 128 GPUs
 #                     (1x16x8 HPN), transformer + gradient phases,
 #                     no failure + Fail1/2/3                                     (8 sims)
-#   all     equiv + single + e2e
+#   all     equiv + single + mccl + e2e
 #   (see ARTIFACT.md for run times)
 #
 # Options
@@ -35,7 +39,7 @@ OUT=""
 JOBS="$(nproc 2>/dev/null || echo 2)"
 FAILURES="no_failure,failure_1,failure_2,failure_3"
 
-usage() { sed -n '2,27p' "$0"; }
+usage() { sed -n '2,31p' "$0"; }
 
 EXP="${1:-}"
 [ -n "$EXP" ] || { usage >&2; exit 2; }
@@ -53,7 +57,7 @@ while getopts "b:o:j:f:h" opt; do
   esac
 done
 
-case "$EXP" in smoke|equiv|single|e2e|all) ;; *) echo "Unknown experiment: $EXP" >&2; usage >&2; exit 2 ;; esac
+case "$EXP" in smoke|equiv|single|mccl|e2e|all) ;; *) echo "Unknown experiment: $EXP" >&2; usage >&2; exit 2 ;; esac
 [ -x "$BINARY" ] || { echo "Simulator not found: $BINARY (build with: bash scripts/build.sh -c ns3)" >&2; exit 2; }
 
 [ -n "$OUT" ] || OUT="$ROOT/artifact/results/${EXP}-$(date +%Y%m%d_%H%M%S)"
@@ -117,7 +121,7 @@ collect_row() {
 
 show_csv() { (command -v column >/dev/null && column -s, -t < "$1") || cat "$1"; }
 
-# Paper configuration for E2/E3: protocol-aware MSCCL path (512 KB chunking), PXN, 3 us send latency.
+# Paper configuration for E2-E4: protocol-aware MSCCL path (512 KB chunking), PXN, 3 us send latency.
 paper_env() {
   export AS_LOG_LEVEL=2 AS_PXN_ENABLE=1 AS_SEND_LAT=3000 SIMAI_DUMP_DETAILED_FLOWS=0
   unset SIMAI_PROTO_AWARE
@@ -155,7 +159,44 @@ run_single() {
   show_csv "$csv"
 }
 
-# ---------------------------------------------------------------- E3 full training
+# ---------------------------------------------------------------- E3 MCCL re-optimization
+# For each topology T (no failure, Fail1-3) and collective (2 GB AllGather / AllToAll, i.e.
+# 128 MB per source on 16 GPUs):
+#   nccl          NCCL-equivalent schedules                       (inputs/system/nccl.txt)
+#   mccl_noreopt  MCCL schedule synthesized for the healthy fabric (mccl-no_failure.txt)
+#   mccl_reopt    MCCL schedule re-synthesized for failure T       (mccl-<T>.txt; T != no_failure)
+run_mccl() {
+  local out="$1"
+  paper_env
+  local wl_dir="$BASE/inputs/workloads/single_collective/16_gpus"
+  local topo_base="$BASE/inputs/topo/single_collective/1x2x8"
+  local workloads=(ag-2147483648_bytes a2a-2147483648_bytes)
+  local jobs_list=()
+  for wl in "${workloads[@]}"; do for ft in "${FAILURE_LIST[@]}"; do
+    jobs_list+=("$wl $ft nccl nccl.txt" "$wl $ft mccl_noreopt mccl-no_failure.txt")
+    [ "$ft" != no_failure ] && jobs_list+=("$wl $ft mccl_reopt mccl-$ft.txt")
+  done; done
+  echo "== E3: MCCL vs NCCL, 2 GB AG/A2A on 16 GPUs (1x2x8): ${#jobs_list[@]} simulations, $JOBS in parallel"
+  local j wl ft alg sys topo
+  for j in "${jobs_list[@]}"; do
+    read -r wl ft alg sys <<< "$j"
+    topo="$topo_base"; [ "$ft" != no_failure ] && topo="$topo_base-$ft"
+    throttle
+    run_sim "$out/$wl/$ft/$alg" "$wl_dir/$wl" "$topo" "$BASE/inputs/system/$sys" "e3_${wl}_${ft}_${alg}" &
+  done
+  wait
+  local csv="$out/results.csv"
+  echo "workload,failure_type,algorithm,sim_time_ns,wall_seconds,schedule,status,schedule_file" > "$csv"
+  for j in "${jobs_list[@]}"; do
+    read -r wl ft alg sys <<< "$j"
+    local dir="$out/$wl/$ft/$alg" file
+    file="$(grep -oP 'Found matching MSCCL XML algorithm.*?: \K\S+' "$dir/run.log" 2>/dev/null | head -n 1 | sed 's#.*inputs/msccl/##')"
+    echo "$(collect_row "$dir" "$wl,$ft,$alg"),${file:-none}" >> "$csv"
+  done
+  show_csv "$csv"
+}
+
+# ---------------------------------------------------------------- E4 full training
 run_e2e() {
   local out="$1"
   paper_env
@@ -165,12 +206,12 @@ run_e2e() {
   # The iteration is split into its transformer (fwd/bwd) and gradient-synchronization phases.
   local parts=(DeepSeek671B-transformer DeepSeek671B-grad)
   local alg=nccl
-  echo "== E3: DeepSeek-671B training, 128 GPUs (1x16x8): $(( ${#parts[@]} * ${#FAILURE_LIST[@]} )) simulations, $JOBS in parallel"
+  echo "== E4: DeepSeek-671B training, 128 GPUs (1x16x8): $(( ${#parts[@]} * ${#FAILURE_LIST[@]} )) simulations, $JOBS in parallel"
   for p in "${parts[@]}"; do for ft in "${FAILURE_LIST[@]}"; do
     local wl; wl="$(find "$wl_root/$p" -name '*world_size2048*' -type f 2>/dev/null | head -n 1)"
     local topo="$topo_base"; [ "$ft" != no_failure ] && topo="$topo_base-$ft"
     throttle
-    run_sim "$out/$p/$ft/$alg" "${wl:-$wl_root/$p/missing}" "$topo" "$BASE/inputs/system/$alg.txt" "e3_${p}_${ft}_${alg}" &
+    run_sim "$out/$p/$ft/$alg" "${wl:-$wl_root/$p/missing}" "$topo" "$BASE/inputs/system/$alg.txt" "e4_${p}_${ft}_${alg}" &
   done; done
   wait
   local csv="$out/results.csv"
@@ -186,15 +227,18 @@ case "$EXP" in
   smoke)  run_equiv 1 "$OUT/E1-equivalence" || rc=1 ;;
   equiv)  run_equiv 0 "$OUT/E1-equivalence" || rc=1 ;;
   single) run_single "$OUT/E2-single" ;;
-  e2e)    run_e2e "$OUT/E3-e2e" ;;
+  mccl)   run_mccl "$OUT/E3-mccl" ;;
+  e2e)    run_e2e "$OUT/E4-e2e" ;;
   all)
     run_equiv 0 "$OUT/E1-equivalence" || rc=1
     run_single "$OUT/E2-single"
-    run_e2e "$OUT/E3-e2e"
+    run_mccl "$OUT/E3-mccl"
+    run_e2e "$OUT/E4-e2e"
     ;;
 esac
-for csv in "$OUT/E2-single/results.csv" "$OUT/E3-e2e/results.csv"; do
-  if [ -f "$csv" ] && tail -n +2 "$csv" | grep -qv ",SUCCESS$"; then rc=1; fi
+for csv in "$OUT/E2-single/results.csv" "$OUT/E3-mccl/results.csv" "$OUT/E4-e2e/results.csv"; do
+  # every row's "status" column must be SUCCESS (the column position differs between experiments)
+  if [ -f "$csv" ] && ! awk -F, 'NR==1{for(i=1;i<=NF;i++) if($i=="status") c=i; next} $c!="SUCCESS"{bad=1} END{exit bad}' "$csv"; then rc=1; fi
 done
 
 echo

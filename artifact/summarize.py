@@ -3,7 +3,8 @@
 
 Usage:  python3 artifact/summarize.py <results dir> [--plots]
 
-Looks for E1-equivalence/, E2-single/ and E3-e2e/results.csv under the given directory, prints
+Looks for E1-equivalence/, E2-single/, E3-mccl/ and E4-e2e/results.csv under the given directory,
+prints
 Markdown tables, compares simulated times with artifact/expected/, and writes <dir>/summary.md.
 With --plots (requires matplotlib) it also writes PNG bar charts next to summary.md.
 Only the Python standard library is needed otherwise.
@@ -126,13 +127,89 @@ def _plot_e2(by, outdir):
     fig.savefig(outdir / "e2_single.png", dpi=150)
 
 
-# Full-batch reconstruction, identical to benchmark/analyze_results.py (paper Sec. 6.3):
-#   T_batch = T_transformer * TRANSFORMERS_PER_STAGE * BATCH_SIZE / (num_gpus / TP) + T_grad
-E3_TP, E3_TRANSFORMERS_PER_STAGE, E3_BATCH_SIZE, E3_GPUS = 1, 3, 16384, 128
-E3_SCALE = E3_TRANSFORMERS_PER_STAGE * E3_BATCH_SIZE / (E3_GPUS / E3_TP)
+FAIL_SHORT = {"no_failure": "No Fail", "failure_1": "Fail 1", "failure_2": "Fail 2", "failure_3": "Fail 3"}
 
 
 def summarize_e3(path, plots, outdir):
+    """MCCL vs NCCL: per collective and topology, NCCL, MCCL without re-optimization (schedule
+    synthesized for the healthy fabric) and MCCL re-optimized for the failure. BusBW ratio
+    against NCCL = T_nccl / T (same collective size, so the busBW factor cancels)."""
+    rows = read_csv(path)
+    by = defaultdict(dict)
+    ok = True
+    for r in rows:
+        by[(r["workload"], r["failure_type"])][r["algorithm"]] = r
+        ok &= r["status"] == "SUCCESS"
+        # the schedule actually used must be the intended one
+        want = {"nccl": "nccl/", "mccl_noreopt": "mccl/no_failure/",
+                "mccl_reopt": f"mccl/{r['failure_type']}/"}[r["algorithm"]]
+        if not r.get("schedule_file", "").startswith(want):
+            ok = False
+            r["status"] = f"WRONG SCHEDULE ({r.get('schedule_file')})"
+    table, ratios = [], {}
+    for (wl, ft) in sorted(by, key=lambda k: (k[0].split("-")[0] != "ag", forder(k[1]))):
+        d = by[(wl, ft)]
+        tn = ns(d.get("nccl", {}).get("sim_time_ns"))
+        tno = ns(d.get("mccl_noreopt", {}).get("sim_time_ns"))
+        tre = ns(d.get("mccl_reopt", {}).get("sim_time_ns"))
+        rno = tn / tno if (tn and tno) else None
+        rre = tn / tre if (tn and tre) else None
+        ratios[(wl, ft)] = (rno, rre)
+        cell = lambda t, r, key: (f"{t / 1e6:.3f} ms ({r:.2f}x)" if t and r
+                                  else d.get(key, {}).get("status", "-"))
+        table.append([wl.split("-")[0].upper(), FAIL_SHORT.get(ft, ft),
+                      f"{tn / 1e6:.3f} ms" if tn else d.get("nccl", {}).get("status", "-"),
+                      cell(tno, rno, "mccl_noreopt"),
+                      cell(tre, rre, "mccl_reopt") if ft != "no_failure" else "-"])
+    text = ["## E3 - MCCL schedules vs NCCL under gray failures (2 GB, 128 MB per source, 16 GPUs)",
+            "",
+            "Per topology: NCCL; MCCL *no reopt* = the schedule synthesized for the healthy fabric, "
+            "kept under the failure; MCCL *reopt* = the schedule re-synthesized for that failure. "
+            "In parentheses: BusBW ratio against NCCL (= T_NCCL / T), as in Fig. 1 and Fig. 8.",
+            "",
+            md_table(["coll", "topology", "NCCL", "MCCL no reopt", "MCCL reopt"], table),
+            ""]
+    if plots and ratios:
+        _plot_e3(ratios, outdir)
+        text += ["![E3](e3_mccl.png)", ""]
+    return "\n".join(text), ok
+
+
+def _plot_e3(ratios, outdir):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    colls = sorted({wl for wl, _ in ratios}, key=lambda w: w.split("-")[0] != "ag")
+    fig, axes = plt.subplots(1, len(colls), figsize=(4.5 * len(colls), 3.5), squeeze=False)
+    for ax, wl in zip(axes[0], colls):
+        fails = sorted({ft for w, ft in ratios if w == wl}, key=forder)
+        x = range(len(fails))
+        for i, ft in enumerate(fails):
+            rno, rre = ratios[(wl, ft)]
+            if rre:  # re-optimized bar behind, no-reopt bar (hatched) in front, as in the paper
+                ax.bar(i, rre, 0.6, color="#e06666", edgecolor="black", linewidth=0.6,
+                       label="Reopt" if i == 1 else None)
+            if rno:
+                ax.bar(i, rno, 0.6, color="#cc2222", edgecolor="black", hatch="///", linewidth=0.6,
+                       label="No reopt" if i == 0 else None)
+        ax.axhline(1.0, color="black", linestyle="--", linewidth=1.2, label="NCCL")
+        ax.set_xticks(list(x))
+        ax.set_xticklabels([FAIL_SHORT.get(f, f) for f in fails], rotation=30)
+        ax.set_title(f"{wl.split('-')[0].upper()} 2 GB, 1x2x8")
+        ax.set_ylabel("BusBW ratio against NCCL")
+        ax.legend(fontsize=8)
+        ax.grid(True, axis="y", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(outdir / "e3_mccl.png", dpi=150)
+
+
+# Full-batch reconstruction, identical to benchmark/analyze_results.py (paper Sec. 6.3):
+#   T_batch = T_transformer * TRANSFORMERS_PER_STAGE * BATCH_SIZE / (num_gpus / TP) + T_grad
+E4_TP, E4_TRANSFORMERS_PER_STAGE, E4_BATCH_SIZE, E4_GPUS = 1, 3, 16384, 128
+E4_SCALE = E4_TRANSFORMERS_PER_STAGE * E4_BATCH_SIZE / (E4_GPUS / E4_TP)
+
+
+def summarize_e4(path, plots, outdir):
     rows = read_csv(path)
     by = defaultdict(dict)
     ok = True
@@ -145,7 +222,7 @@ def summarize_e3(path, plots, outdir):
         tr = by[ft].get("DeepSeek671B-transformer", {})
         gr = by[ft].get("DeepSeek671B-grad", {})
         tt, tg = ns(tr.get("sim_time_ns")), ns(gr.get("sim_time_ns"))
-        totals[ft] = int(tt * E3_SCALE) + tg if (tt and tg) else None
+        totals[ft] = int(tt * E4_SCALE) + tg if (tt and tg) else None
         table.append([ft,
                       f"{tt / 1e6:.3f}" if tt else tr.get("status", "-"),
                       f"{tg / 1e6:.3f}" if tg else gr.get("status", "-"),
@@ -153,25 +230,25 @@ def summarize_e3(path, plots, outdir):
     base = totals.get("no_failure")
     for row, ft in zip(table, fails):
         row.append(f"{totals[ft] / base:.2f}x" if (totals[ft] and base) else "-")
-    text = ["## E3 - DeepSeek-671B training under gray failures (one pipeline stage, 128 GPUs)",
+    text = ["## E4 - DeepSeek-671B training under gray failures (one pipeline stage, 128 GPUs)",
             "",
             "One of the 16 pipeline stages (1 segment x 16 hosts x 8 GPUs, HPN; equivalent to a "
             "2048-GPU job), with the NCCL-equivalent schedules through the custom-schedule path "
             "(NCCL baseline of Fig. 11 and Fig. 17). The training time on one 16K-token batch is "
             "reconstructed from the two simulated phases as in `benchmark/analyze_results.py`: "
-            f"transformer pass x {E3_TRANSFORMERS_PER_STAGE} transformer blocks per stage x "
-            f"{E3_BATCH_SIZE} / ({E3_GPUS} GPUs / TP {E3_TP}) + gradient phase.",
+            f"transformer pass x {E4_TRANSFORMERS_PER_STAGE} transformer blocks per stage x "
+            f"{E4_BATCH_SIZE} / ({E4_GPUS} GPUs / TP {E4_TP}) + gradient phase.",
             "",
             md_table(["failure", "transformer pass (ms)", "gradient phase (ms)",
                       "training time on one batch (s)", "vs no failure"], table),
             ""]
     if plots and any(totals.values()):
-        _plot_e3(totals, outdir)
-        text += ["![E3](e3_e2e.png)", ""]
+        _plot_e4(totals, outdir)
+        text += ["![E4](e4_e2e.png)", ""]
     return "\n".join(text), ok
 
 
-def _plot_e3(totals, outdir):
+def _plot_e4(totals, outdir):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -181,7 +258,7 @@ def _plot_e3(totals, outdir):
     ax.set_ylabel("Training time on one batch (s)")
     ax.set_title("DeepSeek-671B, 128 GPUs, NCCL schedules")
     fig.tight_layout()
-    fig.savefig(outdir / "e3_e2e.png", dpi=150)
+    fig.savefig(outdir / "e4_e2e.png", dpi=150)
 
 
 EXPECTED_DIR = Path(__file__).resolve().parent / "expected"
@@ -222,7 +299,8 @@ def main():
         return 2
     root = Path(args[0])
     sections, all_ok, found = [f"# MCCL artifact results: `{root.name}`", ""], True, False
-    for name, fn in (("E1-equivalence", None), ("E2-single", summarize_e2), ("E3-e2e", summarize_e3)):
+    for name, fn in (("E1-equivalence", None), ("E2-single", summarize_e2), ("E3-mccl", summarize_e3),
+                     ("E4-e2e", summarize_e4)):
         p = root / name / "results.csv"
         if not p.exists():
             continue
@@ -234,7 +312,7 @@ def main():
         if ref.exists():
             sections.append(compare_with_reference(p, ref))
     if not found:
-        print(f"No E1-equivalence/E2-single/E3-e2e results.csv under {root}", file=sys.stderr)
+        print(f"No E1-equivalence/E2-single/E3-mccl/E4-e2e results.csv under {root}", file=sys.stderr)
         return 2
     report = "\n".join(sections)
     (root / "summary.md").write_text(report + "\n")

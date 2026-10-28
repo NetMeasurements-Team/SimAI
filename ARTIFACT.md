@@ -11,10 +11,10 @@ the H200 hardware prototype, which are not part of this artifact.)
 |---|---|
 | Archived artifact (DOI) | **ZENODO-DOI-TODO** |
 | Code | https://github.com/NetMeasurements-Team/SimAI, branch/tag `conext26-ae` |
-| Hardware | any x86-64 Linux machine, no GPU; ≥ 2 cores, ≥ 8 GB RAM (≈ 0.7 GB per parallel E1/E2 simulation, up to ≈ 3 GB per E3 simulation), ≈ 3 GB disk |
-| Software | Ubuntu 22.04/24.04 (or Docker), GCC ≥ 11, CMake ≥ 3.13, libxml2-dev, Python 3 (matplotlib optional; pandas for the paper-style E3 plots) |
+| Hardware | any x86-64 Linux machine, no GPU; ≥ 2 cores, ≥ 8 GB RAM (≈ 0.7 GB per parallel E1–E3 simulation, up to ≈ 3 GB per E4 simulation), ≈ 3 GB disk |
+| Software | Ubuntu 22.04/24.04 (or Docker), GCC ≥ 11, CMake ≥ 3.13, libxml2-dev, Python 3 (matplotlib optional; pandas for the paper-style E4 plots) |
 | Proprietary software / hardware | none |
-| Time | build ≈ 30 min on 2 cores; smoke test 15 s; E1 + E2 ≈ 6 min; E3 ≈ 1 h (2 cores) |
+| Time | build ≈ 30 min on 2 cores; smoke test 15 s; E1 + E2 ≈ 6 min; E3 ≈ 8 min; E4 ≈ 1 h (2 cores) |
 
 ---
 
@@ -34,7 +34,7 @@ What we added on top of upstream SimAI (ns-3 backend):
 | `mscclCustomFlow` implementation | `astra-sim/system/Sys.{hh,cc}` | New value for `all-gather-implementation`, `all-to-all-implementation`, `reduce-scatter-implementation`, `all-reduce-implementation` in the system file; new keys `msccl-path`, `msccl-channels`, `collective-graph*`. |
 | MSCCL schedule lookup | `SimCCL/src/mock/v2.{20,30}/MockNcclGroup.cc`, `XmlReader.cc` | Finds the schedule matching collective type, group size, data size, group type and first rank; falls back to SimAI's NCCL model if none matches. |
 | Collective graph | `astra-sim/system/collective/CollectiveGraph.{hh,cc}` | Optional dump of the executed dependency graph (debugging). |
-| Inputs used in the paper | `astra-sim-alibabacloud/inputs/` | NCCL-equivalent MSCCL schedules (`msccl/nccl/`), rail-optimized HPN topologies with the three failure profiles (`topo/`), single-collective and DeepSeek-671B training workloads (`workloads/`), system files (`system/`). |
+| Inputs used in the paper | `astra-sim-alibabacloud/inputs/` | NCCL-equivalent MSCCL schedules (`msccl/nccl/`), the MCCL schedules synthesized for the 16-GPU topology with and without each failure (`msccl/mccl/`), rail-optimized HPN topologies with the three failure profiles (`topo/`), single-collective and DeepSeek-671B training workloads (`workloads/`), system files (`system/`). |
 | Tests and runners | `tests/ns3/msccl-nccl-equivalence/`, `artifact/` | Equivalence test, experiment runner, summarizer, Docker image, archive script. |
 
 ### Claims supported by this artifact
@@ -43,13 +43,15 @@ What we added on top of upstream SimAI (ns-3 backend):
 |---|---|---|---|
 | C1 | The custom-schedule path preserves SimAI's accuracy: an NCCL ring/P2P schedule fed through it reproduces SimAI's native NCCL completion times (Sec. 2.3). | **E1** | Identical simulated end time (to the ns) for every workload × topology pair; `PASS 16/16`. |
 | C2 | Under the three gray-failure profiles, static schedules collapse to the speed of the degraded link (Sec. 2.3, 6.1; "Orig"/"No reopt" in Fig. 1 and 8). | **E2** | Static schedules slow down to the degraded link: AllGather ≈ 3.4× (Fail1), ≈ 7× (Fail2), ≈ 55× (Fail3); AllToAll unchanged (Fail1, degraded NVLink not on its bottleneck), ≈ 8× (Fail2), ≈ 14× (Fail3). |
-| C3 | Full LLM training (DeepSeek-671B, one of 16 pipeline stages on 128 GPUs, i.e. a 2048-GPU job) runs through the custom-schedule path under every failure profile, and the training time on one batch is reconstructed from the simulated phases as in the paper (Sec. 6.3; NCCL bars of Fig. 11c,d and Fig. 17). | **E3** | All 8 simulations `SUCCESS` with the MSCCL schedules in use; reconstructed training time on one batch 18.66 s with no failure; unchanged under Fail1 (1.00×), ≈ 5.5× under Fail2 and ≈ 5.3× under Fail3. |
+| C3 | Under gray failures, keeping the schedule synthesized for the healthy fabric ("no reopt") performs about like NCCL, while re-synthesizing it for the failure ("reopt") gives a multiple of NCCL's bus bandwidth (Sec. 6.1, Fig. 8, 1x2x8 points; MCCL schedules included, synthesizers not). | **E3** | All 22 simulations `SUCCESS`, each with its intended schedule. BusBW ratio vs NCCL, no reopt → reopt: AllGather 1.14× (no failure), 1.14 → 1.47× (Fail1), 1.04 → 7.38× (Fail2), 1.13 → 3.01× (Fail3); AllToAll 1.00× (no failure), 0.77 → 1.00× (Fail1), 1.00 → 7.11× (Fail2), 0.67 → 2.79× (Fail3). |
+| C4 | Full LLM training (DeepSeek-671B, one of 16 pipeline stages on 128 GPUs, i.e. a 2048-GPU job) runs through the custom-schedule path under every failure profile, and the training time on one batch is reconstructed from the simulated phases as in the paper (Sec. 6.3; NCCL bars of Fig. 11c,d and Fig. 17). | **E4** | All 8 simulations `SUCCESS` with the MSCCL schedules in use; reconstructed training time on one batch 18.66 s with no failure; unchanged under Fail1 (1.00×), ≈ 5.5× under Fail2 and ≈ 5.3× under Fail3. |
 
 ### Not in this artifact (out of scope)
 
-* The MCCL **schedule synthesizers** (ForestColl-warm, column-generation AllToAll) and the
-  re-optimized schedules they produce: solving times (Fig. 7), rounding gap (Table 5) and the
-  MCCL bars of Fig. 1, 8 and 11.
+* The MCCL **schedule synthesizers** (ForestColl-warm, column-generation AllToAll): solving
+  times (Fig. 7) and rounding gap (Table 5). The schedules they produced for the 16-GPU topology
+  are included and evaluated in E3; schedules for larger topologies (other points of Fig. 8) and
+  for the training workloads (MCCL bars of Fig. 11) are not.
 * The **hardware prototype** (measurement module, hot-swap; Fig. 9, 10, Tables 2–3), which needs
   H200 GPUs, ConnectX-7 NICs and a modified NCCL/MSCCL.
 * Llama-405B workloads and cluster sizes other than 128 GPUs for the training simulations
@@ -122,8 +124,9 @@ Each command writes to a fresh `artifact/results/<experiment>-<timestamp>/` dire
 ```bash
 artifact/run.sh equiv     # E1  32 sims   ≈ 2 min
 artifact/run.sh single    # E2  32 sims   ≈ 4 min
-artifact/run.sh e2e       # E3   8 sims   ≈ 1 h (up to ≈ 3 GB RAM per simulation)
-artifact/run.sh all       # E1 + E2 + E3 into one directory
+artifact/run.sh mccl      # E3  22 sims   ≈ 8 min
+artifact/run.sh e2e       # E4   8 sims   ≈ 1 h (up to ≈ 3 GB RAM per simulation)
+artifact/run.sh all       # E1 + E2 + E3 + E4 into one directory
 python3 artifact/summarize.py artifact/results/<dir> [--plots]   # tables -> summary.md
 ```
 A run exits non-zero if any simulation does not finish. Status `STALLED` means the simulator ran
@@ -170,7 +173,7 @@ the nanosecond (a different compiler could introduce small differences).
 
 Failure profiles as encoded in the topology files `*-failure_{1,2,3}` (each GPU has an 18-lane
 NVSwitch link of 2880 Gbps and one 400 Gbps NIC to its rail ToR; the same changes are applied
-to the 2×8 topology of E1/E2 and the 1×16×8 topology of E3):
+to the 2×8 topology of E1–E3 and the 1×16×8 topology of E4):
 
 | Profile | Paper definition (Sec. 6.1) | Topology file change |
 |---|---|---|
@@ -178,7 +181,40 @@ to the 2×8 topology of E1/E2 and the 1×16×8 topology of E3):
 | Fail2 | GPU 0's link to its ToR degraded | GPU 0 ↔ ToR 400 → 50 Gbps |
 | Fail3 | GPU 0 replaced by a backup in another rack (+1 µs ToR latency) | GPU 0 ↔ NVSwitch 50 Gbps, GPU 0 ↔ ToR 100 Gbps, latency 0.5 → 1.5 µs |
 
-### E3 – DeepSeek-671B training under gray failures (claim C3)
+### E3 – MCCL schedules vs NCCL under gray failures (claim C3)
+
+2 GB AllGather and AllToAll (128 MB per source) on the 2×8 topology, with the paper configuration
+of E2, for each topology (no failure and Fail1–3) and three schedule sets:
+
+| Run | System file | Schedules (`inputs/msccl/`) |
+|---|---|---|
+| `nccl` | `nccl.txt` | NCCL-equivalent (`nccl/`) |
+| `mccl_noreopt` | `mccl-no_failure.txt` | MCCL schedules synthesized for the healthy fabric (`mccl/no_failure/`), kept under the failure |
+| `mccl_reopt` | `mccl-failure_N.txt` | MCCL schedules re-synthesized for that failure (`mccl/failure_N/`); not run without failure |
+
+That is 22 simulations. `results.csv` records the schedule file each run actually loaded and
+`summarize.py` fails if it is not the intended one. It reports, per topology, the three times and
+the BusBW ratio against NCCL (= T_NCCL / T, the paper's metric in Fig. 1 and 8) and, with
+`--plots`, draws them like Fig. 8 (hatched: no reopt; solid: reopt; dashed line: NCCL).
+Expected (reference values, `artifact/expected/E3-mccl.csv`):
+
+| | | NCCL | MCCL no reopt | MCCL reopt |
+|---|---|---|---|---|
+| AllGather | no failure | 5.77 ms | 5.06 ms (1.14×) | – |
+| | Fail1 | 20.15 ms | 17.75 ms (1.14×) | 13.72 ms (1.47×) |
+| | Fail2 | 40.77 ms | 39.14 ms (1.04×) | 5.53 ms (7.38×) |
+| | Fail3 | 326.02 ms | 287.35 ms (1.13×) | 108.35 ms (3.01×) |
+| AllToAll | no failure | 21.72 ms | 21.73 ms (1.00×) | – |
+| | Fail1 | 21.72 ms | 28.24 ms (0.77×) | 21.72 ms (1.00×) |
+| | Fail2 | 173.86 ms | 173.86 ms (1.00×) | 24.45 ms (7.11×) |
+| | Fail3 | 304.53 ms | 456.51 ms (0.67×) | 109.32 ms (2.79×) |
+
+Without re-optimization MCCL's schedules stay close to NCCL under a failure (or fall below it for
+AllToAll under Fail1/Fail3); re-optimized for the failure they reach up to 7.38× (AllGather) and
+7.11× (AllToAll) NCCL's bus bandwidth under Fail2. The AllGather ratios correspond to the 1x2x8
+group of Fig. 8(a).
+
+### E4 – DeepSeek-671B training under gray failures (claim C4)
 
 DeepSeek-v3 671B (256 experts; EP = 64, PP = 16), 16K-token batch, forward and backward pass of
 one pipeline stage simulated on 128 GPUs (1 segment × 16 hosts × 8 GPUs, HPN rail-optimized,
@@ -205,8 +241,8 @@ plots (one per failure profile, as in Fig. 16–17); it also accepts the CSVs of
 the gradient phase out:
 
 ```bash
-python3 benchmark/analyze_results.py artifact/results/<dir>/E3-e2e/results.csv
-# -> <dir>/E3-e2e/combined_results.csv and <dir>/E3-e2e/plots/DeepSeek671B_<failure>.{png,pdf}
+python3 benchmark/analyze_results.py artifact/results/<dir>/E4-e2e/results.csv
+# -> <dir>/E4-e2e/combined_results.csv and <dir>/E4-e2e/plots/DeepSeek671B_<failure>.{png,pdf}
 ```
 
 Expected (reference values; all 8 runs `SUCCESS` with `schedule used = msccl`):
@@ -219,10 +255,10 @@ Expected (reference values; all 8 runs `SUCCESS` with `schedule used = msccl`):
 | Fail3 | 257.02 | 756.40 | 99.45 | 5.33× |
 
 Fail1 barely matters for the training: the gradient phase slows down (59 → 87 ms) but the
-transformer pass, which dominates the batch time, does not. As for E1/E2, `summarize.py` checks
-every simulated time against `artifact/expected/E3-e2e.csv`.
+transformer pass, which dominates the batch time, does not. As for E1–E3, `summarize.py` checks
+every simulated time against `artifact/expected/E4-e2e.csv`.
 
-E3 is much longer than E1/E2 (≈ 1 h on 2 cores with `-j 2`; the gradient-phase simulations
+E4 is much longer than E1–E3 (≈ 1 h on 2 cores with `-j 2`; the gradient-phase simulations
 are the longest). The 8 simulations are independent, so with ≥ 8 cores and `-j 8` it takes about
 as long as the slowest one. To check a subset, e.g. only no failure and Fail2:
 `artifact/run.sh e2e -f no_failure,failure_2`.
