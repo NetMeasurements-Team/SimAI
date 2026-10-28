@@ -67,6 +67,8 @@ public:
         int queue_threshold);
     void notify_stream_removed(int vnet, Tick running_time);
     void notify_stream_added(int vnet);
+    // Starts waiting streams of `vnet`, in priority order, while it has free slots.
+    void start_streams(int vnet);
     void notify_stream_added_into_ready_list() const;
     std::vector<double> get_average_latency_per_dimension() const;
   };
@@ -107,6 +109,7 @@ public:
   bool boost_mode;
   bool collective_graph;
   std::set<int> collective_graph_ranks;
+  std::map<int, int> trace_group_seq;  // AS_SCHEDULING_TRACE: group index -> collectives issued for it
   bool rendezvous_enabled;
   bool initialized;
 

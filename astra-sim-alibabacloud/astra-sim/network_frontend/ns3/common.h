@@ -77,7 +77,9 @@ inline bool flow_stripping = false;
 inline bool packet_spraying = false;
 inline bool reuse_qps = true;
 inline bool var_win = false, fast_react = true;
-inline bool rto = false;
+inline bool rto = false;           // RTO: retransmission timeout on network QPs (never on NVLink)
+// RTO_TIMEOUT (us). Default: 4.096 us * 2^20, the RoCE timeout with NCCL's default NCCL_IB_TIMEOUT=20.
+inline double rto_timeout_us = 4294967.296;
 inline bool multi_rate = true;
 inline bool sample_feedback = false;
 inline double pint_log_base = 1.05;
@@ -615,6 +617,8 @@ inline bool ReadConf(const string& network_topo, const string& network_conf, con
       uint32_t v;
       conf >> v;
       rto = v;
+    } else if (key.compare("RTO_TIMEOUT") == 0) {
+      conf >> rto_timeout_us;
     } else if (key.compare("FAST_REACT") == 0) {
       uint32_t v;
       conf >> v;
@@ -1004,8 +1008,15 @@ inline void SetupNetwork(
       for (uint32_t j = 1; j < sw->GetNDevices(); j++) {
         Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(sw->GetDevice(j));
         uint64_t rate = dev->GetDataRate().GetBitRate();
-        uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())->GetDelay().GetNanoSeconds();
-        uint32_t headroom = rate * delay / 8 / 1000000000 * 4;
+        // NVLink is lossless (credit-based flow control), but the NVSwitch model sends no PFC pause:
+        // nothing slows a sender down when its traffic converges on a slower link, and every packet
+        // past the shared buffer goes to this port's headroom. The headroom
+        // is made as large as possible (the whole 32-bit MMU budget left by BUFFER_SIZE and the
+        // reservations, split among the ports) so that the NVSwitch never drops.
+        const uint64_t nvswitch_ports = sw->GetNDevices() - 1;
+        const uint64_t nvswitch_budget = std::numeric_limits<uint32_t>::max()
+            - uint64_t{buffer_size} * 1024 * 1024 - nvswitch_ports * sw->m_mmu->reserve;
+        const uint32_t headroom = static_cast<uint32_t>(nvswitch_budget / nvswitch_ports);
         sw->m_mmu->ConfigHdrm(j, headroom);
         sw->m_mmu->pfc_a_shift[j] = shift;
         while (rate > nic_rate && sw->m_mmu->pfc_a_shift[j] > 0) {
@@ -1014,7 +1025,12 @@ inline void SetupNetwork(
         }
       }
 			sw->m_mmu->ConfigNPort(sw->GetNDevices()-1);
-			sw->m_mmu->ConfigBufferSize(buffer_size * 1024 * 1024);
+      const uint64_t nvswitch_buffer =
+          uint64_t{buffer_size} * 1024 * 1024 + sw->m_mmu->total_hdrm;
+      if (nvswitch_buffer > std::numeric_limits<uint32_t>::max()) {
+        throw std::runtime_error("NVSwitch buffer (BUFFER_SIZE + lossless headroom) exceeds the MMU's 32-bit capacity");
+      }
+			sw->m_mmu->ConfigBufferSize(static_cast<uint32_t>(nvswitch_buffer));
 			sw->m_mmu->node_id = sw->GetId();
 		}
   }
@@ -1042,6 +1058,7 @@ inline void SetupNetwork(
       rdmaHw->SetAttribute("NicCoalesceMethod", StringValue(nic_coalesce_method));
       rdmaHw->SetAttribute("NACKGenerationInterval", DoubleValue(nack_gen_interval));
       rdmaHw->SetAttribute("EnableRto", BooleanValue(rto));
+      rdmaHw->SetAttribute("RtoTimeout", TimeValue(NanoSeconds(static_cast<int64_t>(rto_timeout_us * 1000))));
 
       switch (cc_mode) {
       case 1:

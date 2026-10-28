@@ -145,13 +145,20 @@ run_simulation() {
 
     while [ $attempt -le $max_attempts ]; do
         echo $SIMULATOR -t $THREADS -w "$WORKLOAD_FILE" -n "$TOPO_PATH" -c "$CONFIG_FILE" -s "$SYS_CONFIG_FILE" -r "$RUN_NAME" > "$OUTPUT_FILE"
-        if $SIMULATOR -t $THREADS -w "$WORKLOAD_FILE" -n "$TOPO_PATH" -c "$CONFIG_FILE" -s "$SYS_CONFIG_FILE" -r "$RUN_NAME" >> "$OUTPUT_FILE" 2>&1; then
+        local rc=0
+        $SIMULATOR -t $THREADS -w "$WORKLOAD_FILE" -n "$TOPO_PATH" -c "$CONFIG_FILE" -s "$SYS_CONFIG_FILE" -r "$RUN_NAME" >> "$OUTPUT_FILE" 2>&1 || rc=$?
+        if [ $rc -eq 0 ]; then
             SIM_TIME=$(grep "All messages finished. Stopping simulation at time" "$OUTPUT_FILE" | tail -n 1 | grep -oP 'time \K[0-9]+' || echo "")
             if [ -n "$SIM_TIME" ]; then
                 status="SUCCESS"
                 break
             fi
             status="PARSE_ERROR"
+        elif [ $rc -eq 2 ]; then
+            # The simulator ran out of events with messages pending (it prints what is pending).
+            # Deterministic: a retry would stall the same way.
+            status="STALLED"
+            break
         else
             status="SIM_FAILED"
         fi
@@ -182,6 +189,8 @@ run_simulation() {
             flock -x 200
             if [ "$status" == "PARSE_ERROR" ]; then
                 echo -e "${RED}[$run_id/$TOTAL_RUNS] ERROR: Could not parse simulation time for $RUN_NAME after $max_attempts attempts${NC}"
+            elif [ "$status" == "STALLED" ]; then
+                echo -e "${RED}[$run_id/$TOTAL_RUNS] ERROR: Simulation stalled for $RUN_NAME (pending messages listed in $OUTPUT_FILE)${NC}"
             else
                 echo -e "${RED}[$run_id/$TOTAL_RUNS] ERROR: Simulation failed for $RUN_NAME after $max_attempts attempts${NC}"
             fi

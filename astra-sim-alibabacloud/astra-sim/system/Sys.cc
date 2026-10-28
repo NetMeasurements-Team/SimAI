@@ -30,6 +30,7 @@ LICENSE file in the root directory of this source tree.
 #include <algorithm> // Required for std::transform
 #include <cctype>    // Required for std::tolower
 #include <cstdio>
+#include <cstdlib>
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -38,6 +39,42 @@ MockNccl::MockNcclGroup* GlobalGroup = nullptr;
 
 namespace AstraSim {
 std::atomic<bool> Sys::g_sys_inCriticalSection(false);
+
+namespace {
+
+struct SchedulingTrace {
+  FILE* file = nullptr;
+  std::map<std::pair<int, int>, std::string> streams;  // (rank, stream_num) -> description columns
+  SchedulingTrace() {
+    const char* path = std::getenv("AS_SCHEDULING_TRACE");
+    if (path == nullptr || *path == '\0') return;
+    file = std::fopen(path, "w");
+    if (file == nullptr) {
+      std::cerr << "AS_SCHEDULING_TRACE: cannot open " << path << " for writing" << std::endl;
+      return;
+    }
+    std::fprintf(file, "time_ns,rank,event,stream,phase,group_type,group,group_seq,chunk,layer_num,layer,pass,op,bytes\n");
+  }
+  ~SchedulingTrace() {
+    if (file != nullptr) std::fclose(file);
+  }
+};
+
+SchedulingTrace& scheduling_trace() {
+  static SchedulingTrace trace;
+  return trace;
+}
+
+void trace_stream_event(const char* event, const BaseStream* stream) {
+  SchedulingTrace& t = scheduling_trace();
+  if (t.file == nullptr) return;
+  const auto it = t.streams.find(std::make_pair(stream->owner->id, stream->stream_num));
+  std::fprintf(t.file, "%llu,%d,%s,%d,%d,%s\n", static_cast<unsigned long long>(Sys::boostedTick()),
+               stream->owner->id, event, stream->stream_num, stream->steps_finished,
+               it == t.streams.end() ? ",,,,,,,," : it->second.c_str());
+  if (it != t.streams.end() && std::string(event) == "finish") t.streams.erase(it);
+}
+} // namespace
 Tick Sys::offset = 0;
 uint8_t* Sys::dummy_data = new uint8_t[2];
 std::vector<Sys*> Sys::all_generators;
@@ -864,15 +901,21 @@ void Sys::SchedulerUnit::notify_stream_added(const int vnet) {
   if (sys->id == 0 && ++total_active_chunks_per_dimension[queue_id_to_dimension[vnet]] == 1) {
     usage[queue_id_to_dimension[vnet]].increase_usage();
   }
+  start_streams(vnet);
+  MockNcclLog* NcclLog = MockNcclLog::getInstance();
+  NcclLog->writeLog(NcclLogLevel::DEBUG, "Sys::SchedulerUnit::notify_stream_added finished");
+}
+
+void Sys::SchedulerUnit::start_streams(const int vnet) {
+  // Streams before the running_streams-th are the running ones (insert_stream keeps them first).
   stream_pointer[vnet] = sys->active_Streams[vnet].begin();
   std::advance(stream_pointer[vnet], running_streams[vnet]);
   while (stream_pointer[vnet] != sys->active_Streams[vnet].end() && running_streams[vnet] < queue_threshold) {
+    trace_stream_event("start", *stream_pointer[vnet]);
     (*stream_pointer[vnet])->init();
     running_streams[vnet]++;
     std::advance(stream_pointer[vnet], 1);
   }
-  MockNcclLog* NcclLog = MockNcclLog::getInstance();
-  NcclLog->writeLog(NcclLogLevel::DEBUG, "Sys::SchedulerUnit::notify_stream_added finished");
 }
 
 void Sys::SchedulerUnit::notify_stream_removed(const int vnet, const Tick running_time) {
@@ -892,13 +935,7 @@ void Sys::SchedulerUnit::notify_stream_removed(const int vnet, const Tick runnin
     }
     sys->schedule(max);
   }
-  stream_pointer[vnet] = sys->active_Streams[vnet].begin();
-  std::advance(stream_pointer[vnet], running_streams[vnet]);
-  while (stream_pointer[vnet] != sys->active_Streams[vnet].end() && running_streams[vnet] < queue_threshold) {
-    (*stream_pointer[vnet])->init();
-    running_streams[vnet]++;
-    std::advance(stream_pointer[vnet], 1);
-  }
+  start_streams(vnet);
 }
 
 std::vector<double> Sys::SchedulerUnit::get_average_latency_per_dimension() const {
@@ -1447,6 +1484,24 @@ DataSet* Sys::generate_collective(
 #endif
   int pri = get_priority(pref_scheduling);
   int count = 0;
+  // For AS_SCHEDULING_TRACE: the collective's group and its position among the group's collectives,
+  int trace_group = -1;
+  int trace_seq = -1;
+  if (scheduling_trace().file != nullptr && GlobalGroup != nullptr &&
+      (workload->current_state == Workload::LoopState::Forward_Pass ||
+       workload->current_state == Workload::LoopState::Input_Gradient ||
+       workload->current_state == Workload::LoopState::Weight_Gradient)) {
+    auto gi = GlobalGroup->GroupIndex.find(
+        std::make_pair(id, static_cast<MockNccl::GroupType>(current_comm_ps())));
+    // Only members of the group (not e.g. the NVSwitch nodes, which are also Sys instances).
+    if (gi != GlobalGroup->GroupIndex.end()) {
+      const std::vector<int>& members = GlobalGroup->AllGroups[gi->second].Ranks;
+      if (std::find(members.begin(), members.end(), id) != members.end()) {
+        trace_group = gi->second;
+        trace_seq = trace_group_seq[trace_group]++;
+      }
+    }
+  }
   if (id == 0 &&
       (inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedy ||
        inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedyFlex)) {
@@ -1624,6 +1679,24 @@ DataSet* Sys::generate_collective(
     if (vect.size() > 0) {
       auto newStream = new StreamBaseline(this, dataset, stream_counter++, vect, pri);
       newStream->current_queue_id = -1;
+      if (scheduling_trace().file != nullptr) {
+        const char* pass = "other";
+        switch (workload->current_state) {
+        case Workload::LoopState::Forward_Pass:        pass = "fwd"; break;
+        case Workload::LoopState::Input_Gradient:      pass = "ig";  break;
+        case Workload::LoopState::Weight_Gradient:     pass = "wg";  break;
+        case Workload::LoopState::Forward_In_BackPass: pass = "fwd_in_bwd"; break;
+        default: break;
+        }
+        const char* group_type = trace_group >= 0
+            ? MockNccl::to_cstr(GlobalGroup->AllGroups[trace_group].type) : "";
+        scheduling_trace().streams[std::make_pair(id, newStream->stream_num)] =
+            std::string(group_type) + "," + std::to_string(trace_group) + "," + std::to_string(trace_seq) + ","
+            + std::to_string(count - 1) + "," + std::to_string(layer_num) + ","
+            + workload->layers[workload->index]->id + "," + pass + "," + to_cstr(collective_type) + ","
+            + std::to_string(chunk_size);
+        trace_stream_event("issue", newStream);
+      }
 #ifdef PHY_MTP
       insert_into_running_list(newStream);
 #endif
@@ -1719,6 +1792,7 @@ void Sys::proceed_to_next_vnet_baseline(StreamBaseline* stream) {
   }
   NcclLog->writeLog(NcclLogLevel::DEBUG, "proceed_to_next_vnet_baseline :: phase2-1");
   if (stream->phases_to_go.size() == 0) {
+    trace_stream_event("finish", stream);
     total_running_streams--;
     if (previous_vnet >= 0) {
       NcclLog->writeLog(NcclLogLevel::DEBUG, "proceed_to_next_vnet_baseline :: phase2-1");

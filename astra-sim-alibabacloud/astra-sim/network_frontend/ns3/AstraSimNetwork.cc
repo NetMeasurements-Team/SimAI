@@ -90,8 +90,17 @@ AstraSim::timespec_t ASTRASimNetwork::sim_get_time() {
   return timeSpec;
 }
 
+// Runs a system-layer event and keeps pending_system_events up to date for check_deadlock().
+static void run_system_event(void (*fun_ptr)(void* fun_arg), void* fun_arg) {
+  fun_ptr(fun_arg);
+  if (--pending_system_events == 0) {
+    Simulator::Schedule(Time(0), &check_deadlock);
+  }
+}
+
 void ASTRASimNetwork::sim_schedule(AstraSim::timespec_t delta, void (*fun_ptr)(void* fun_arg), void* fun_arg) {
-  Simulator::Schedule(NanoSeconds(delta.time_val), fun_ptr, fun_arg);
+  ++pending_system_events;
+  Simulator::Schedule(NanoSeconds(delta.time_val), &run_system_event, fun_ptr, fun_arg);
 }
 
 int ASTRASimNetwork::sim_send(
@@ -437,10 +446,12 @@ int main(const int argc, char* argv[]) {
   std::cout << "simulator run " << std::endl;
   Simulator::Stop(Seconds(2000000000));
   Simulator::Run();
+  // Before Destroy(): the report reads the frontend state and the simulator clock. Exit code 2 = stall.
+  const bool completed = report_unfinished_simulation(std::cerr);
   Simulator::Destroy();
   
   #ifdef NS3_MPI
   MpiInterface::Disable();
   #endif
-  return 0;
+  return completed ? 0 : 2;
 }
