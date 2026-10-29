@@ -14,7 +14,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[3]
-FIXTURE = ROOT / 'tests/ns3/collective-pfc'
+COMMON = Path(__file__).resolve().parent.parent / 'common'
 OPS = {'ALLREDUCE': 'all-reduce', 'ALLGATHER': 'all-gather',
        'REDUCESCATTER': 'reduce-scatter', 'ALLTOALL': 'all-to-all'}
 ALGOS = {'Ring': 1, 'NVLS': 4, 'PAT': 6}
@@ -91,9 +91,9 @@ def prepare(folder, case):
         f'HYBRID_TRANSFORMER_FWD_IN_BCKWD model_parallel_NPU_group: {n} ep: 1 pp: 1 '
         f'vpp: 1 ga: 1 all_gpus: {n} checkpoints: 0 checkpoint_initiates: 0\n1\n'
         f'collective_layer -1 1000 {case["op"]} {case["bytes"]} 1000 NONE 0 1000 NONE 0 1\n')
-    (folder/'system.txt').write_text((FIXTURE/'system.txt').read_text())
-    config = (FIXTURE/'network.conf.in').read_text().replace('@BUFFER_MB@', '32')
-    config = config.replace('ENABLE_MONITOR 1', 'ENABLE_MONITOR 0')
+    (folder/'system.txt').write_text((COMMON/'system.txt').read_text())
+    config = (COMMON/'network.conf.in').read_text().replace('@BUFFER_MB@', '32')
+    config = config.replace('@ENABLE_MONITOR@', '0')
     (folder/'network.conf').write_text(config)
     for name in ['flow.txt', 'trace.txt']:
         (folder/name).write_text('0\n')
