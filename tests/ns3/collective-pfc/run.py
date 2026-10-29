@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare and run a fixture-based SimAI collective integration test (stdlib only)."""
+"""Prepare and run the SimAI collective/PFC test (stdlib only)."""
 import argparse
 from collections import Counter
 from datetime import datetime
@@ -11,7 +11,9 @@ import re
 import subprocess
 import sys
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
+TEST_DIR = Path(__file__).resolve().parent
+COMMON = TEST_DIR.parent / 'common'
 
 def check_outputs(folder, name, expectation):
     log = (folder / "run.log").read_text(errors="replace")
@@ -68,15 +70,13 @@ def check_outputs(folder, name, expectation):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--fixture', type=Path, default=ROOT / 'tests/ns3/collective-pfc')
     parser.add_argument('--binary', type=Path, default=ROOT / 'bin/SimAI_simulator')
     parser.add_argument('--output', type=Path)
-    parser.add_argument('--case', default='all', help='fixture case name, or all')
+    parser.add_argument('--case', default='all', help='PFC case name, or all')
     parser.add_argument('--timeout', type=int, default=300, help='wall-clock seconds per case')
     parser.add_argument('--prepare-only', action='store_true', help='generate inputs without executing SimAI')
     args = parser.parse_args()
-    fixture = args.fixture.resolve()
-    cases = json.loads((fixture / 'cases.json').read_text())
+    cases = json.loads((TEST_DIR / 'cases.json').read_text())
     if args.case != 'all' and args.case not in cases:
         parser.error(f'unknown case {args.case}; available: {list(cases)}')
     if args.timeout <= 0:
@@ -99,10 +99,12 @@ def main():
         folder.mkdir()
         name = 'test-' + output.name + '-' + case
         replacements = {'@BYTES@': str(params['bytes']), '@TRUNK@': params['trunk'],
-                        '@BUFFER_MB@': str(params['buffer_mb'])}
-        for source, target in [('workload.txt.in', 'workload.txt'), ('topology.txt.in', 'topology.txt'),
-                               ('network.conf.in', 'network.conf'), ('system.txt', 'system.txt')]:
-            text = (fixture / source).read_text()
+                        '@BUFFER_MB@': str(params['buffer_mb']), '@ENABLE_MONITOR@': '1'}
+        for source, target in [(TEST_DIR / 'workload.txt.in', 'workload.txt'),
+                               (TEST_DIR / 'topology.txt.in', 'topology.txt'),
+                               (COMMON / 'network.conf.in', 'network.conf'),
+                               (COMMON / 'system.txt', 'system.txt')]:
+            text = source.read_text()
             for token, value in replacements.items():
                 text = text.replace(token, value)
             if re.search(r'@[A-Z_]+@', text):

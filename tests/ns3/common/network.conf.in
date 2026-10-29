@@ -7,7 +7,7 @@ FCT_OUTPUT_FILE fct.txt
 PFC_OUTPUT_FILE pfc.txt
 
 # MONITOR SETTINGS
-ENABLE_MONITOR 1
+ENABLE_MONITOR @ENABLE_MONITOR@
 QLEN_MON_FILE qlen.csv
 # TX_BW_MON_FILE /etc/astra-sim/simulation/tx_bw.txt
 # RX_BW_MON_FILE /etc/astra-sim/simulation/rx_bw.txt

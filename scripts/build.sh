@@ -155,8 +155,8 @@ while true; do
                                 *) profile=default ;;
                               esac;                                       shift 2 ;;
     -j|--jobs)                jobs="$2";                                  shift 2 ;;
-    --nccl-version)          nccl_version="$2";                          shift 2 ;;
-    --ns3-tests)             ns3_tests=ON;                               shift ;;
+    --nccl-version)           nccl_version="$2";                          shift 2 ;;
+    --ns3-tests)              ns3_tests=ON;                               shift ;;
     --sys-asserts)            sys_asserts=ON;                             shift ;;
     --ns3-asserts)            ns3_asserts=ON;                             shift ;;
     --ns3-stub-headers)       ns3_stub_headers=ON;                        shift ;;
