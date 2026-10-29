@@ -21,14 +21,19 @@
 #
 # Options
 #   -b PATH   simulator binary            (default: bin/SimAI_simulator)
-#   -o DIR    output directory            (default: artifact/results/<experiment>-<timestamp>)
+#   -t TAG    run label                   (default: "docker" inside a container, else "native")
+#   -o DIR    output directory            (default: artifact/results/<TAG>-<experiment>-<timestamp>)
 #   -j N      parallel simulations        (default: number of CPUs)
 #   -f LIST   failure types (comma list)  (default: no_failure,failure_1,failure_2,failure_3)
 #   -h        help
 #
 # Every simulation runs in its own directory (command.txt, run.log, exit_code, wall_seconds,
-# csv_files/), so runs never overwrite each other. A results.csv is written per experiment;
-# summarize with:  python3 artifact/summarize.py <output dir>
+# csv_files/), and its simulator run name (which names the ns-3 and log files the simulator
+# writes under /etc/astra-sim) is unique to this invocation (<label><pid>_...). The default output
+# directory is prefixed with the run label, so a native and a Docker run can go at the same time
+# on the same checkout (Docker writes into artifact/results through the volume).
+# A results.csv is written per experiment; summarize with:
+#   python3 artifact/summarize.py <output dir>
 
 set -u
 
@@ -36,20 +41,22 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE="$ROOT/astra-sim-alibabacloud"
 BINARY="$ROOT/bin/SimAI_simulator"
 OUT=""
+TAG=""
 JOBS="$(nproc 2>/dev/null || echo 2)"
 FAILURES="no_failure,failure_1,failure_2,failure_3"
 
-usage() { sed -n '2,31p' "$0"; }
+usage() { sed -n '2,36p' "$0"; }
 
 EXP="${1:-}"
 [ -n "$EXP" ] || { usage >&2; exit 2; }
 if [ "$EXP" = "-h" ] || [ "$EXP" = "--help" ]; then usage; exit 0; fi
 shift
 
-while getopts "b:o:j:f:h" opt; do
+while getopts "b:o:t:j:f:h" opt; do
   case "$opt" in
     b) BINARY="$(realpath "$OPTARG")" ;;
     o) OUT="$OPTARG" ;;
+    t) TAG="$OPTARG" ;;
     j) JOBS="$OPTARG" ;;
     f) FAILURES="$OPTARG" ;;
     h) usage; exit 0 ;;
@@ -60,18 +67,23 @@ done
 case "$EXP" in smoke|equiv|single|mccl|e2e|all) ;; *) echo "Unknown experiment: $EXP" >&2; usage >&2; exit 2 ;; esac
 [ -x "$BINARY" ] || { echo "Simulator not found: $BINARY (build with: bash scripts/build.sh -c ns3)" >&2; exit 2; }
 
-[ -n "$OUT" ] || OUT="$ROOT/artifact/results/${EXP}-$(date +%Y%m%d_%H%M%S)"
+if [ -z "$TAG" ]; then
+  if [ -f /.dockerenv ] || [ -f /run/.containerenv ]; then TAG=docker; else TAG=native; fi
+fi
+[ -n "$OUT" ] || OUT="$ROOT/artifact/results/${TAG}-${EXP}-$(date +%Y%m%d_%H%M%S)"
 if [ -e "$OUT" ]; then echo "Output directory already exists: $OUT" >&2; exit 2; fi
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 
 NET_CONF="$BASE/inputs/config/SimAI.conf"
+RUN_PREFIX="${TAG}$$"   # unique per invocation: simulator file names under /etc/astra-sim never clash
 IFS=',' read -r -a FAILURE_LIST <<< "$FAILURES"
 
 # Record provenance of this run.
 {
   echo "date:        $(date -Iseconds)"
   echo "experiment:  $EXP"
+  echo "label:       $TAG"
   echo "host:        $(uname -a)"
   echo "cpus:        $(nproc 2>/dev/null)"
   echo "jobs:        $JOBS"
@@ -94,6 +106,7 @@ run_sim() {
   for f in "$wl" "$topo" "$sys"; do
     [ -f "$f" ] || { echo "missing input: $f" > "$dir/run.log"; echo 127 > "$dir/exit_code"; return; }
   done
+  name="${RUN_PREFIX}_$name"
   echo "$BINARY -t 1 -w $wl -n $topo -c $NET_CONF -s $sys -r $name" > "$dir/command.txt"
   local t0=$SECONDS
   (cd "$dir" && "$BINARY" -t 1 -w "$wl" -n "$topo" -c "$NET_CONF" -s "$sys" -r "$name" > run.log 2>&1)

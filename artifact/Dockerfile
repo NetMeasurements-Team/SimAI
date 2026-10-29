@@ -3,7 +3,7 @@
 #   docker build -f artifact/Dockerfile -t mccl-simai .
 #   docker run --rm -it -v "$PWD/artifact/results:/workspace/SimAI/artifact/results" mccl-simai
 #   # inside the container:
-#   artifact/run.sh smoke && python3 artifact/summarize.py artifact/results/smoke-*
+#   artifact/run.sh smoke && python3 artifact/summarize.py artifact/results/docker-smoke-*
 #
 # Build context must be a checkout with submodules initialized
 # (git submodule update --init --recursive) or the extracted Zenodo archive.

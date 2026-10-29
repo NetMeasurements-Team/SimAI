@@ -10,3 +10,10 @@ ns-3-alibabacloud/simulation/src/applications/astra-sim
 ns-3-alibabacloud/simulation/src/applications/SimCCL
 benchmark/results/
 *.tar.gz
+# links/lock created by a native build (absolute host paths); the image build recreates them
+ns-3-alibabacloud/simulation/.lock-ns3_linux_build
+ns-3-alibabacloud/simulation/scratch/AstraSimNetwork.cc
+ns-3-alibabacloud/simulation/scratch/AstraSimNetwork.h
+ns-3-alibabacloud/simulation/scratch/common.h
+ns-3-alibabacloud/simulation/scratch/entry.h
+**/__pycache__

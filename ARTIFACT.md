@@ -97,6 +97,16 @@ docker build -f artifact/Dockerfile -t mccl-simai .
 docker run --rm -it -v "$PWD/artifact/results:/workspace/SimAI/artifact/results" mccl-simai
 # all commands below work unchanged inside the container
 ```
+Behind an HTTP proxy, or if Docker's bridge network does not work on the host, add
+`--network host --build-arg http_proxy=$http_proxy` to `docker build` and `--network host` to
+`docker run`.
+
+**Native and Docker side by side.** Both routes can run at the same time on the same checkout.
+Result directories are named `native-<experiment>-<timestamp>` and
+`docker-<experiment>-<timestamp>` (the label is detected automatically, `-t LABEL` overrides it),
+every invocation uses its own simulator run names, and the container has its own `/etc/astra-sim`.
+The image is built from the sources only (`.dockerignore` excludes the native build trees), so a
+native build in the same checkout does not leak into it.
 
 ## 4. Smoke test (≈ 15 s, "kick the tires")
 
@@ -110,12 +120,13 @@ workload               failure       nccl_msccl_ns simai_native_ns  status
 ag-268435456_bytes     no_failure           735808          735808  PASS
 a2a-268435456_bytes    no_failure          3035739         3035739  PASS
 
-PASS: 2/2 pairs identical. Results: .../smoke-<timestamp>/E1-equivalence/results.csv
+PASS: 2/2 pairs identical. Results: .../native-smoke-<timestamp>/E1-equivalence/results.csv
 ```
 
 ## 5. Experiments
 
-Each command writes to a fresh `artifact/results/<experiment>-<timestamp>/` directory containing
+Each command writes to a fresh `artifact/results/<label>-<experiment>-<timestamp>/` directory
+(`<label>` = `native` or `docker`; or `-o DIR`) containing
 `provenance.txt` (git commits, binary hash, host), one sub-directory per simulation
 (`command.txt`, `run.log`, `exit_code`, `wall_seconds`) and a `results.csv`.
 `-j N` sets the number of parallel simulations (default: all CPUs);
@@ -234,14 +245,12 @@ T_batch = T_transformer × 3 (transformer blocks per stage) × 16384 / (128 GPUs
 ```
 
 `summarize.py` prints this per failure profile together with the slowdown vs no failure.
-`benchmark/analyze_results.py` applies the same reconstruction and produces the paper-style bar
-plots (one per failure profile, as in Fig. 16–17); it also accepts the CSVs of
-`benchmark/run_all_simulations.sh` for other GPU counts and algorithms, and `--no-grad` leaves
-the gradient phase out:
+`benchmark/analyze_results.py` applies the same reconstruction and draws the training time per
+failure profile as a bar plot in the style of Fig. 16–17 (`benchmark/plot_results.py`):
 
 ```bash
 python3 benchmark/analyze_results.py artifact/results/<dir>/E4-e2e/results.csv
-# -> <dir>/E4-e2e/combined_results.csv and <dir>/E4-e2e/plots/DeepSeek671B_<failure>.{png,pdf}
+# -> <dir>/E4-e2e/combined_results.csv and <dir>/E4-e2e/plots/DeepSeek671B_training_time.{png,pdf}
 ```
 
 Expected (reference values; all 8 runs `SUCCESS` with `schedule used = msccl`):

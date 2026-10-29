@@ -1,135 +1,79 @@
 #!/usr/bin/env python3
-"""Reconstruct full-batch training time from the partial end-to-end simulations and plot it
-(paper Sec. 6.3, Fig. 11, 16, 17).
+"""Reconstruct the DeepSeek-671B training time from the partial simulations of artifact
+experiment E4 and plot it (paper Sec. 6.3, NCCL bars of Fig. 11 and Fig. 17).
 
-The end-to-end workloads are simulated in two parts per model:
-  <Model>-transformer  one transformer block of one pipeline stage, for the per-GPU share of the
-                       batch processed in one simulated pass
-  <Model>-grad         the gradient-synchronization phase of the stage
-The training time on one batch for one pipeline stage is reconstructed as
+E4 simulates one pipeline stage (of 16) on 128 GPUs in two parts per failure profile:
+  DeepSeek671B-transformer  one transformer block, for the per-GPU share of the batch
+  DeepSeek671B-grad         the gradient-synchronization phase of the stage
+The training time on one 16K-token batch of the stage is
 
-  T_batch = T_transformer * TRANSFORMERS_PER_STAGE[model] * BATCH_SIZE / (num_gpus / TP[model])
-            + T_grad                      (gradient phase; leave it out with --no-grad)
+  T_batch = T_transformer * TRANSFORMERS_PER_STAGE * BATCH_SIZE / (NUM_GPUS / TP) + T_grad
 
 Usage:
-  python3 benchmark/analyze_results.py <simulation_results.csv>... [--no-grad]
-                                       [--out DIR] [--exclude ALGO,...]
-Accepts both CSV formats: benchmark/run_*.sh (simulation_time_ns, num_gpus) and
-artifact/run.sh e2e (sim_time_ns; 128 GPUs). Writes DIR/combined_results.csv and DIR/plots/
-(DIR defaults to the directory of the first CSV). Requires pandas and matplotlib.
+  python3 benchmark/analyze_results.py <run dir>/E4-e2e/results.csv [--out DIR]
+
+Writes DIR/combined_results.csv and DIR/plots/DeepSeek671B_training_time.{png,pdf}
+(DIR defaults to the directory of the CSV). Requires pandas and matplotlib.
 """
 
 import argparse
 import os
+import sys
 
 import pandas as pd
 
-from plot_results import plot_all
+from plot_results import FAILURE_ORDER, plot_training_time
 
-TP = {'Llama405B': 16, 'DeepSeek671B': 1}
-TRANSFORMERS_PER_STAGE = {'Llama405B': 8, 'DeepSeek671B': 3}
+WORKLOAD = 'DeepSeek671B'
+TP = 1
+TRANSFORMERS_PER_STAGE = 3
 BATCH_SIZE = 16384
-ARTIFACT_E4_GPUS = 128  # artifact/run.sh e2e simulates one pipeline stage on 128 GPUs
-
-# Add algorithms to this list to filter them out from the plots
-EXCLUDED_ALGORITHMS = ['ForestColl']
-
-
-def load(paths):
-    frames = []
-    for p in paths:
-        df = pd.read_csv(p)
-        if 'sim_time_ns' in df.columns and 'simulation_time_ns' not in df.columns:
-            df = df.rename(columns={'sim_time_ns': 'simulation_time_ns'})
-        if 'num_gpus' not in df.columns:
-            df['num_gpus'] = ARTIFACT_E4_GPUS
-        frames.append(df)
-    return pd.concat(frames, ignore_index=True)
-
-
-def process_workload(df_success, workload, add_grad):
-    full_batch_df = df_success[df_success['workload'] == f'{workload}-transformer'].copy()
-    if full_batch_df.empty:
-        return full_batch_df
-    full_batch_df['simulation_time_ns'] = (
-            full_batch_df['simulation_time_ns'].astype('int64') *
-            TRANSFORMERS_PER_STAGE[workload] *
-            (BATCH_SIZE / (full_batch_df['num_gpus'] / TP[workload]))
-    ).astype('int64')
-    full_batch_df['workload'] = workload
-
-    if add_grad:
-        # Add *-grad simulation times to matching entries (same failure, algorithm, GPU count)
-        grad_df = df_success[df_success['workload'] == f'{workload}-grad']
-        keys = ['failure_type', 'algorithm', 'num_gpus']
-        have = set(map(tuple, grad_df[keys].values.tolist()))
-        for key in map(tuple, full_batch_df[keys].values.tolist()):
-            if key not in have:
-                print(f"WARNING: no successful {workload}-grad run for {key}; "
-                      f"its batch time excludes the gradient phase")
-        for _, grad_row in grad_df.iterrows():
-            match_mask = (
-                    (full_batch_df['failure_type'] == grad_row['failure_type']) &
-                    (full_batch_df['algorithm'] == grad_row['algorithm']) &
-                    (full_batch_df['num_gpus'] == grad_row['num_gpus'])
-            )
-            if match_mask.any():
-                full_batch_df.loc[match_mask, 'simulation_time_ns'] += int(grad_row['simulation_time_ns'])
-    return full_batch_df
+NUM_GPUS = 128          # one pipeline stage, as simulated by artifact/run.sh e2e
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('csv', nargs='+', help='simulation_results.csv / results.csv file(s)')
-    ap.add_argument('--no-grad', dest='add_grad', action='store_false',
-                    help='leave the gradient phase out of the batch time (transformer only)')
-    ap.add_argument('--out', help='output directory (default: directory of the first CSV)')
-    ap.add_argument('--exclude', default=','.join(EXCLUDED_ALGORITHMS),
-                    help='comma-separated algorithms to leave out of the plots')
+    ap.add_argument('csv', help='E4-e2e/results.csv written by artifact/run.sh e2e (or all)')
+    ap.add_argument('--out', help='output directory (default: directory of the CSV)')
     args = ap.parse_args()
+    out_dir = args.out or os.path.dirname(os.path.abspath(args.csv))
 
-    out_dir = args.out or os.path.dirname(os.path.abspath(args.csv[0]))
-    df = load(args.csv)
+    df = pd.read_csv(args.csv)
+    ok = df[df['status'] == 'SUCCESS']
+    t = {(r.workload, r.failure_type): int(r.sim_time_ns) for r in ok.itertuples()}
 
-    # Filter only successful runs and reused results
-    df_success = df[df['status'].isin(['SUCCESS', 'REUSED_FROM_NCCL'])].copy()
-    df_success['algorithm'] = df_success['algorithm'].astype(str).str.strip()
+    rows, missing = [], []
+    for ft in FAILURE_ORDER:
+        tt, tg = t.get((f'{WORKLOAD}-transformer', ft)), t.get((f'{WORKLOAD}-grad', ft))
+        if tt is None or tg is None:
+            missing.append(ft)
+            continue
+        total = int(tt * TRANSFORMERS_PER_STAGE * BATCH_SIZE / (NUM_GPUS / TP)) + tg
+        rows.append({'workload': WORKLOAD, 'failure_type': ft, 'algorithm': 'nccl', 'num_gpus': NUM_GPUS,
+                     'transformer_ns': tt, 'grad_ns': tg, 'simulation_time_ns': total})
 
-    combined_df = pd.concat([process_workload(df_success, w, args.add_grad) for w in TP],
-                            ignore_index=True)
-
-    exclusions = [a.strip().lower() for a in args.exclude.split(',') if a.strip()]
-    if exclusions and not combined_df.empty:
-        combined_df = combined_df[~combined_df['algorithm'].str.lower().isin(exclusions)]
-    combined_df = combined_df.reset_index(drop=True)
-
-    print(f"Total runs: {len(df)}")
-    print(f"Successful runs: {len(df_success)}")
-    print(f"Failed runs: {len(df) - len(df_success)}")
-    print(f"Filtered out algorithms: {exclusions}")
-    print(f"Gradient phase added: {args.add_grad}")
-    print()
-
-    if combined_df.empty:
-        print("No successful *-transformer runs to reconstruct.")
+    print(f"Runs: {len(df)}, successful: {len(ok)}")
+    for ft in missing:
+        print(f"WARNING: {ft}: transformer or gradient run missing/failed; not reconstructed")
+    if not rows:
+        print("Nothing to reconstruct.")
         return 1
 
-    cols = ['workload', 'failure_type', 'algorithm', 'num_gpus', 'simulation_time_ns']
-    print("Reconstructed training time on one batch (one pipeline stage):")
-    show = combined_df[cols].copy()
-    show['training_time_s'] = show['simulation_time_ns'] / 1e9
+    combined = pd.DataFrame(rows)
+    base = combined.loc[combined['failure_type'] == 'no_failure', 'simulation_time_ns']
+    combined['vs_no_failure'] = (combined['simulation_time_ns'] / base.iloc[0]).round(2) if len(base) else None
+
+    print("\nReconstructed training time on one batch (one pipeline stage, 128 GPUs, NCCL):")
+    show = combined[['failure_type', 'transformer_ns', 'grad_ns', 'simulation_time_ns', 'vs_no_failure']].copy()
+    show['training_time_s'] = (show['simulation_time_ns'] / 1e9).round(2)
     print(show.to_string(index=False))
-    print()
 
     os.makedirs(out_dir, exist_ok=True)
-    combined_df.to_csv(os.path.join(out_dir, 'combined_results.csv'), index=False)
-    print(f"Processed data saved to {os.path.join(out_dir, 'combined_results.csv')}")
-
-    print("\nGenerating bar plots...")
-    plot_all(combined_df, os.path.join(out_dir, 'plots'))
-    print(f"\nAnalysis complete! Check {os.path.join(out_dir, 'plots')} for visualizations.")
-    return 0
+    combined.to_csv(os.path.join(out_dir, 'combined_results.csv'), index=False)
+    print(f"\nSaved: {os.path.join(out_dir, 'combined_results.csv')}")
+    plot_training_time(combined, os.path.join(out_dir, 'plots'))
+    return 0 if not missing else 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
