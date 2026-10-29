@@ -77,7 +77,7 @@ function cleanup_build {
         rm -rf "${NS3_SRC_DIR}/${build_dir_name:?}"
         rm -rf "${NS3_SRC_DIR}/build"
         rm -rf "${NS3_SRC_DIR}/src/applications/astra-sim"
-	rm -rf "${NS3_SRC_DIR}/src/applications/SimCCL"
+	      rm -rf "${NS3_SRC_DIR}/src/applications/SimCCL"
         rm -f "${NS3_SRC_DIR}/.lock-ns3_linux_build"
         mkdir -p "${build_dir}"
         set +x
