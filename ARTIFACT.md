@@ -146,21 +146,33 @@ retrying does not help.
 Times were measured on a 2-vCPU / 8 GB cloud VM (Ubuntu 24.04, GCC 13.3) with `-j 2`; they
 shrink roughly linearly with more cores.
 
+### Pipelining in 512 KiB chunks (as in NCCL/MSCCL)
+
+Real NCCL and MSCCL do not send a schedule step as one transfer: with the Simple protocol, each
+connection has a 4 MiB buffer (`NCCL_BUFFSIZE` default) divided into `NCCL_STEPS` = 8 slots, and
+data moves between peers one 512 KiB slot at a time, so consecutive hops of a path overlap
+(pipelining). The custom-schedule path reproduces this: each MSCCL step is split into 512 KiB
+flows, with the constants taken from NCCL/MSCCL (`init.cc`, `primitives.h`; see
+`SimCCL/src/mock/v2.30/MockNcclGroup.cc`, pipeline sizing). This is the configuration used for
+all MCCL results in the paper and for E2–E4 here (`SIMAI_PROTO_AWARE` left at its default).
+SimAI's native `ncclFlowModel` does not model this pipelining (each step is one flow), so E1,
+which compares against it, turns chunking off with `SIMAI_PROTO_AWARE=0`.
+
 ### E1 – Custom-schedule path vs native NCCL model (claim C1)
 
 `tests/ns3/msccl-nccl-equivalence/run.sh`, wrapped by `artifact/run.sh equiv`. AllGather and
 AllToAll, 256 MB and 1 GB, on the 2×8 topology with no failure and Fail1–3. The `nccl` system
 file routes them through `mscclCustomFlow` with the NCCL-equivalent schedules in
 `inputs/msccl/nccl/` (ring AllGather on SimCCL's rings, P2P AllToAll on SimCCL's PXN channel
-map); `simai_native` uses `ncclFlowModel`. The test sets `SIMAI_PROTO_AWARE=0` so neither side
-pipelines steps into 512 KB chunks (NCCL's native flow model sends each step as one flow).
+map); `simai_native` uses `ncclFlowModel`. The test sets `SIMAI_PROTO_AWARE=0`, so the custom
+path sends each step as one flow like the native model (no 512 KiB pipelining, see above).
 **Pass:** every pair has the same end time, the `nccl` run actually used the MSCCL schedule
 (`Found matching MSCCL XML algorithm` in its log) and the native run did not.
 
 ### E2 – Single collectives under gray failures (claim C2)
 
 Same workloads and topologies, with the configuration used for all MCCL experiments in the paper
-(protocol-aware MSCCL path with 512 KB chunking, PXN on, 3 µs send latency), through the
+(512 KiB pipelining as in NCCL/MSCCL, see above; PXN on; 3 µs send latency), through the
 custom-schedule path with the NCCL-equivalent schedules. Expected slowdown vs no failure
 (reference values):
 
@@ -169,7 +181,7 @@ custom-schedule path with the NCCL-equivalent schedules. Expected slowdown vs no
 | AllGather | 0.76 / 2.92 ms | ≈ 3.4× slower | ≈ 7× slower | ≈ 54–56× slower |
 | AllToAll | 2.72 / 10.86 ms | unchanged (1.00×) | ≈ 8× slower | ≈ 14× slower |
 
-AllToAll is unaffected by Fail1 because, with 512 KB chunking, its NVLink hop to the PXN proxy
+AllToAll is unaffected by Fail1 because, with 512 KiB pipelining, its NVLink hop to the PXN proxy
 overlaps with the NIC transfer, which hides the degraded NVLink of GPU 0. (E1 runs without
 chunking to compare against SimAI's native model, which does not model NCCL's pipelining; there
 the hops are sequential and Fail1 does cost AllToAll ≈ 1.56×.)

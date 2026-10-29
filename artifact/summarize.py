@@ -90,7 +90,8 @@ def summarize_e2(path, plots, outdir):
     text = ["## E2 - Single collectives on 16 GPUs (2 hosts x 8, rail-optimized) under gray failures",
             "",
             "NCCL-equivalent MSCCL schedules through the custom-schedule path, with the "
-            "configuration used for all MCCL experiments in the paper (512 KB chunking, PXN, "
+            "configuration used for all MCCL experiments in the paper (512 KiB pipelining as in "
+            "NCCL/MSCCL, PXN, "
             "3 us send latency). AlgBW = collective size / completion time (GB/s). "
             "Slowdown is relative to the same workload and algorithm with no failure: static "
             "schedules collapse to the speed of the degraded link (the \"Orig\"/\"No reopt\" "

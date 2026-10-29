@@ -134,7 +134,8 @@ collect_row() {
 
 show_csv() { (command -v column >/dev/null && column -s, -t < "$1") || cat "$1"; }
 
-# Paper configuration for E2-E4: protocol-aware MSCCL path (512 KB chunking), PXN, 3 us send latency.
+# Paper configuration for E2-E4: MSCCL steps pipelined in 512 KiB chunks as in NCCL/MSCCL (Simple
+# protocol: 4 MiB NCCL_BUFFSIZE / 8 NCCL_STEPS), PXN, 3 us send latency.
 paper_env() {
   export AS_LOG_LEVEL=2 AS_PXN_ENABLE=1 AS_SEND_LAT=3000 SIMAI_DUMP_DETAILED_FLOWS=0
   unset SIMAI_PROTO_AWARE
