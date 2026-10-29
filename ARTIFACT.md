@@ -9,8 +9,8 @@ the H200 hardware prototype, which are not part of this artifact.)
 
 | | |
 |---|---|
-| Archived artifact (DOI) | **ZENODO-DOI-TODO** |
-| Code | https://github.com/NetMeasurements-Team/SimAI, branch/tag `conext26-ae` |
+| Archived artifact (DOI) | [10.5281/zenodo.23759953](https://doi.org/10.5281/zenodo.23759953) |
+| Code | https://github.com/NetMeasurements-Team/SimAI, tag `conext26-ae-v1` (branch `conext26-ae`) |
 | Hardware | any x86-64 Linux machine, no GPU; ≥ 2 cores, ≥ 8 GB RAM (≈ 0.7 GB per parallel E1–E3 simulation, up to ≈ 3 GB per E4 simulation), ≈ 3 GB disk |
 | Software | Ubuntu 22.04/24.04 (or Docker), GCC ≥ 11, CMake ≥ 3.13, libxml2-dev, Python 3 (matplotlib optional; pandas for the paper-style E4 plots) |
 | Proprietary software / hardware | none |
@@ -67,13 +67,13 @@ dropped in and evaluated, see §6.
 
 **Option A – Zenodo archive (self-contained, includes all submodules):**
 ```bash
-# download SimAI-MCCL-artifact-<rev>.tar.gz from **ZENODO-DOI-TODO**
+# download SimAI-MCCL-artifact-<rev>.tar.gz from https://doi.org/10.5281/zenodo.23759953
 tar xzf SimAI-MCCL-artifact-*.tar.gz && cd SimAI-MCCL-artifact-*
 ```
 
 **Option B – git:**
 ```bash
-git clone --recurse-submodules --branch conext26-ae https://github.com/NetMeasurements-Team/SimAI
+git clone --recurse-submodules --branch conext26-ae-v1 https://github.com/NetMeasurements-Team/SimAI
 cd SimAI
 ```
 (The submodules `SimCCL` and `ns-3-alibabacloud` are pinned to commits on their

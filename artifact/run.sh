@@ -104,7 +104,7 @@ run_sim() {
   mkdir -p "$dir/csv_files"
   ln -sfn "$BASE" "$dir/astra-sim-alibabacloud"
   for f in "$wl" "$topo" "$sys"; do
-    [ -f "$f" ] || { echo "missing input: $f" > "$dir/run.log"; echo 127 > "$dir/exit_code"; return; }
+    [ -f "$f" ] || { echo "missing input: $f" > "$dir/run.log"; echo missing_input > "$dir/exit_code"; return; }
   done
   name="${RUN_PREFIX}_$name"
   echo "$BINARY -t 1 -w $wl -n $topo -c $NET_CONF -s $sys -r $name" > "$dir/command.txt"
@@ -125,7 +125,7 @@ collect_row() {
   rc="$(cat "$dir/exit_code" 2>/dev/null || echo -)"
   if [ "$rc" = 0 ] && [ -n "$t" ]; then status="SUCCESS"
   elif [ "$rc" = 2 ]; then status="STALLED"
-  elif [ "$rc" = 127 ]; then status="MISSING_INPUT"
+  elif [ "$rc" = missing_input ]; then status="MISSING_INPUT"
   else status="FAILED"; fi
   if grep -q "Found matching MSCCL XML algorithm" "$log" 2>/dev/null; then schedule="msccl"; else schedule="native"; fi
   if grep -q "No matching MSCCL XML algorithm" "$log" 2>/dev/null; then schedule="${schedule}+fallback"; fi

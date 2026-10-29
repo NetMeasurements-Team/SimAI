@@ -6,6 +6,7 @@ message: >-
 type: software
 license: Apache-2.0
 repository-code: "https://github.com/NetMeasurements-Team/SimAI"
+doi: "10.5281/zenodo.23759953"
 authors:
   - family-names: Ferrero
     given-names: Michele
