@@ -70,8 +70,10 @@ both cases:
 
 The congested case combines larger transfers, a slower trunk and a smaller
 buffer to trigger backpressure. Both cases require completed messages covering
-all four ranks, matching nonzero stream counts, queue samples and no MMU packet
-loss. Exact pause counts and queue peaks are not fixed.
+all four ranks, matching nonzero stream counts and no MMU packet loss.
+The congested case also requires queue samples; a baseline trace may contain
+only its header because the backend records occupancy changes. Exact pause
+counts and queue peaks are not fixed.
 
 #### Run
 
@@ -104,7 +106,7 @@ NVLS. There is no congestion requirement.
 
 | Build | Cases | Expected result |
 | --- | --- | --- |
-| v2.20 | 15 | Completion with expected collective selection and network messages. |
+| v2.20 | 39 | Completion plus algorithm/protocol IDs and expected network messages. |
 | v2.30 | 55 | Completion plus algorithm/protocol IDs, PAT, automatic thresholds and expected fallbacks. |
 
 Every case requires matching nonzero stream counts and completed network

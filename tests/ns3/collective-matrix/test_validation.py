@@ -40,9 +40,9 @@ class ValidationTests(unittest.TestCase):
                            '100 100 1024 0 10 10\n' for r in range(4))
         (self.folder/'test.fct.txt').write_text(self.fct)
 
-    def write_csv(self, version='v2.30'):
+    def write_csv(self, legacy=False):
         fields = list(self.rows[0]) if self.rows else list(self.fieldnames)
-        if version == 'v2.20':
+        if legacy:
             fields = [f for f in fields if f not in ['algorithm', 'protocol']]
         self.fieldnames = fields
         with (self.folder/'ncclFlowModel_detailed_flows.csv').open('w', newline='') as handle:
@@ -79,14 +79,17 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'empty generated'):
             self.check()
 
-    def test_wrong_binary_version_cannot_pass(self):
-        self.write_csv('v2.20')
-        with self.assertRaisesRegex(ValueError, 'schema'):
-            self.check()
+    def test_legacy_schema_rejected_for_both_versions(self):
+        self.write_csv(legacy=True)
+        for version in ['v2.20', 'v2.30']:
+            with self.subTest(version=version):
+                with self.assertRaisesRegex(ValueError, 'no algorithm/protocol columns'):
+                    self.check(version)
 
-    def test_legacy_schema(self):
-        self.write_csv('v2.20')
-        self.assertEqual(self.check('v2.20')['generated_flows'], 4)
+    def test_selection_columns_supported_by_both_versions(self):
+        for version in ['v2.20', 'v2.30']:
+            with self.subTest(version=version):
+                self.assertEqual(self.check(version)['generated_flows'], 4)
 
     def test_missing_completion_marker(self):
         (self.folder/'run.log').write_text(self.log.replace('All messages finished.', ''))
@@ -159,7 +162,7 @@ class RunnerTests(unittest.TestCase):
         return binary
 
     def test_prepare_both_versions_without_binary(self):
-        for version, count in [('2.20', 15), ('2.30', 55)]:
+        for version, count in [('2.20', 39), ('2.30', 55)]:
             output = self.folder/version
             result = self.invoke('--nccl-version', version, '--prepare-only',
                                  '--binary', str(self.folder/'missing'), '--output', str(output))

@@ -57,8 +57,13 @@ def check_outputs(folder, name, expectation):
     if not queue_trace.is_file():
         raise ValueError("missing queue trace: enable ENABLE_MONITOR 1 in network.conf "
                          "and rebuild the simulator with queue-monitor support")
-    queue_rows = queue_trace.read_text().splitlines()[1:]
-    if not queue_rows:
+    queue_lines = queue_trace.read_text().splitlines()
+    if not queue_lines:
+        raise ValueError("empty queue trace: missing header")
+    queue_rows = queue_lines[1:]
+    # The backend emits only occupancy changes, so an uncongested baseline
+    # can legitimately have a header-only trace. Congestion must be observed.
+    if not queue_rows and expectation == "present":
         raise ValueError("queue trace contains no samples; check MON_START and workload duration")
     for line in queue_rows:
         fields = line.split(',')

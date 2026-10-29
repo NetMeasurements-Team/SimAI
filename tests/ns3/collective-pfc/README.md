@@ -45,7 +45,9 @@ The validator requires:
 - Matching nonzero rank-0 injected/finished stream counts.
 - Positive completed-message FCT records covering all four ranks and no MMU loss diagnostics.
 - An empty baseline PFC trace; at least one XOFF and one XON in the congested case.
-- A nonempty queue trace with valid samples.
+- A queue trace file in both cases, with valid samples when present.
+- A nonempty queue trace in the congested case. The backend logs only sampled
+  occupancy changes, so the uncongested baseline may have a header-only trace.
 
 Queue sampling uses `ENABLE_MONITOR 1` and a 1 us `QLEN_MON_INTERVAL`, starting
 at `MON_START`. The simulator must support queue monitoring; `QLEN_MON_FILE`
@@ -60,6 +62,12 @@ ambiguous in this workload test.
 
 Additional collective CSV reports use the simulator's compiled result path and
 a unique run-name prefix.
+
+Validate the trace checker without a simulator:
+
+```bash
+python3 tests/ns3/collective-pfc/test_validation.py
+```
 
 ## Extending the test
 
