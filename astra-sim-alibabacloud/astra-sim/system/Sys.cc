@@ -28,6 +28,7 @@ LICENSE file in the root directory of this source tree.
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <numeric>
 
 MockNccl::MockNcclGroup* GlobalGroup = nullptr;
@@ -1581,11 +1582,23 @@ void Sys::call_events() {
     goto FINISH_CHECK;
   }
   for (auto& callable : event_queue[Sys::boostedTick()]) {
+    const EventType event_type = std::get<1>(callable);
+    const auto report_exception = [this, event_type](const char* reason) {
+      const std::string message =
+          "Node " + std::to_string(id) + ": callback for event " +
+          std::to_string(static_cast<int>(event_type)) + " at tick " +
+          std::to_string(Sys::boostedTick()) + " threw an exception: " + reason +
+          ". Discarding event and continuing.";
+      MockNcclLog::getInstance()->writeLog(NcclLogLevel::ERROR, "%s", message.c_str());
+      std::cerr << message << std::endl;
+    };
     try {
       pending_events--;
-      (std::get<0>(callable))->call(std::get<1>(callable), std::get<2>(callable));
+      std::get<0>(callable)->call(event_type, std::get<2>(callable));
+    } catch (const std::exception& error) {
+      report_exception(error.what());
     } catch (...) {
-      std::cerr << "warning! a callable is removed before call" << std::endl;
+      report_exception("unknown non-standard exception");
     }
   }
   {
