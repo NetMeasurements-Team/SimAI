@@ -57,20 +57,25 @@ int ASTRASimNetwork::sim_comm_size(AstraSim::sim_comm comm, int *size) {
 }
 
 int ASTRASimNetwork::sim_finish() {
-  for (auto it = nodeHash.begin(); it != nodeHash.end(); ++it) {
-    pair<int, int> p = it->first;
-    if (p.second == 0) {
-      std::cout << "sim_finish on sent, " << " Thread id: " << pthread_self() << std::endl;
-      cout << "All data sent from node " << p.first << " is " << it->second
-           << "\n";
-    } else {
-      std::cout << "sim_finish on received, " << " Thread id: " << pthread_self() << std::endl;
-      cout << "All data received by node " << p.first << " is " << it->second
-           << "\n";
+  {
+    #ifdef NS3_MTP
+    MtpInterface::CriticalSection cs;
+    #endif
+    for (auto it = nodeHash.begin(); it != nodeHash.end(); ++it) {
+      pair<int, int> p = it->first;
+      if (p.second == 0) {
+        std::cout << "sim_finish on sent, " << " Thread id: " << pthread_self() << std::endl;
+        cout << "All data sent from node " << p.first << " is " << it->second
+             << "\n";
+      } else {
+        std::cout << "sim_finish on received, " << " Thread id: " << pthread_self() << std::endl;
+        cout << "All data received by node " << p.first << " is " << it->second
+             << "\n";
+      }
     }
+    std::cout << "Waiting for any pending message..." << std::endl;
   }
   waiting_sim_finish = true;
-  std::cout << "Waiting for any pending message..." << std::endl;
   Simulator::Schedule(Time(0), &check_sim_finish);
   return 0;
 }
