@@ -14,3 +14,7 @@
 	path = SimAI-CLEM
 	url = https://github.com/aliyun/SimAI-CLEM.git
 	branch = master
+[submodule "astra-sim-alibabacloud/inputs/msccl"]
+	path = astra-sim-alibabacloud/inputs/msccl
+	url = ../msccl-schedules.git
+	branch = master
