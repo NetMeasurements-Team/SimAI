@@ -46,6 +46,33 @@ class BaseExecutionTimePredictor(ABC):
         self.replica_scheduler_config = replica_scheduler_config
         self.simulation_config = simulation_config
 
+    def _get_vidur_compute_gap_us(self, batch: Batch) -> float:
+        """Mean inter-allreduce compute gap (us) from Vidur's per-layer predictions.
+
+        Each Transformer block performs two TP allreduces (one at the end of the
+        attention sublayer, one at the end of the MLP sublayer). The mean pure-compute
+        window between two consecutive allreduces is therefore half of a block's
+        non-communication time. All ``_get_*_execution_time`` values are in ms
+        (matching ``TPTimePredictor``, whose bridge returns us->ms), so the result is
+        converted to us for ``predict_collective(..., compute_gap_us)``.
+        """
+        block_compute_ms = (
+            self._get_attn_norm_layer_act_execution_time(batch)
+            + self._get_attention_layer_pre_proj_execution_time(batch)
+            + self._get_attention_rope_execution_time(batch)
+            + self._get_attention_kv_cache_save_execution_time(batch)
+            + self._get_attention_decode_execution_time(batch)
+            + self._get_attention_prefill_execution_time(batch)
+            + self._get_attention_layer_post_proj_execution_time(batch)
+            + self._get_mlp_norm_layer_act_execution_time(batch)
+            + self._get_mlp_layer_up_proj_execution_time(batch)
+            + self._get_mlp_layer_act_execution_time(batch)
+            + self._get_mlp_layer_down_proj_execution_time(batch)
+            + self._get_add_layer_act_execution_time(batch)
+        )
+        # 2 TP allreduces per block -> mean compute between allreduces; ms -> us.
+        return max(block_compute_ms / 2.0, 0.0) * 1000.0
+
     def get_execution_time(self, batch: Batch, pipeline_stage: int) -> ExecutionTime:
         if pipeline_stage == self._replica_config.num_pipeline_stages - 1:
             pipeline_parallel_communication_time = 0
@@ -62,13 +89,30 @@ class BaseExecutionTimePredictor(ABC):
             # if self._config.simai_enable:
             # if self._config.simai_simulation_enable:
             if self._config.backend == "simai_simulation":
-                tensor_parallel_communication_time = self._tp_time_predictor.get_execution_time(batch)
-                
+                # Derive the inter-collective compute gap from Vidur's own per-layer
+                # compute predictions (steady-state DCQCN recovery window), unless
+                # explicitly disabled in config. TPTimePredictor falls back to the
+                # fixed simai_compute_gap_us if the derivation fails or is disabled.
+                compute_gap_us = None
+                if getattr(self._config, "simai_compute_gap_from_vidur", True):
+                    try:
+                        compute_gap_us = self._get_vidur_compute_gap_us(batch)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            f"Failed to derive compute gap from Vidur predictions "
+                            f"({e}); falling back to fixed simai_compute_gap_us"
+                        )
+                        compute_gap_us = None
+
+                tensor_parallel_communication_time = self._tp_time_predictor.get_execution_time(
+                    batch, compute_gap_us=compute_gap_us
+                )
+
                 # TODO(chentong): fix potential -1 return value
                 # Result may be -1 in some cases
                 # 有可能跑出来结果是 -1
                 assert tensor_parallel_communication_time >= 0, "tensor_parallel_communication_time must be non-negative"
-                
+
                 # If simai backend returns -1, fall back to vidur's lookup table method
                 # 如果 simai 后端返回 -1，则调用 vidur 的查表方法 
                 if tensor_parallel_communication_time == -1:

@@ -730,6 +730,23 @@ class BaseExecutionTimePredictorConfig(BasePolyConfig):
         default="../astra-sim-alibabacloud/inputs/config/SimAI.conf",
         metadata={"help": "Path to the simai config file."},
     )
+    simai_compute_gap_us: int = field(
+        default=1000,
+        metadata={"help": "Fixed simulated compute gap in microseconds inserted "
+                  "between consecutive SimAI collectives (steady-state DCQCN "
+                  "recovery window). Only used when simai_compute_gap_from_vidur "
+                  "is False, or as a fallback when the Vidur-derived gap cannot "
+                  "be computed. 0 = stop the simulator immediately when idle."},
+    )
+    simai_compute_gap_from_vidur: bool = field(
+        default=True,
+        metadata={"help": "Derive the inter-collective compute gap from Vidur's "
+                  "own per-layer compute predictions (the mean pure-compute window "
+                  "between two consecutive TP allreduces, i.e. half a Transformer "
+                  "block's compute) instead of a fixed simai_compute_gap_us value. "
+                  "This models the real training loop: allreduce -> compute -> "
+                  "allreduce, letting DCQCN recover to steady-state."},
+    )
     aicb_force_bs1: bool = field(
         default=False,
         metadata={"help": "AICB fallback switch: force bs=1 for CSV generation. "

@@ -3,11 +3,17 @@ from vidur.entities import Batch
 from enum import Enum
 from vidur.config import ReplicaConfig, BaseExecutionTimePredictorConfig, BaseModelConfig
 from vidur.execution_time_predictor.SimAIWorkload import SimAIWorkload, WorkItem
-from typing import Dict
+from typing import Dict, Optional
 import subprocess
 import csv
 import os
 import hashlib
+
+try:
+    from pysimai import PySimAIBridge
+    _HAS_PYSIMAI = True
+except ImportError:
+    _HAS_PYSIMAI = False
 
 # TPTimePredictor是一个单例
 # 只需要考虑单次allreduce的时间
@@ -52,10 +58,20 @@ class TPTimePredictor:
         # self.workload_path = '/disk2/futianhao/software3/sim-ai-inference-n/simulator_output/tmp_simai_workload'
         self.cache: Dict[int, float] = {}
 
+        self.bridge = None
+        if _HAS_PYSIMAI:
+            try:
+                topo = os.path.abspath(self.predictor_config.simai_simulation_topo)
+                conf = os.path.abspath(self.predictor_config.simai_simulation_config)
+                self.bridge = PySimAIBridge.get_instance()
+                self.bridge.init_network(topo, conf, num_threads=16)
+            except Exception as e:
+                print(f"[TPTimePredictor] Failed to initialize pysimai bridge: {e}, falling back to subprocess")
+                self.bridge = None
 
     # > 重写 增加两个功能 复用相同的workload 和 相同command的结果
     # > rewrite: add two features to reuse same workloads and results of same commands
-    def get_execution_time(self, batch: Batch):
+    def get_execution_time(self, batch: Batch, compute_gap_us: Optional[int] = None):
         self.workload.flush()
         num_tokens_in_batch = batch._total_num_tokens_rounded
         all_reduce_bytes = self.hidden_size * num_tokens_in_batch * self.tensor_size
@@ -68,6 +84,27 @@ class TPTimePredictor:
         # If result is already in cache, return directly
         
         if cache_key in self.cache:
+            return (self.cache[cache_key]
+                + self.predictor_config.nccl_cpu_launch_overhead_ms
+                + self.predictor_config.nccl_cpu_skew_overhead_per_device_ms
+                * self.replica_config.tensor_parallel_size**1.25)
+
+        # In-memory pysimai path (Stage 1: eliminate subprocess and disk I/O)
+        if self.bridge is not None:
+            ranks = list(range(self.replica_config.tensor_parallel_size))
+            # compute_gap_us may be passed explicitly by BaseExecutionTimePredictor
+            # (derived from Vidur's per-layer compute predictions); otherwise fall
+            # back to the fixed config value.
+            if compute_gap_us is None:
+                compute_gap_us = getattr(self.predictor_config, "simai_compute_gap_us", 0)
+            # pybind11 requires an int-like compute_gap_us (SupportsInt); the
+            # Vidur-derived gap is a float (mean of per-layer ms predictions),
+            # so truncate at the bridge boundary.
+            latency_us = self.bridge.predict_collective(
+                "ALLREDUCE", ranks, all_reduce_bytes, int(compute_gap_us)
+            )
+            latency = latency_us * 1e-3  # us to ms
+            self.cache[cache_key] = latency
             return (self.cache[cache_key]
                 + self.predictor_config.nccl_cpu_launch_overhead_ms
                 + self.predictor_config.nccl_cpu_skew_overhead_per_device_ms
@@ -135,7 +172,7 @@ class TPTimePredictor:
             
             # 移动结果文件到带标识符的文件名
             # Move result file to identified filename
-            original_result_file = f'{self.simai_dir}/ncclFlowModel_EndToEnd.csv'
+            original_result_file = f'{self.simai_dir}/ncclFlowModel__EndToEnd.csv'
             if os.path.exists(original_result_file):
                 os.rename(original_result_file, result_file)
             else:
