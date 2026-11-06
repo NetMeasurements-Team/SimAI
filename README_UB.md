@@ -29,7 +29,7 @@ Run the simulator using the generated UB topology and a sample AllReduce workloa
   ./bin/SimAI_simulator \
   -t 1 \
   -w astra-sim-alibabacloud/inputs/workloads/single_collective/16_gpus/ag-268435456_bytes \
-  -s astra-sim-alibabacloud/inputs/system/nccl_flow_model.txt \
+  -s astra-sim-alibabacloud/inputs/system/default.txt \
   -n Rail_Opti_SingleToR_16g_8gps_400Gbps_H100_UB \
   -c astra-sim-alibabacloud/inputs/config/SimAI.conf
 ```
