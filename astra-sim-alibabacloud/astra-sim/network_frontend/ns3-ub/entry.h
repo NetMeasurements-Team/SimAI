@@ -12,7 +12,7 @@
 #include "common.h"                         
 #include "astra-sim/system/AstraNetworkAPI.hh"
 #include "astra-sim/system/Sys.hh"
-#include "astra-sim/system/MockNcclLog.h"
+#include "SimCCL/mock/MockNcclLog.h"
 #include "ns3/ub-app.h"
 #include "ns3/ub-traffic-gen.h"
 #include "ns3/ub-transport.h"
@@ -27,6 +27,12 @@
 using namespace ns3;
 using namespace utils;
 using namespace std;
+
+// ACKs and completion callbacks may outlive every Sys object. Read the backend
+// clock directly while preserving the tick conversion and logical offset.
+inline AstraSim::Tick frontend_tick() {
+  return Simulator::Now().GetNanoSeconds() / CLOCK_PERIOD + AstraSim::Sys::offset;
+}
 
 class MsgEvent {
 public:
@@ -181,7 +187,7 @@ inline void check_sim_finish() {
                 MtpInterface::CriticalSection cs;
                 #endif
                 std::cout   << "[UB] All messages finished. Stopping simulation at "
-                            << AstraSim::Sys::boostedTick() << " ns." 
+                            << frontend_tick() << " ns."
                             << std::endl;
             }
         });
@@ -208,7 +214,7 @@ inline void ub_task_completed_callback(FILE* fout, uint32_t nodeId, uint32_t jet
     NcclLog->writeLog(
       NcclLogLevel::INFO,
       "task_completed, %d -> %d, flow_id %d, tag %u, total bytes %llu, at the tick %d",
-      ctx.src,  ctx.dst, ctx.flow_id, ctx.tag, ctx.remaining_bytes, AstraSim::Sys::boostedTick());
+      ctx.src,  ctx.dst, ctx.flow_id, ctx.tag, ctx.remaining_bytes, frontend_tick());
 
     {
 #ifdef NS3_MTP
@@ -254,7 +260,7 @@ inline void ub_task_completed_callback(FILE* fout, uint32_t nodeId, uint32_t jet
         received_chunksize[FlowIdKey{ctx.flow_id, {ctx.src, ctx.dst}}] += size;
         NcclLog->writeLog(NcclLogLevel::DEBUG,
       "received, %d -> %d, flow_id %d, tag %u, total bytes %llu, at the tick %d",
-      ctx.src,  ctx.dst, ctx.flow_id, ctx.tag, received_chunksize[FlowIdKey{ctx.flow_id, {ctx.src, ctx.dst}}], AstraSim::Sys::boostedTick());
+      ctx.src,  ctx.dst, ctx.flow_id, ctx.tag, received_chunksize[FlowIdKey{ctx.flow_id, {ctx.src, ctx.dst}}], frontend_tick());
         
         if (is_receive_finished(ctx.src, ctx.dst, ctx.flow_id)) {
             notify_size_recv = received_chunksize[FlowIdKey{ctx.flow_id, {ctx.src, ctx.dst}}];

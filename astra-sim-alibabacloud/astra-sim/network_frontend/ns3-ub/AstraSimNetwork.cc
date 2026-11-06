@@ -291,6 +291,7 @@ int main(int argc, char* argv[]) {
     for (int j = 0; j < nodes_num+1; j++) {
         networks[j] = new ASTRASimNetwork(j, /*npu_offset=*/0);
         systems[j] = new AstraSim::Sys(
+            param.system_conf,   // system config file
             networks[j],         // network
             nullptr,             // memory (unused)
             j,                   // id
@@ -307,7 +308,6 @@ int main(int argc, char* argv[]) {
             0,                   // stat_row
             RESULT_PATH,         // path
             param.run_name,      // run_name
-            true,                // separate_log
             false,               // rendezvous_enabled
             gpu_type,            // _gpu_type
             {gpu_count},         // _all_gpus
