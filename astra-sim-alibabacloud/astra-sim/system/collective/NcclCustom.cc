@@ -287,7 +287,7 @@ void NcclCustom::release_local_children_unlocked(int channel_id, int flow_id) {
 
 void NcclCustom::run(EventType event, CallData* data) {
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
-    NcclLog->writeLog(NcclLogLevel::DEBUG, "NcclCustom::run ENTRY: ID %d, Event %s", id, getEventTypeString(event).c_str());
+    NcclLog->writeLog(NcclLogLevel::DEBUG, "NcclCustom::run ENTRY: ID %d, Event %s", id, to_cstr(event));
 
     switch (event) {
         case EventType::StreamInit: {

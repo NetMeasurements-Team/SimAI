@@ -1720,11 +1720,13 @@ void Sys::call_events() {
     goto FINISH_CHECK;
   }
   for (auto& callable : event_queue[Sys::boostedTick()]) {
+    Callable* const target = std::get<0>(callable);
     const EventType event_type = std::get<1>(callable);
+    CallData* const event_data = std::get<2>(callable);
     const auto report_exception = [this, event_type](const char* reason) {
       const std::string message =
           "Node " + std::to_string(id) + ": callback for event " +
-          std::to_string(static_cast<int>(event_type)) + " at tick " +
+          to_cstr(event_type) + " at tick " +
           std::to_string(Sys::boostedTick()) + " threw an exception: " + reason +
           ". Discarding event and continuing.";
       MockNcclLog::getInstance()->writeLog(NcclLogLevel::ERROR, "%s", message.c_str());
@@ -1732,7 +1734,7 @@ void Sys::call_events() {
     };
     try {
       pending_events--;
-      std::get<0>(callable)->call(event_type, std::get<2>(callable));
+      target->call(event_type, event_data);
     } catch (const std::exception& error) {
       report_exception(error.what());
     } catch (...) {
