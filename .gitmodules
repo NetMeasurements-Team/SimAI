@@ -9,7 +9,7 @@
 [submodule "ns-3-alibabacloud"]
 	path = ns-3-alibabacloud
 	url = ../ns-3-alibabacloud.git
-	branch = master
+	branch = simai-runtime-inference
 [submodule "SimAI-CLEM"]
 	path = SimAI-CLEM
 	url = https://github.com/aliyun/SimAI-CLEM.git
