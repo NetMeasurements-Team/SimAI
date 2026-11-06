@@ -34,6 +34,10 @@
 #endif
 
 #include "SimCCL/mock/MockNcclLog.h"
+#include "astra-sim/system/Common.hh"
+#include "astra-sim/system/SendPacketEventHandlerData.hh"
+#include "astra-sim/system/Sys.hh"
+#include "astra-sim/network_frontend/ns3/AstraSimNetwork.h"
 #include "common.h"
 
 using namespace ns3;
@@ -583,5 +587,100 @@ inline int setup_ns3_simulation(const string& network_topo, const string& networ
   NS_LOG_INFO("Run Simulation.");
 
   return 0;
+}
+
+/**
+ * Fork addition: enable the multithreaded ns-3 simulator for the in-memory
+ * runtime path. Mirrors what main() does for the static CLI, plus an explicit
+ * MinLookahead override when using multiple worker threads.
+ */
+inline void enable_ns3_mtp(int num_threads, int min_lookahead_ns) {
+#ifdef NS3_MTP
+  if (num_threads > 1) {
+    MtpInterface::Enable(num_threads);
+    Config::SetDefault(
+        "ns3::MultithreadedSimulatorImpl::MinLookahead",
+        TimeValue(NanoSeconds(min_lookahead_ns)));
+  } else {
+    GlobalValue::Bind("PartitionSchedulingMethod", StringValue("ByPendingEventCount"));
+  }
+#endif
+}
+
+/**
+ * Fork addition: result of constructing the per-node network adapters and
+ * Astra-Sim Sys instances. Owned pointers are `new`-allocated by
+ * build_astra_sim_systems(); the caller takes ownership (and is responsible
+ * for deleting them).
+ */
+struct SimAINetworkSetup {
+  std::vector<ASTRASimNetwork*> networks;
+  std::vector<AstraSim::Sys*> systems;
+  int nodes_num = 0;
+  int gpu_num = 0;
+  int gpus_per_server = 0;
+  int nvswitch_num = 0;
+  std::vector<int> nvswitches;
+};
+
+/**
+ * Fork addition: single source of truth for constructing the Astra-Sim Sys
+ * instances over the (already-built) ns-3 network. Used by both the static CLI
+ * (AstraSimNetwork.cc main()) and SimAIRuntime, so the Sys constructor and
+ * node2nvswitch mapping live in exactly one place.
+ */
+inline SimAINetworkSetup build_astra_sim_systems(
+    const std::string& system_conf,
+    const std::string& workload_file,
+    const std::string& run_name,
+    GPUType gpu_type) {
+  SimAINetworkSetup out;
+  out.nodes_num = node_num - switch_num;
+  out.gpu_num = node_num - nvswitch_num - switch_num;
+  out.gpus_per_server = gpus_per_server;
+  out.nvswitch_num = nvswitch_num;
+  out.nvswitches = NVswitchs;
+
+  std::map<int, int> node2nvswitch;
+  for (int i = 0; i < out.gpu_num; ++i) {
+    node2nvswitch[i] = out.gpu_num + i / out.gpus_per_server;
+  }
+  for (int i = out.gpu_num; i < out.gpu_num + out.nvswitch_num; ++i) {
+    node2nvswitch[i] = i;
+    NVswitchs.push_back(i);
+  }
+  out.nvswitches = NVswitchs;
+
+  out.networks.resize(out.nodes_num, nullptr);
+  out.systems.resize(out.nodes_num, nullptr);
+  for (int j = 0; j < out.nodes_num; j++) {
+    out.networks[j] = new ASTRASimNetwork(j, 0);
+    out.systems[j] = new AstraSim::Sys(
+        system_conf,
+        out.networks[j],
+        nullptr,
+        j,
+        0,
+        1,
+        {out.nodes_num},
+        {1},
+        "",
+        workload_file,
+        1,
+        1,
+        1,
+        1,
+        0,
+        "./ncclFlowModel_",
+        run_name,
+        false,
+        gpu_type,
+        {out.gpu_num},
+        out.nvswitches,
+        out.gpus_per_server);
+    out.systems[j]->nvswitch_id = node2nvswitch[j];
+    out.systems[j]->num_gpus = out.nodes_num - out.nvswitch_num;
+  }
+  return out;
 }
 #endif

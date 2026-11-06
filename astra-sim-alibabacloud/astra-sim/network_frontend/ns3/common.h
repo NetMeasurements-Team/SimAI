@@ -39,11 +39,16 @@
 #include <iostream>
 #include <unordered_map>
 #include <utility>
+#include "astra-sim/system/Common.hh"
 
 using namespace ns3;
 using namespace std;
 
-NS_LOG_COMPONENT_DEFINE("GENERIC_SIMULATION");
+inline ns3::LogComponent& simai_log_component() {
+    static ns3::LogComponent g_log = ns3::LogComponent("GENERIC_SIMULATION", __FILE__);
+    return g_log;
+}
+static ns3::LogComponent& g_log = simai_log_component();
 
 // TODO replace with a NetworkConfig class
 inline uint32_t cc_mode = 1;
@@ -60,7 +65,7 @@ inline std::string data_rate, link_delay, topology_file, flow_file, trace_file, 
 inline std::string fct_output_file = "fct.txt";
 inline std::string pfc_output_file = "pfc.txt";
 inline std::string send_output_file = "send.txt";
-std::string recv_output_file = "recv.txt";
+inline std::string recv_output_file = "recv.txt";
 
 inline double alpha_resume_interval = 55, rp_timer, ewma_gain = 1 / 16;
 inline double rate_decrease_interval = 4;
@@ -154,7 +159,7 @@ inline Ipv4Address node_id_to_ip(uint32_t id) {
   return Ipv4Address(0x0b000001 + ((id / 256) * 0x00010000) + ((id % 256) * 0x00000100));
 }
 
-uint32_t ip_to_node_id(Ipv4Address ip) { return (ip.Get() >> 8) & 0xffff; }
+inline uint32_t ip_to_node_id(Ipv4Address ip) { return (ip.Get() >> 8) & 0xffff; }
 
 inline void get_pfc(FILE *fout, Ptr<QbbNetDevice> dev, uint32_t type) {
   fprintf(fout, "%lu %u %u %u %u\n", Simulator::Now().GetTimeStep(),
@@ -186,7 +191,7 @@ inline void monitor_qlen(FILE* qlen_output, NodeContainer* n) {
   Simulator::Schedule(MicroSeconds(qlen_mon_interval), &monitor_qlen, qlen_output, n);
 }
 
-void monitor_bw(FILE* bw_output, NodeContainer* n) {
+inline void monitor_bw(FILE* bw_output, NodeContainer* n) {
   for (uint32_t i = 0; i < n->GetN(); i++) {
     if (n->Get(i)->GetNodeType() == 1) { // is switch
       Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(n->Get(i));

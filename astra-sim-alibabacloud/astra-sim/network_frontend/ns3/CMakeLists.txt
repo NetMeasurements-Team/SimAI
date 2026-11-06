@@ -108,3 +108,12 @@ add_compile_options(
 )
 
 add_subdirectory("${NS3_SRC_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/ns3")
+
+if(TARGET scratch_AstraSimNetwork)
+    target_include_directories(
+        scratch_AstraSimNetwork
+        PRIVATE
+            "${ASTRA_SIM_DIR}/.."
+            "${ASTRA_SIM_DIR}/network_frontend/ns3"
+    )
+endif()

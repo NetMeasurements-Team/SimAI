@@ -37,6 +37,11 @@ function compile {
     mkdir -p "${SIM_LOG_DIR}"/topo/
     mkdir -p "${SIM_LOG_DIR}"/results/
 
+    # Auto-detect pybind11 cmake config for the pysimai extension
+    PYBIND11_DIR=""
+    if command -v python >/dev/null 2>&1 && python -c "import pybind11" >/dev/null 2>&1; then
+             PYBIND11_DIR="$(python -c 'import pybind11; print(pybind11.get_cmake_dir())')"
+    fi
     build_dir=${ROOT_DIR}/$(get_build_dir_name $profile)
     case "$mode" in
     "ns3")
@@ -46,19 +51,20 @@ function compile {
           -DNS3_EXPORT_HEADERS_AS_STUBS="${ns3_stub_headers}" \
           -DNS3_USE_RELATIVE_PATHS_SYMLINKS="${ns3_relative_links}" \
           -DNS3_TESTS="${ns3_tests}" \
+           ${PYBIND11_DIR:+-Dpybind11_DIR="${PYBIND11_DIR}"} \
           -DSIMAI_MODE="$mode" -DSIMAI_NCCL_VERSION="${nccl_version}" -DNS3_MTP=ON \
           -G "Unix Makefiles" -S "${ROOT_DIR}" -B "${build_dir}" || return $?
-        cmake --build "${build_dir}" -j "$(($(lscpu | grep '^CPU(s):' | awk '{print $2}') - 1))"
+        cmake --build "${build_dir}" -j "$(( ($(lscpu | grep '^CPU(s):' | awk '{print $2}') - 1) / 2 ))"
         ;;
     "phy")
         mkdir -p "${build_dir}"
         cmake -DSIMAI_MODE="$mode" -DSIMAI_NCCL_VERSION="${nccl_version}" -G "Unix Makefiles" -S "${ROOT_DIR}" -B "${build_dir}" || return $?
-        cmake --build "${build_dir}" -j "$(($(lscpu | grep '^CPU(s):' | awk '{print $2}') - 1))"
+        cmake --build "${build_dir}" -j "$(( ($(lscpu | grep '^CPU(s):' | awk '{print $2}') - 1) / 2 ))"
         ;;
     "analytical")
         mkdir -p "${build_dir}"
         cmake -DSIMAI_MODE="$mode" -DSIMAI_NCCL_VERSION="${nccl_version}" -G "Unix Makefiles" -S "${ROOT_DIR}" -B "${build_dir}" || return $?
-        cmake --build "${build_dir}" -j "$(($(lscpu | grep '^CPU(s):' | awk '{print $2}') - 1))"
+        cmake --build "${build_dir}" -j "$(( ($(lscpu | grep '^CPU(s):' | awk '{print $2}') - 1) / 2 ))"
         ;;
     esac
 }

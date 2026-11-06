@@ -115,3 +115,73 @@ add_custom_target(create_symlink ALL
         DEPENDS ${target}
         COMMENT "Creating ${symlink_name} symlink..."
 )
+
+# Optional in-memory Python C-extension (pysimai)
+find_package(pybind11 QUIET)
+if(pybind11_FOUND AND SIMAI_MODE STREQUAL "ns3")
+    message(STATUS "Found pybind11: configuring pysimai Python extension target")
+    # Resolve libstdc++ against the active Python env's lib dir and record it in
+    # the pysimai RUNPATH. The conda env's libstdc++ (>= GLIBCXX_3.4.32) is
+    # required by pyarrow/libarrow, which is imported later in the same process;
+    # without this the system libstdc++ is loaded first and the import crashes.
+    # This replaces the old LD_LIBRARY_PATH workaround: no env var needed.
+    if(DEFINED Python3_EXECUTABLE)
+        set(_simai_python "${Python3_EXECUTABLE}")
+    elseif(DEFINED PYTHON_EXECUTABLE)
+        set(_simai_python "${PYTHON_EXECUTABLE}")
+    else()
+        set(_simai_python "python3")
+    endif()
+    execute_process(
+        COMMAND "${_simai_python}"
+                -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))"
+        OUTPUT_VARIABLE PYTHON_LIB_DIR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NOT PYTHON_LIB_DIR)
+        message(WARNING "Could not determine Python LIBDIR; pysimai may load the system libstdc++")
+    endif()
+    # Mirror CMAKE_OUTPUT_DIRECTORY from the ns-3 subproject: its
+    # include_directories() are scoped to the ns-3 subtree, but pysimai needs
+    # the generated headers (e.g. ns3/mtp-interface.h) from that build dir.
+    if("${NS3_OUTPUT_DIRECTORY}" STREQUAL "")
+        set(NS3_BUILD_INCLUDE_DIR "${NS3_SRC_DIR}/build/include")
+    elseif(IS_ABSOLUTE "${NS3_OUTPUT_DIRECTORY}")
+        set(NS3_BUILD_INCLUDE_DIR "${NS3_OUTPUT_DIRECTORY}/include")
+    else()
+        set(NS3_BUILD_INCLUDE_DIR "${NS3_SRC_DIR}/${NS3_OUTPUT_DIRECTORY}/include")
+    endif()
+    pybind11_add_module(pysimai
+        "${ASTRA_SIM_DIR}/runtime/pybind_simai.cc"
+        "${ASTRA_SIM_DIR}/runtime/SimAIRuntime.cc"
+        "${ASTRA_SIM_DIR}/network_frontend/ns3/AstraSimNetwork.cc"
+    )
+    target_include_directories(pysimai PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim-alibabacloud"
+        "${ASTRA_SIM_DIR}"
+        "${ASTRA_SIM_DIR}/network_frontend"
+        "${ASTRA_SIM_DIR}/runtime"
+        "${ASTRA_SIM_DIR}/network_frontend/ns3"
+        "${NS3_SRC_DIR}/src/applications"
+        "${NS3_BUILD_INCLUDE_DIR}"
+    )
+    # Enable the multithreaded ns-3 simulator (MultithreadedSimulatorImpl +
+    # MtpInterface::Enable(num_threads)) for the in-memory Python backend so
+    # that init_network(..., num_threads=N) actually partitions the topology
+    # across N threads instead of falling back to the single-threaded
+    # DefaultSimulatorImpl.
+    target_compile_definitions(pysimai PRIVATE NS3_MTP)
+    if(TARGET scratch_AstraSimNetwork)
+        target_link_libraries(pysimai PRIVATE "${ns3-libs}")
+    endif()
+    if(PYTHON_LIB_DIR)
+        target_link_options(pysimai PRIVATE "-Wl,-rpath,${PYTHON_LIB_DIR}")
+    endif()
+    set_target_properties(pysimai PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin"
+    )
+else()
+    message(STATUS "pysimai Python extension skipped (pybind11 not found or SIMAI_MODE != ns3)")
+endif()
