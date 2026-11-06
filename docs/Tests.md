@@ -152,6 +152,20 @@ validation logic. Use `common/` for configuration shared by multiple tests.
 Document the purpose, pass criteria and commands here, and keep detailed checks
 in a README.md inside the test directory. Other modes can use `tests/analytical/` or `tests/phy/`.
 
+## pysimai runtime tests
+
+`tests/pysimai/` holds the in-memory bridge tests. They import `vidur` / `pysimai`
+and need the `vidur` conda environment, so they are separate from the ns-3
+backend tests above.
+
+| Script | What it checks |
+| --- | --- |
+| `test_runtime.py` | `init_network`, sync `predict_collective`, async `post_collective` + callback, monotonic clock. |
+| `test_compute_gap.py` | Vidur-derived compute-gap math, plumbing, and fixed-gap fallback. |
+| `benchmark_legacy_parity.py` | Optional manual parity check vs the retired subprocess path (not a gate). |
+
+See [tests/pysimai/README.md](../tests/pysimai/README.md) for usage.
+
 ## Native backend tests
 
 The ns-3 backend includes native test suites in module-specific `test/`

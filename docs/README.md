@@ -12,6 +12,14 @@
 | **Configuration** | [env-variables.md](configuration/env-variables.md) | Environment variable reference |
 | | [build-options.md](configuration/build-options.md) | Build configuration options |
 | | [send-lat-analysis.md](configuration/send-lat-analysis.md) | Send latency mechanism deep dive |
+| **SimAI Runtime** | [vidur-runtime.md](vidur-runtime.md) | Run Vidur with the in-memory `pysimai` runtime (build + example) |
+| | [simai-runtime-architecture.md](simai-runtime-architecture.md) | `SimAIRuntime` and `NS3_MTP` co-simulation internals |
+
+### Start here: Vidur/SimAI in-memory frontend
+
+1. [vidur-runtime.md](vidur-runtime.md) — build and run Vidur with the in-memory runtime.
+2. [simai-runtime-architecture.md](simai-runtime-architecture.md) — threading model and collective lifecycle (deep reference).
+3. [tests/pysimai/README.md](../tests/pysimai/README.md) — runtime tests and the legacy-parity benchmark.
 
 ### 中文 (Chinese)
 
