@@ -33,9 +33,9 @@ Environment Setup). On top of that setup you need:
 - `pysimai` importable by the Python running the tests. The build drops it in
   `<repo>/bin/`; add that directory to `PYTHONPATH` if your Vidur setup does not
   already.
-- The topology and config files referenced by Vidur's `simai_simulation_topo`
-  and `simai_simulation_config` (defaults under
-  `astra-sim-alibabacloud/inputs/`).
+- No topology generation is needed: the tests use the embedded
+  `tests/pysimai/topology.txt` (16 GPUs, H100, 400 Gbps) and the committed
+  `astra-sim-alibabacloud/inputs/config/SimAI.conf`.
 
 ## Run
 

@@ -50,9 +50,10 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+TEST_DIR = Path(__file__).resolve().parent
 VIDUR_ROOT = ROOT / "vidur-alibabacloud"
 BIN_DIR = ROOT / "bin"
-DEFAULT_TOPO = ROOT / "Rail_Opti_SingleToR_16g_8gps_400Gbps_H100"
+DEFAULT_TOPO = TEST_DIR / "topology.txt"
 DEFAULT_CONF = ROOT / "astra-sim-alibabacloud" / "inputs" / "config" / "SimAI.conf"
 DEFAULT_MODEL = "meta-llama/Meta-Llama-3-8B"
 # NOTE: the OLD subprocess path's ns-3 binary only produces an EndToEnd CSV for

@@ -11,8 +11,7 @@ Checks:
 Exit code 0 = PASS, 1 = FAIL.
 
 Prerequisites (see `AGENTS.md`; run on the remote host in the `vidur` env):
-  * `<repo>/bin/pysimai*.so` built;
-  * topology and config files present (defaults below).
+  * `<repo>/bin/pysimai*.so` built.
 """
 
 import argparse
@@ -22,7 +21,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_TOPO = ROOT / "Rail_Opti_SingleToR_16g_8gps_400Gbps_H100"
+TEST_DIR = Path(__file__).resolve().parent
+DEFAULT_TOPO = TEST_DIR / "topology.txt"
 DEFAULT_CONF = ROOT / "astra-sim-alibabacloud" / "inputs" / "config" / "SimAI.conf"
 
 

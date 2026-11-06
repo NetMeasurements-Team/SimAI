@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+TEST_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "vidur-alibabacloud"))
 BIN_DIR = ROOT / "bin"
 if any(BIN_DIR.glob("pysimai*")):
@@ -45,7 +46,7 @@ from vidur.execution_time_predictor.base_execution_time_predictor import (  # no
 )
 
 MODEL = "meta-llama/Meta-Llama-3-8B"
-TOPO = str(ROOT / "Rail_Opti_SingleToR_16g_8gps_400Gbps_H100")
+TOPO = str(TEST_DIR / "topology.txt")
 CONF = str(ROOT / "astra-sim-alibabacloud" / "inputs" / "config" / "SimAI.conf")
 C_MS = 0.5
 NUM_COMPUTE_COMPONENTS = 12
