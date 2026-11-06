@@ -25,7 +25,8 @@ enum class ComType {
   All_Reduce,
   All_to_All,
   All_Reduce_All_to_All,
-  All_Reduce_NVLS
+  All_Reduce_NVLS,
+  Broadcast
 };
 constexpr const char* to_cstr(const ComType type) noexcept {
   switch (type) {
@@ -37,6 +38,8 @@ constexpr const char* to_cstr(const ComType type) noexcept {
     return "reducescatter";
   case ComType::All_to_All:
     return "alltoall";
+  case ComType::Broadcast:
+    return "broadcast";
   default:
     return "unknown";
   }
@@ -58,7 +61,6 @@ enum class CollectiveImplementationType {
   HalvingDoubling,  
   OneHalvingDoubling,
   NcclFlowModel,
-  NcclTreeFlowModel,
 };
 enum class CollectiveBarrier { Blocking, Non_Blocking };
 enum class SchedulingPolicy { LIFO, FIFO, HIGHEST, None };

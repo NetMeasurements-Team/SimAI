@@ -25,6 +25,21 @@ file(GLOB ASTRA_SIM_HEADERS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/*.h"
 )
 
+# Reconcile versioned path layout of SimCCL
+set(SIMCCL_INCLUDE_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/simccl-include/${SIMAI_NCCL_VERSION}")
+file(MAKE_DIRECTORY "${SIMCCL_INCLUDE_DIR}/SimCCL/mock")
+foreach(header IN LISTS SIMCCL_MOCK_HEADERS)
+    get_filename_component(header_name "${header}" NAME)
+    file(RELATIVE_PATH header_relative
+            "${SIMCCL_INCLUDE_DIR}/SimCCL/mock"
+            "${header}"
+    )
+    file(TO_CMAKE_PATH "${header_relative}" header_relative)
+    file(WRITE "${SIMCCL_INCLUDE_DIR}/SimCCL/mock/${header_name}"
+            "#include \"${header_relative}\"\n")
+endforeach()
+
 if(SIMAI_MODE STREQUAL "phy")
     file(GLOB PHY_COMMON_SOURCES CONFIGURE_DEPENDS
             "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/phy-common/*.cc"
@@ -37,9 +52,17 @@ if(SIMAI_MODE STREQUAL "phy")
     list(APPEND ASTRA_SIM_HEADERS ${PHY_COMMON_HEADERS})
 endif()
 
-add_library(AstraSim ${ASTRA_SIM_SOURCES} ${ASTRA_SIM_HEADERS})
+add_library(AstraSim
+        ${ASTRA_SIM_SOURCES}
+        ${ASTRA_SIM_HEADERS}
+        ${SIMCCL_MOCK_SOURCES}
+        ${SIMCCL_MOCK_HEADERS}
+)
 target_compile_features(AstraSim PUBLIC cxx_std_17)
-target_include_directories(AstraSim PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(AstraSim PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${SIMCCL_INCLUDE_DIR}"
+)
 
 if(NOT SIMAI_MODE STREQUAL "ns3" AND NOT SIMAI_MODE STREQUAL "ns3-ub")
     find_package(LibXml2 REQUIRED)

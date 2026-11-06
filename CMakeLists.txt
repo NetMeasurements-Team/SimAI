@@ -1,4 +1,3 @@
-# CMake requirement
 cmake_minimum_required(VERSION 3.15)
 
 project(SimAI LANGUAGES CXX)
@@ -35,13 +34,49 @@ set(_valid_simai_modes analytical ns3 ns3-ub phy)
 list(FIND _valid_simai_modes "${SIMAI_MODE}" _simai_mode_index)
 if(_simai_mode_index EQUAL -1)
     message(FATAL_ERROR
-            "Invalid SIMAI_MODE='${SIMAI_MODE}'. Expected one of: analytical, ns3, phy")
+            "Invalid SIMAI_MODE='${SIMAI_MODE}'. Expected one of: analytical, ns3, ns3-ub, phy")
 endif()
 
 if(SYS_ASSERTS)
     add_compile_options(-UNDEBUG)
     message(STATUS "Asserts enabled for all profiles.")
 endif()
+
+# Select one SimCCL mock version for all backends.
+# An explicit CMake cache value takes precedence over the environment.
+set(_simai_nccl_default "v2.20")
+if(DEFINED ENV{SIMAI_NCCL_VERSION}
+        AND NOT "$ENV{SIMAI_NCCL_VERSION}" STREQUAL "")
+    set(_simai_nccl_default "$ENV{SIMAI_NCCL_VERSION}")
+endif()
+
+set(SIMAI_NCCL_VERSION "${_simai_nccl_default}" CACHE STRING
+        "SimCCL mock version")
+set_property(CACHE SIMAI_NCCL_VERSION PROPERTY STRINGS v2.20 v2.30)
+
+if(NOT SIMAI_NCCL_VERSION STREQUAL "v2.20"
+        AND NOT SIMAI_NCCL_VERSION STREQUAL "v2.30")
+    message(FATAL_ERROR
+            "Invalid SIMAI_NCCL_VERSION='${SIMAI_NCCL_VERSION}'; expected v2.20 or v2.30")
+endif()
+
+set(SIMCCL_MOCK_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/SimCCL/src/mock/${SIMAI_NCCL_VERSION}")
+
+if(NOT EXISTS "${SIMCCL_MOCK_DIR}/MockNcclGroup.cc")
+    message(FATAL_ERROR
+            "SimCCL mock sources are missing from '${SIMCCL_MOCK_DIR}'. Initialize the SimCCL submodule.")
+endif()
+
+# Shared by every backend: the ns3 frontend exports these into the ns-3 tree,
+# while the AstraSim library consumes them directly.
+file(GLOB SIMCCL_MOCK_SOURCES CONFIGURE_DEPENDS
+        "${SIMCCL_MOCK_DIR}/*.cc")
+file(GLOB SIMCCL_MOCK_HEADERS CONFIGURE_DEPENDS
+        "${SIMCCL_MOCK_DIR}/*.hh"
+        "${SIMCCL_MOCK_DIR}/*.h")
+
+message(STATUS "SimCCL mock version: ${SIMAI_NCCL_VERSION}")
 
 if(SIMAI_MODE STREQUAL "ns3" OR SIMAI_MODE STREQUAL "ns3-ub")
     add_subdirectory(

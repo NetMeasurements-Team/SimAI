@@ -31,6 +31,7 @@
 
 #include "astra-sim/system/RecvPacketEventHadndlerData.hh"
 #include "astra-sim/system/Sys.hh"
+#include "SimCCL/mock/MockNcclLog.h"
 #include "entry.h"
 
 #define RESULT_PATH "./ncclFlowModel_"
@@ -116,7 +117,43 @@ int ASTRASimNetwork::sim_send(
       dst, rank, tag, ehd->channel_id, ehd->flow_id);
 
   constexpr int pg = 3, dport = 100;
-  int send_lat = 6;
+
+  // send_lat bucketing: select latency based on (algorithm, protocol) from NCCL v2.30 tuning.
+  // Formula: send_lat_ns = (baseLatencies[algo][proto] + hwLatencies[hw][algo][proto]) * 1000
+  // Source: nccl-2.30/src/graph/tuning.cc L150-174
+  // Table value 0 = unsupported (algo, proto) combo → use default fallback.
+  // NVLINK table: for same-node (intra-node) communication
+  static const int send_lat_table_nvlink[7][3] = {
+    /* Tree:       baseLat(6.8,14,8.4)+hwLat(0.6,1.25,4) */  {7400, 15250, 12400},
+    /* Ring:       baseLat(6.6,14,8.4)+hwLat(0.6,1.9,3.4) */  {7200, 15900, 11800},
+    /* CollNetDir: baseLat(0)+hwLat(0,0,3.7)              */  {0, 0, 3700},
+    /* CollNetChn: baseLat(0)+hwLat(0,0,2.8)              */  {0, 0, 2800},
+    /* NVLS:       baseLat(0)+hwLat(0,0,25)               */  {0, 0, 25000},
+    /* NVLS_TREE:  baseLat(0)+hwLat(0,0,25)               */  {0, 0, 25000},
+    /* PAT:        baseLat(8)+hwLat(0,0,4), Simple-only   */  {0, 0, 12000},
+  };
+  // NET table: for cross-node (inter-node) communication
+  static const int send_lat_table_net[7][3] = {
+    /* Tree:       baseLat(6.8,14,8.4)+hwLat_NET(5,8.5,14)   */  {11800, 22500, 22400},
+    /* Ring:       baseLat(6.6,14,8.4)+hwLat_NET(2.7,4,14)    */  {9300, 18000, 22400},
+    /* CollNetDir: baseLat(0)+hwLat_NET(0,0,31)               */  {0, 0, 31000},
+    /* CollNetChn: baseLat(0)+hwLat_NET(0,0,30)               */  {0, 0, 30000},
+    /* NVLS:       baseLat(0)+hwLat_NET(0,0,18)               */  {0, 0, 18000},
+    /* NVLS_TREE:  baseLat(0)+hwLat_NET(0,0,20.9)             */  {0, 0, 20900},
+    /* PAT:        baseLat(8)+hwLat_NET(0,0,14), Simple-only  */  {0, 0, 22000},
+  };
+
+  int send_lat = 6000;
+  const int algo = ehd->algorithm;
+  const int proto = ehd->protocol;
+  if (algo >= 0 && algo < 7 && proto >= 0 && proto < 3 && gpus_per_server > 0) {
+    const bool same_node = (rank / gpus_per_server) == (dst / gpus_per_server);
+    const auto& table = same_node ? send_lat_table_nvlink : send_lat_table_net;
+    if (table[algo][proto] > 0) {
+      send_lat = table[algo][proto];
+    }
+  }
+  // AS_SEND_LAT env var overrides everything (highest priority, for A/B experiments)
   if (const char* send_lat_env = std::getenv("AS_SEND_LAT")) {
     try {
       send_lat = std::stoi(send_lat_env);
@@ -125,7 +162,6 @@ int ASTRASimNetwork::sim_send(
       exit(-1);
     }
   }
-  send_lat *= 1000;
 
   if (message_size == 0) {
     message_size = 1;
@@ -277,12 +313,14 @@ struct user_param {
   string workload;
   string network_topo;
   string network_conf;
+  string system_conf;
   string run_name;
   user_param() {
     thread = 1;
     workload = "";
     network_topo = "";
     network_conf = "";
+    system_conf = "astra-sim-alibabacloud/inputs/system/default.txt";
     run_name = "";
   };
   ~user_param(){};
@@ -297,6 +335,7 @@ static int user_param_prase(const int argc, char* argv[], user_param* user_param
       std::cout<<"-w    workloads default none "<<std::endl;
       std::cout<<"-n    network topo"<<std::endl;
       std::cout<<"-c    network conf"<<std::endl;
+      std::cout<<"-s    system conf"<<std::endl;
       std::cout<<"-r    run name"<<std::endl;
       return 1;
     case 't':
@@ -310,6 +349,9 @@ static int user_param_prase(const int argc, char* argv[], user_param* user_param
       break;
     case 'c':
       user_param->network_conf = optarg;
+      break;
+    case 's':
+      user_param->system_conf = optarg;
       break;
     case 'r':
       user_param->run_name = optarg;
@@ -360,6 +402,7 @@ int main(const int argc, char* argv[]) {
   for (int j = 0; j < nodes_num; j++) {
     networks[j] = new ASTRASimNetwork(j ,0);
     systems[j] = new AstraSim::Sys(
+        user_param.system_conf,
         networks[j],
         nullptr,
         j,
@@ -376,7 +419,6 @@ int main(const int argc, char* argv[]) {
         0,
         RESULT_PATH,
         user_param.run_name,
-        true,
         false,
         gpu_type,
         {gpu_num},

@@ -14,11 +14,11 @@ LICENSE file in the root directory of this source tree.
 #include "SimRecvCaller.hh"
 #include "SimSendCaller.hh"
 #include "StreamBaseline.hh"
-#include "astra-sim/system/MockNcclLog.h"
+#include "SimCCL/mock/MockNcclLog.h"
 #include "astra-sim/system/collective/AllToAll.hh"
 #include "astra-sim/system/collective/DoubleBinaryTreeAllReduce.hh"
 #include "astra-sim/system/collective/HalvingDoubling.hh"
-#include "astra-sim/system/collective/NcclTreeFlowModel.hh"
+#include "astra-sim/system/collective/NcclFlowModel.hh"
 #include "astra-sim/system/collective/Ring.hh"
 #include "astra-sim/system/scheduling/OfflineGreedy.hh"
 #include "astra-sim/system/topology/GeneralComplexTopology.hh"
@@ -104,6 +104,7 @@ Sys::~Sys() {
 }
 
 Sys::Sys(
+    std::string system_configuration,
     AstraNetworkAPI* NI,
     AstraMemoryAPI* MEM,
     int id,
@@ -120,7 +121,6 @@ Sys::Sys(
     int stat_row,
     std::string path,
     std::string run_name,
-    bool seprate_log,
     bool rendezvous_enabled,
     GPUType _gpu_type,
     std::vector<int> _all_gpus,
@@ -160,7 +160,6 @@ Sys::Sys(
   this->communication_delay = 10;
   this->local_reduction_delay = 1;
   this->active_chunks_per_dimension = 1;
-  this->seprate_log = seprate_log;
   this->rendezvous_enabled = rendezvous_enabled;
   this->NVSwitchs = _NVSwitchs;
   this->topo_gpus = _all_gpus;
@@ -171,24 +170,14 @@ Sys::Sys(
   }
   all_generators[id + npu_offset] = this;
 
-  inp_scheduling_policy = "LIFO";
-  communication_delay = 10 * injection_scale;
-  active_chunks_per_dimension = 1;
-  preferred_dataset_splits = 1;
-  inp_boost_mode = 0;
-  inp_all_reduce_implementation = "NcclFlowModel";
-  inp_all_gather_implementation = "NcclFlowModel";
-  inp_reduce_scatter_implementation = "NcclFlowModel";
-  inp_all_to_all_implementation = "NcclFlowModel";
-  inp_collective_optimization = "baseline";
-  bool result = post_process_inputs();
-
-  if (result == false) {
+  if (initialize_sys(system_configuration) == false) {
+    sys_panic("Unable to initialize the system layer because the file can not be opened");
+  }
+  if (post_process_inputs() == false) {
     sys_panic("Unable to initialize the system layer because the file can not be opened");
   }
 
   this->pending_events = 0;
-
   int total_disabled = 0;
   this->physical_dims = physical_dims;
   this->queues_per_dim = queues_per_dim;
@@ -249,18 +238,16 @@ Sys::Sys(
 #endif
   NI->sim_init(MEM);
   memBus = new MemBus("NPU", "MA", this, inp_L, inp_o, inp_g, inp_G, model_shared_bus, communication_delay, true);
-  workload = new Workload(run_name, this, my_workload, num_passes, total_stat_rows, stat_row, path, this->seprate_log);
+  workload = new Workload(run_name, this, my_workload, num_passes, total_stat_rows, stat_row, path, this->separate_log);
   if (workload->initialized == false) {
     sys_panic("Unable to initialize the workload layer because it can not open the workload file");
     return;
   }
 #if defined(NS3_MTP) || defined(NS3_MPI) || defined(PHY_MTP)
-  result = mock_nccl_grobal_group_init();
-  if (result == false) {
+  if (mock_nccl_grobal_group_init() == false) {
     sys_panic("Unable to initialize the system global group because the file can not be opened");
   }
-  result = mock_nccl_comms_init();
-  if (result == false) {
+  if (mock_nccl_comms_init() == false) {
     sys_panic("Unable to initialize the system mock_nccl_comms because the file can not be opened");
   }
 #endif
@@ -590,7 +577,7 @@ std::vector<CollectiveImplementation*> Sys::generate_collective_implementation_f
     } else if (dimension_input == "NcclFlowModel") {
       result.push_back(new CollectiveImplementation(CollectiveImplementationType::NcclFlowModel));
     } else if (dimension_input == "ncclRingTreeModel") {
-      result.push_back(new CollectiveImplementation(CollectiveImplementationType::NcclTreeFlowModel));
+      result.push_back(new CollectiveImplementation(CollectiveImplementationType::NcclFlowModel));
     } else {
       sys_panic(
           "Cannot interpret collective implementations. Please check the collective implementations in the sys"
@@ -684,14 +671,14 @@ bool Sys::parse_var(std::string var, std::string value) {
     } else {
       sys_panic("unknown value for inter-dimension-scheduling  in sys input file");
     }
-  } else if (var == "seprate-log:") {
+  } else if (var == "separate-log:") {
     std::stringstream mval(value);
     int int_to_bool;
     mval >> int_to_bool;
     if (int_to_bool == 0) {
-      this->seprate_log = false;
+      this->separate_log = false;
     } else {
-      this->seprate_log = true;
+      this->separate_log = true;
     }
   } else if (var != "") {
     std::cerr << "######### Exiting because " << var
@@ -704,22 +691,22 @@ bool Sys::parse_var(std::string var, std::string value) {
 bool Sys::post_process_inputs() {
   all_reduce_implementation_per_dimension =
       generate_collective_implementation_from_input(inp_all_reduce_implementation);
-  if (all_reduce_implementation_per_dimension.size() == 0) {
+  if (all_reduce_implementation_per_dimension.empty()) {
     sys_panic("unknown value for all-reduce-implementation in sys input file");
   }
   reduce_scatter_implementation_per_dimension =
       generate_collective_implementation_from_input(inp_reduce_scatter_implementation);
-  if (reduce_scatter_implementation_per_dimension.size() == 0) {
+  if (reduce_scatter_implementation_per_dimension.empty()) {
     sys_panic("unknown value for reduce-scatter-implementation in sys input file");
   }
   all_gather_implementation_per_dimension =
       generate_collective_implementation_from_input(inp_all_gather_implementation);
-  if (all_gather_implementation_per_dimension.size() == 0) {
+  if (all_gather_implementation_per_dimension.empty()) {
     sys_panic("unknown value for all-gather-implementation in sys input file");
   }
   all_to_all_implementation_per_dimension =
       generate_collective_implementation_from_input(inp_all_to_all_implementation);
-  if (all_to_all_implementation_per_dimension.size() == 0) {
+  if (all_to_all_implementation_per_dimension.empty()) {
     sys_panic("unknown value for all-to-all-implementation in sys input file");
   }
   if (inp_collective_optimization == "baseline") {
@@ -1116,7 +1103,7 @@ CollectivePhase Sys::generate_collective_phase(
       CollectivePhase vn(
           this,
           queue_id,
-          new NcclTreeFlowModel(
+          new NcclFlowModel(
               collective_type,
               id,
               layer_num,
@@ -1126,7 +1113,9 @@ CollectivePhase Sys::generate_collective_phase(
               injection_policy,
               boost_mode,
               RingFlowModels,
-              channels.size()));
+              channels.size(),
+              nccl_info->algorithm,
+              nccl_info->protocol));
       return vn;
     } else if (nccl_info->algorithm == NCCL_ALGO_TREE) {
       std::shared_ptr<MockNccl::FlowModels> TreeFlowModels;
@@ -1139,7 +1128,7 @@ CollectivePhase Sys::generate_collective_phase(
       CollectivePhase vn(
           this,
           queue_id,
-          new NcclTreeFlowModel(
+          new NcclFlowModel(
               collective_type,
               id,
               layer_num,
@@ -1149,7 +1138,9 @@ CollectivePhase Sys::generate_collective_phase(
               injection_policy,
               boost_mode,
               TreeFlowModels,
-              treechannels.size()));
+              treechannels.size(),
+              nccl_info->algorithm,
+              nccl_info->protocol));
       return vn;
     } else if (nccl_info->algorithm == NCCL_ALGO_NVLS) {
       collective_type = ComType::All_Reduce_NVLS;
@@ -1207,7 +1198,7 @@ CollectivePhase Sys::generate_collective_phase(
       CollectivePhase vn(
           this,
           queue_id,
-          new NcclTreeFlowModel(
+          new NcclFlowModel(
               collective_type,
               id,
               layer_num,
@@ -1217,7 +1208,34 @@ CollectivePhase Sys::generate_collective_phase(
               injection_policy,
               boost_mode,
               RingFlowModels,
-              treechannels.size()));
+              treechannels.size(),
+              nccl_info->algorithm,
+              nccl_info->protocol));
+      return vn;
+    } else if (nccl_info->algorithm == NCCL_ALGO_PAT) {
+      std::shared_ptr<MockNccl::FlowModels> PATFlowModels =
+          std::static_pointer_cast<MockNccl::FlowModels>(ptr_FlowModels);
+      std::map<int, std::map<int, std::vector<int>>> pat_channels;
+      {
+        SysCriticalSection cs;
+        pat_channels = mock_nccl_comms[comm_ps]->get_rings();
+      }
+      CollectivePhase vn(
+          this,
+          queue_id,
+          new NcclFlowModel(
+              collective_type,
+              id,
+              layer_num,
+              static_cast<RingTopology*>(topology),
+              data_size,
+              direction,
+              injection_policy,
+              boost_mode,
+              PATFlowModels,
+              pat_channels.size(),
+              nccl_info->algorithm,
+              nccl_info->protocol));
       return vn;
     }
   } else {

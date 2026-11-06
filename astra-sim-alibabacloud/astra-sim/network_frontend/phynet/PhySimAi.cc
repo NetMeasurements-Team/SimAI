@@ -14,7 +14,7 @@
 */
 
 #include"PhySimAi.h"
-#include"astra-sim/system/MockNcclLog.h"
+#include"SimCCL/mock/MockNcclLog.h"
 
 using namespace std;
 

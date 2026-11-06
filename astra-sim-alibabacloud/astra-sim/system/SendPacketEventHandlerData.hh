@@ -42,6 +42,9 @@ public:
    *   Need to find a better way.
    */
   bool nvls_on;
+  // Collective selection used by the frontend's send-latency model.
+  int algorithm = -1;
+  int protocol = -1;
   SendPacketEventHandlerData(Sys *node, int senderNodeId, int receiverNodeId, int tag);
   SendPacketEventHandlerData(BaseStream* owner, int senderNodeId, int receiverNodeId, int tag, EventType event);
 };

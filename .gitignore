@@ -11,6 +11,7 @@ astra-sim-alibabacloud/inputs/config/*
 bin/
 results/
 test/log/
+simai-test-results-*
 *.log
 .cur*
 .DS_Store
@@ -20,6 +21,26 @@ test/log/
 **/cmake-cache*
 !astra-sim-alibabacloud/build
 **/cmake-build*
+**/__pycache__
 
 topologies/
 tmp/
+# Additional upstream-generated artifacts
+build-optimized/
+*.bak
+ncclFlowModel_*.csv
+send.txt
+
+# SimCCL standalone build artifacts
+SimCCL/standalone/build/
+SimCCL/standalone/build_*/
+SimCCL/tools/pat_simulator
+
+# Generated topology files
+astra-sim-alibabacloud/inputs/topo/Rail_Opti_SingleToR_*
+/Rail_Opti_SingleToR_*
+
+# Editor temp files
+*.swp
+*.swo
+*~

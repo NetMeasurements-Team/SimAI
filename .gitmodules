@@ -1,6 +1,6 @@
 [submodule "SimCCL"]
 	path = SimCCL
-	url = https://github.com/aliyun/SimCCL
+	url = ../SimCCL.git
 	branch = master
 [submodule "aicb"]
 	path = aicb
@@ -9,4 +9,8 @@
 [submodule "ns-3-alibabacloud"]
 	path = ns-3-alibabacloud
 	url = ../ns-3-alibabacloud.git
+	branch = master
+[submodule "SimAI-CLEM"]
+	path = SimAI-CLEM
+	url = https://github.com/aliyun/SimAI-CLEM.git
 	branch = master

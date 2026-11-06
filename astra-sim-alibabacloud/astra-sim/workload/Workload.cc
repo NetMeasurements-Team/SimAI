@@ -6,8 +6,10 @@ LICENSE file in the root directory of this source tree.
 #include "Workload.hh"
 #include "CSVWriter.hh"
 #include "Layer.hh"
-#include "astra-sim/system/MockNcclLog.h"
+#include "SimCCL/mock/MockNcclLog.h"
 #include <filesystem>
+#include <cstdlib>
+#include <cstring>
 
 namespace AstraSim {
 Workload::~Workload() {
@@ -215,7 +217,7 @@ void Workload::report() {
           generator->scheduler_unit->usage[i].report_percentage(10000));
     }
     if (this->generator->id == 0) {
-      dimension_utilization->finalize_csv(dims);
+      if (dimension_utilization) dimension_utilization->finalize_csv(dims);
     }
   }
   #endif
@@ -226,7 +228,7 @@ void Workload::report() {
       dims.push_back(
           generator->scheduler_unit->usage[i].report_percentage(10000));
     }
-    dimension_utilization->finalize_csv(dims);
+    if (dimension_utilization) dimension_utilization->finalize_csv(dims);
   }
   #endif
 }
@@ -1277,7 +1279,7 @@ bool Workload::initialize_workload(std::string name) {
   // FIXME: this patch avoids EP collectives to be ignored in case TP = 1; we just pass the max of TP and EP.
   //  The patch works because this dimension splitting was part of astra-sim but SimAI does not seem to really use it;
   //  in particular, MockNccl does not use the resulting topology to determine the communication flows (it uses
-  //  MockNcclGroup::getFlowModel instead); however NcclTreeFlowModel uses it to get the number of nodes in the ring.
+  //  MockNcclGroup::getFlowModel instead); however NcclFlowModel uses it to get the number of nodes in the ring.
   //  To properly fix this there are two options: (i) remove this whole process and uniform the simulator to only use
   //  the output of getFlowModel; (ii) generalize this to also work for the case of overlapped splits (EP and TP) and
   //  uniform the SimAI code to use this output instead of generating a new one from getFlowModel.
