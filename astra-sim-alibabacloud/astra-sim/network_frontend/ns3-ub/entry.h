@@ -197,11 +197,17 @@ inline void check_sim_finish() {
 
 inline void ub_task_completed_callback(FILE* fout, uint32_t nodeId, uint32_t jettyNum, uint32_t taskId) {
     //TODO Check if pending_ub_tasks can be removed. In UB, nodes have the list of tasks inside them
-    auto it = pending_ub_tasks.find(taskId);   
-    if (it == pending_ub_tasks.end()) return;
+    MsgEvent ctx;
+    {
+#ifdef NS3_MTP
+        MtpInterface::CriticalSection cs;
+#endif
+        auto it = pending_ub_tasks.find(taskId);
+        if (it == pending_ub_tasks.end()) return;
 
-    MsgEvent ctx = it->second;
-    pending_ub_tasks.erase(it);
+        ctx = it->second;
+        pending_ub_tasks.erase(it);
+    }
 
     uint32_t sip = NodeIdToIp(ctx.src).Get();
     uint32_t dip = NodeIdToIp(ctx.dst).Get();
