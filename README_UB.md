@@ -120,6 +120,11 @@ Environment variables:
 | `SIMAI_FORCE_PROTO` | unset | `LL`, `LL128`, or `Simple`. |
 | `AS_SEND_LAT` | unset | Overrides send latency; in **microseconds** for UB. |
 
+The standalone UB test matrix lives in `tests/ns3-ub/`:
+
+```bash
+python3 tests/ns3-ub/run.py --nccl-version v2.30
+```
 
 ---
 
