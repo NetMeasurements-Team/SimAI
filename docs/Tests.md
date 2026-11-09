@@ -8,6 +8,7 @@ the build environment (Bash and Python 3; runners use only the standard library)
 | --- | --- |
 | [Collective/PFC](#collectivepfc) | Workload completion without PFC in a baseline and with pause/resume under congestion. |
 | [Collective matrix](#collective-completion-and-selection-matrix) | Collective completion and algorithm/protocol selection across versions and topologies. |
+| [UB collective matrix](#unified-bus-collective-matrix) | Collective completion and algorithm/protocol selection for the Unified Bus backend. |
 | [Native MMU/PFC](#native-backend-tests) | Packet delivery, buffer accounting, pause/resume and drainage inside ns-3. |
 
 ## Simulator-level tests: ns3
@@ -144,6 +145,24 @@ Repeat `--case NAME` to select multiple cases. PXN ReduceScatter selections
 also include their matching cross-server reference case.
 
 See the [test README](../tests/ns3/collective-matrix/README.md) for coverage and validation.
+
+### Unified Bus collective matrix
+
+The UB frontend has a standalone matrix in `tests/ns3-ub/`. It generates UB
+topologies (one switch per server, no NVSwitch column) and validates the same
+completion/selection criteria as the RDMA matrix.
+
+```bash
+bash scripts/build.sh -lc ns3-ub -d optimized --nccl-version 2.20 &&
+python3 tests/ns3-ub/run.py --nccl-version v2.20
+
+bash scripts/build.sh -lc ns3-ub -d optimized --nccl-version 2.30 &&
+python3 tests/ns3-ub/run.py --nccl-version v2.30
+```
+
+NVLS is unsupported by UB and is covered as a negative test.
+
+See the [test README](../tests/ns3-ub/README.md) for coverage and validation.
 
 ### Adding simulator tests
 
