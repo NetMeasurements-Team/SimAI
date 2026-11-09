@@ -83,6 +83,44 @@ Due to UB limitations in `TrafficRecord::dataSize` (which only accepts a 32-bit 
 Finally, because the receiving application in the underlying `ns-3-ub` backend lacks a direct callback to notify the frontend when a message has fully arrived, a workaround is used to trigger receiver completion. Specifically, the receiver is triggered with a "receive finished" event once the sender receives the last ACK for the transmission signaled a the sender's WQE completion trace, preserving the original design of the SimAI (then corrected in our fork).
 
 
+### 2.4 SimCCL Integration
+
+The UB backend consumes the same SimCCL flow models as the RDMA backend. Build
+with the desired mock version:
+
+```bash
+./scripts/build.sh -lc ns3-ub -d optimized --nccl-version v2.20
+./scripts/build.sh -lc ns3-ub -d optimized --nccl-version v2.30
+```
+
+Supported behavior:
+
+* **Algorithms:** RING and PAT. PAT requires one GPU per server
+  (`nRanks == nNodes`) and the 512 KiB-1 MiB window.
+* **NVLS:** not supported by the UB backend. The frontend fails fast if
+  `AS_NVLS_ENABLE=1`, because NVLS flow models target virtual NVSwitch IDs that
+  have no UB endpoint or aggregation.
+* **Tree/CollNet/NVLS-tree:** not selectable by the current mock selector.
+* **Protocols:** v2.30 selects LL/LL128/Simple in the flow model. The UB
+  frontend maps `(algorithm, protocol)` to its send latency using the same
+  NCCL v2.30 table as the RDMA backend.
+* **PXN:** topology-dependent. It is meaningful on rail-optimized fabrics
+  without a spine switch; it is unnecessary on full-bisection/spine fabrics.
+  PAT and PXN cannot both trigger.
+
+Environment variables:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `SIMAI_NCCL_VERSION` | `v2.20` | CMake default; override with `--nccl-version`. |
+| `AS_NVLS_ENABLE` | `0` | Must stay `0` for UB. |
+| `AS_PXN_ENABLE` | `0` | Enables PXN flow splitting. |
+| `SIMAI_PAT_ENABLE` | `2` | `0` disable, `1` force, `2` auto. |
+| `SIMAI_PROTO_AWARE` | `1` | v2.30 protocol-aware selection. |
+| `SIMAI_FORCE_PROTO` | unset | `LL`, `LL128`, or `Simple`. |
+| `AS_SEND_LAT` | unset | Overrides send latency; in **microseconds** for UB. |
+
+
 ---
 
 ## 3. How to Generate UB Topologies

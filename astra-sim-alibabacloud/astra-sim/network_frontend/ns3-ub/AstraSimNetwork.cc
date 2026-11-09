@@ -23,6 +23,30 @@
 using namespace std;
 using namespace ns3;
 
+namespace {
+// NCCL v2.30 send latency in ns, indexed by [algorithm][protocol].
+// Mirrors the RDMA frontend (ns3/AstraSimNetwork.cc). Same-server uses the
+// NVLink table as a proxy for intra-server UB links.
+constexpr int kSendLatSame[7][3] = {
+    /* Tree:       */ {7400, 15250, 12400},
+    /* Ring:       */ {7200, 15900, 11800},
+    /* CollNetDir: */ {0, 0, 3700},
+    /* CollNetChn: */ {0, 0, 2800},
+    /* NVLS:       */ {0, 0, 25000},
+    /* NVLS_TREE:  */ {0, 0, 25000},
+    /* PAT:        */ {0, 0, 12000},
+};
+constexpr int kSendLatCross[7][3] = {
+    /* Tree:       */ {11800, 22500, 22400},
+    /* Ring:       */ {9300, 18000, 22400},
+    /* CollNetDir: */ {0, 0, 31000},
+    /* CollNetChn: */ {0, 0, 30000},
+    /* NVLS:       */ {0, 0, 18000},
+    /* NVLS_TREE:  */ {0, 0, 20900},
+    /* PAT:        */ {0, 0, 22000},
+};
+}  // namespace
+
 // =============================================================================
 // ASTRASimNetwork — AstraNetworkAPI implementation for the UB backend
 // =============================================================================
@@ -72,6 +96,10 @@ int ASTRASimNetwork::sim_send(void* /*buffer*/, uint64_t message_size, int /*typ
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
     NcclLog->writeLog(NcclLogLevel::DEBUG, " sim_send to %d  from %d flow_id %d", dst, rank, ehd->flow_id);
 
+    if (message_size == 0) {
+        message_size = 1;
+    }
+
     {
 #ifdef NS3_MTP
         MtpInterface::CriticalSection cs;
@@ -83,7 +111,29 @@ int ASTRASimNetwork::sim_send(void* /*buffer*/, uint64_t message_size, int /*typ
     // Force the usage of multiple Jettys (equivalent of QP), based on the maximum segment size accepted by the UB's Tasks
     uint64_t max_chunk_size = 2000000000;
     int num_chunks = (message_size + max_chunk_size - 1) / max_chunk_size;
-    
+
+    // NCCL v2.30 send-latency bucketing. AS_SEND_LAT stays in microseconds for
+    // UB and overrides the table.
+    int send_lat = 6000;
+    const int algo = ehd->algorithm;
+    const int proto = ehd->protocol;
+    if (algo >= 0 && algo < 7 && proto >= 0 && proto < 3 && ub_gpus_per_server > 0) {
+        const bool same_node =
+            (rank / ub_gpus_per_server) == (actual_dst / ub_gpus_per_server);
+        const auto& table = same_node ? kSendLatSame : kSendLatCross;
+        if (table[algo][proto] > 0) {
+            send_lat = table[algo][proto];
+        }
+    }
+    if (const char* send_lat_env = std::getenv("AS_SEND_LAT")) {
+        try {
+            send_lat = std::stoi(send_lat_env) * 1000;
+        } catch (const std::invalid_argument&) {
+            NcclLog->writeLog(NcclLogLevel::ERROR,"send_lat set error");
+            exit(-1);
+        }
+    }
+
     for (int i = 0; i < num_chunks; i++) {
         uint64_t chunk_size = (i == num_chunks - 1) ? (message_size - i * max_chunk_size) : max_chunk_size;
         
@@ -96,16 +146,6 @@ int ASTRASimNetwork::sim_send(void* /*buffer*/, uint64_t message_size, int /*typ
             waiting_to_message_finish[FlowIdKey{ehd->flow_id, {rank, actual_dst}}]++;
         }
         
-        int send_lat = 6;
-        if (const char* send_lat_env = std::getenv("AS_SEND_LAT")) {
-            try {
-                send_lat = std::stoi(send_lat_env);
-            } catch (const std::invalid_argument&) {
-                NcclLog->writeLog(NcclLogLevel::ERROR,"send_lat set error");
-                exit(-1);
-            }
-        }
-        send_lat *= 1000;
         MsgEvent se(rank, actual_dst, 0, chunk_size, msg_handler, fun_arg, tag, ehd->flow_id);
         Simulator::ScheduleWithContext(rank, Time(send_lat+1), ub_send_flow, se);
 
@@ -214,6 +254,13 @@ int main(int argc, char* argv[]) {
     user_param param;
     if (parse_user_params(argc, argv, &param)) return 0;
 
+    if (const char* nvls = std::getenv("AS_NVLS_ENABLE");
+        nvls && std::string(nvls) == "1") {
+        std::cerr << "[UB] ERROR: NVLS is not supported by the UB backend. "
+                     "Set AS_NVLS_ENABLE=0 (default) or omit it.\n";
+        return 1;
+    }
+
     MockNcclLog::set_log_name("SimAI" + (param.run_name.empty() ? "" : "." + param.run_name) + ".log");
     MockNcclLog* NcclLog = MockNcclLog::getInstance();
     NcclLog->writeLog(NcclLogLevel::INFO, "init SimAI-UB log");
@@ -287,8 +334,7 @@ int main(int argc, char* argv[]) {
     for (uint32_t i = 0; i < ub_node_num; i++)
         if (ub_node_type_vec[i] == 0) host_node_ids.push_back(i);
 
-    // NOTE: Create one Sys more to handle last timestamp reading. 
-    for (int j = 0; j < nodes_num+1; j++) {
+    for (int j = 0; j < nodes_num; j++) {
         networks[j] = new ASTRASimNetwork(j, /*npu_offset=*/0);
         systems[j] = new AstraSim::Sys(
             param.system_conf,   // system config file
