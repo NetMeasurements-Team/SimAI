@@ -88,7 +88,8 @@ inline bool rate_bound = true;
 inline int nic_total_pause_time = 0;
 inline std::string nic_coalesce_method = "PER_QP";
 inline double nack_gen_interval = 0.01;
-inline bool r_dcqcn_ewma_gain, r_dcqcn_clamp = false;
+inline double r_dcqcn_ewma_gain = 1.0 / 256;
+inline bool r_dcqcn_clamp = false;
 inline uint32_t r_dcqcn_f = 1, r_dcqcn_bytes_threshold = 524240;
 inline std::string r_dcqcn_rate_u_delay = "300us";
 inline std::string r_dcqcn_alpha_u_delay = "2.56us";
@@ -604,7 +605,6 @@ inline bool ReadConf(const string& network_topo, const string& network_conf, con
       packet_spraying = v;
     } else if (key.compare("GLOBAL_T") == 0) {
       conf >> global_t;
-      global_t = 1;
     } else if (key.compare("MI_THRESH") == 0) {
       conf >> mi_thresh;
     } else if (key.compare("VAR_WIN") == 0) {
@@ -812,10 +812,11 @@ inline void SetupNetwork(
 		  sw->SetAttribute("EcnEnabled", BooleanValue(enable_qcn));
 		  sw->SetAttribute("PfcEnabled", BooleanValue(enable_pfc));
 		  sw->SetAttribute("ForwardDelay", DoubleValue(switch_fw_delay));
+      sw->SetAttribute("AckHighPrio", UintegerValue(ack_high_prio));
 		} else if (node_type[i] == 2) {
 			Ptr<NVSwitchNode> sw = CreateObject<NVSwitchNode>();
 			n.Add(sw);
-		  sw->SetAttribute("AckHighPrio", UintegerValue(1));
+		  sw->SetAttribute("AckHighPrio", UintegerValue(ack_high_prio));
 		}
 	}
 
