@@ -75,6 +75,7 @@ NCCL 2.30 adds **PAT** (Parallel Aggregated Trees) for AllGather and ReduceScatt
 - uses the Simple protocol;
 - outside the window, or on an ineligible topology, NCCL falls back to Ring.
 
+**For reference, do not run as already compiled**
 Compile each version with a clean build:
 
 ```bash
@@ -160,7 +161,7 @@ These are the schedules that will be kept when the first failure appears.
 
 ---
 
-## 3. Draw the topologies
+## 3. Draw the topologies and its failures
 
 The main topology is **1 segment x 2 hosts x 8 GPUs = 16 GPUs**:
 
@@ -368,27 +369,7 @@ severe: the batch time grows by about 5.5x and 5.3x.
 
 ---
 
-## 8. Summarize results
-
-Summarize the E2 run:
-
-```bash
-python3 artifact/summarize.py artifact/results/04_static_failures --plots
-```
-
-Summarize the E3 run:
-
-```bash
-python3 artifact/summarize.py artifact/results/05_reoptimization --plots
-```
-
-Missing experiments are skipped, so this works with only E2 and E3 (no E1
-comparison and no E4 training run). The summarizer checks every simulated time
-against `artifact/expected/` and reports `N/N runs identical`.
-
----
-
-## 9. Useful options
+## 8. Useful options
 
 ```text
 -j N                         parallel simulations
@@ -398,7 +379,7 @@ against `artifact/expected/` and reports `N/N runs identical`.
 -b PATH                      simulator binary
 ```
 
-Typical timings on a 104-CPU machine with the build already done:
+Typical timings on the VM machine with the build already done:
 
 | Step | Time |
 |---|---:|
