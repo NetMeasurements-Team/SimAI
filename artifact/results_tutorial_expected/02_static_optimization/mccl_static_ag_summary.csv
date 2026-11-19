@@ -1,0 +1,2 @@
+name,completion_ms,bottleneck_cut,bottleneck_count,capacity_gbps,drain_ms,peak_load_gbps,peak_offered_util,bytes_on_bottleneck,flows
+1x2x8_MCCL_AG,5.062397,GPU7 <-> ToR25 ; GPU15 <-> ToR25,2,800.0,9.6636762,2889.674113588737,3.612092641985921,966367620,62400

@@ -1,0 +1,2 @@
+name,completion_ms,bottleneck_cut,bottleneck_count,capacity_gbps,drain_ms,peak_load_gbps,peak_offered_util,bytes_on_bottleneck,flows
+MCCL_1x2x8,21.73323,GPU9 <-> NVSwitch17 ; GPU15 <-> NVSwitch17 ; GPU10 <-> NVSwitch17 ; GPU8 <-> NVSwitch17 ; GPU11 <-> NVSwitch17 ; GPU14 <-> NVSwitch17 ; GPU12 <-> NVSwitch17 ; GPU13 <-> NVSwitch17,8,23040.0,5.219578311111111,87078.03346511883,3.7794285358124493,15032385536,90112

@@ -1,0 +1,2 @@
+name,completion_ms,bottleneck_cut,bottleneck_count,capacity_gbps,drain_ms,peak_load_gbps,peak_offered_util,bytes_on_bottleneck,flows
+NCCL_AllGather_16gpus_2nodes,5.772109,GPU5 <-> NVSwitch16 ; GPU13 <-> NVSwitch17,2,5760.0,11.184810666666666,19424.916273463346,3.3723812974762755,8053063680,69120

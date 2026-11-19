@@ -1,0 +1,3 @@
+name,completion_ms,bottleneck_cut,bottleneck_count,capacity_gbps,drain_ms,peak_load_gbps,peak_offered_util,bytes_on_bottleneck,flows
+No reopt (healthy-fabric schedule),287.345663,GPU7 <-> ToR25 ; GPU15 <-> ToR25 ; GPU1 <-> ToR19 ; GPU9 <-> ToR19,4,1600.0,9.6636762,5676.86376050177,3.5480398503136064,1932735240,62400
+Reopt (failure-aware schedule),108.352074,GPU11 <-> NVSwitch17 ; GPU12 <-> NVSwitch17,2,5760.0,11.930464711111112,21893.17124033898,3.800897784781073,8589934592,61440

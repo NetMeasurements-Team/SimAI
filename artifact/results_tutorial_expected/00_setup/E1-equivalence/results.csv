@@ -1,0 +1,3 @@
+workload,failure_type,nccl_msccl_ns,simai_native_ns,status
+ag-268435456_bytes,no_failure,735808,735808,PASS
+a2a-268435456_bytes,no_failure,3035739,3035739,PASS

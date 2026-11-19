@@ -83,23 +83,29 @@ bash scripts/build.sh -lc ns3 --nccl-version 2.30
 ```
 
 The XML schedules are version-independent. Use the NCCL-style XML schedules to see
-the ring traffic pattern on the 16-GPU topology:
+the ring traffic pattern on the 16-GPU topology. **All visualizations in this
+tutorial use the same 2 GB collective**, so the ring, static and re-optimized
+schedules can be compared directly:
 
 ```bash
 python3 artifact/visualize_flows.py \
   --topology astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8 \
   --schedule astra-sim-alibabacloud/inputs/msccl/nccl/priority-1/NCCL_AllGather_16gpus_2nodes.xml \
-  --size 268435456 \
-  --workload astra-sim-alibabacloud/inputs/workloads/single_collective/16_gpus/ag-268435456_bytes \
+  --size 2147483648 \
+  --workload astra-sim-alibabacloud/inputs/workloads/single_collective/16_gpus/ag-2147483648_bytes \
   --run-sim --out artifact/results/01_nccl_algorithms/nccl_ring_ag.gif
 
 python3 artifact/visualize_flows.py \
   --topology astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8 \
   --schedule astra-sim-alibabacloud/inputs/msccl/nccl/priority-1/NCCL_AllToAll_P2P_16gpus.xml \
-  --size 268435456 \
-  --workload astra-sim-alibabacloud/inputs/workloads/single_collective/16_gpus/a2a-268435456_bytes \
+  --size 2147483648 \
+  --workload astra-sim-alibabacloud/inputs/workloads/single_collective/16_gpus/a2a-2147483648_bytes \
   --run-sim --out artifact/results/01_nccl_algorithms/nccl_ring_a2a.gif
 ```
+
+At 2 GB the ring baseline is **5.772 ms** for AllGather (372.0 GB/s) and
+**21.720 ms** for AllToAll (98.9 GB/s). These are the reference points for the
+static and re-optimized schedules in the next sections.
 
 In the 16-GPU 2x8 topology there are eight GPUs per node, so PAT is not eligible;
 NCCL 2.30 uses Ring here. PAT matters for multi-node topologies with one GPU per
@@ -120,7 +126,8 @@ astra-sim-alibabacloud/inputs/msccl/mccl/no_failure/priority-9/MCCL_1x2x8.xml
 On the healthy 16-GPU topology, this static schedule is slightly better than NCCL
 for AllGather: **5.062 ms vs 5.772 ms**, or **1.14x** bus bandwidth. AllToAll is
 equal to NCCL: **21.733 ms vs 21.720 ms**, or **1.00x**. The bottleneck cut is on
-the inter-node ToR links in both cases.
+the inter-node ToR links for AllGather and on the intra-node NVSwitch links for
+AllToAll.
 
 Show the static AllGather schedule with the simulator's original timestamps:
 
@@ -304,19 +311,19 @@ These commands reuse the collective graphs from the MCCL run. The simulator is n
 executed again.
 
 ```bash
-python3 artifact/visualize_flows.py --demo ag-failure_1  --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/ag_failure1.gif
-python3 artifact/visualize_flows.py --demo ag-failure_2  --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/ag_failure2.gif
-python3 artifact/visualize_flows.py --demo ag-failure_3  --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/ag_failure3.gif
-python3 artifact/visualize_flows.py --demo a2a-failure_1 --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/a2a_failure1.gif
-python3 artifact/visualize_flows.py --demo a2a-failure_2 --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/a2a_failure2.gif
-python3 artifact/visualize_flows.py --demo a2a-failure_3 --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/a2a_failure3.gif
+python3 artifact/visualize_flows.py --demo ag-failure_1  --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/ag_failure_1.gif
+python3 artifact/visualize_flows.py --demo ag-failure_2  --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/ag_failure_2.gif
+python3 artifact/visualize_flows.py --demo ag-failure_3  --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/ag_failure_3.gif
+python3 artifact/visualize_flows.py --demo a2a-failure_1 --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/a2a_failure_1.gif
+python3 artifact/visualize_flows.py --demo a2a-failure_2 --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/a2a_failure_2.gif
+python3 artifact/visualize_flows.py --demo a2a-failure_3 --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/a2a_failure_3.gif
 ```
 
 What to look for:
 
 - left panel: healthy-fabric schedule kept under the failure (no reopt);
 - right panel: schedule re-synthesized for the failure (reopt);
-- red links: the bottleneck cut (all links tied for the longest drain time);
+- red links: the bottleneck cut (all links tied for the highest peak utilization);
 - the clock stops at the last ACK for each schedule;
 - each panel freezes at its own completion, so the reoptimized panel stops at
   **5.525 ms** while no-reopt continues to **39.145 ms**;
@@ -390,8 +397,10 @@ Typical timings on a 104-CPU machine with the build already done:
 |---|---:|
 | Draw 1x2x8 topologies | 3.4 s |
 | Smoke test | 15.6 s |
-| E2 single collectives | 73.0 s |
-| E3 MCCL + graphs | 271.7 s |
-| All tutorial animations (ring, static, six failures) | 187.0 s |
+| Ring animations (2 GB) | 238 s |
+| Static animations (2 GB) | 231 s |
+| E2 single collectives | 73.6 s |
+| E3 MCCL + graphs | 270.7 s |
+| Six failure animations | 59 s |
 | Summarize E2 + E3 | 2.8 s |
-| **Total without E4** | **≈ 9.2 min** |
+| **Total without E4** | **≈ 15 min** |
