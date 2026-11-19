@@ -186,6 +186,16 @@ run_mccl() {
   local topo_base="$BASE/inputs/topo/single_collective/1x2x8"
   local workloads=(ag-2147483648_bytes a2a-2147483648_bytes)
   local jobs_list=()
+  # E3 is the only experiment that enables collective-graph. The visualization
+  # commands reuse these CSVs instead of running the simulator a second time.
+  local sysdir="$out/sys"
+  mkdir -p "$sysdir"
+  local sys
+  for sys in nccl.txt mccl-no_failure.txt mccl-failure_1.txt mccl-failure_2.txt mccl-failure_3.txt; do
+    [ -f "$BASE/inputs/system/$sys" ] || continue
+    sed '/^collective-graph/d' "$BASE/inputs/system/$sys" > "$sysdir/$sys"
+    printf '\ncollective-graph: 1\ncollective-graph-ranks: 0\n' >> "$sysdir/$sys"
+  done
   for wl in "${workloads[@]}"; do for ft in "${FAILURE_LIST[@]}"; do
     jobs_list+=("$wl $ft nccl nccl.txt" "$wl $ft mccl_noreopt mccl-no_failure.txt")
     [ "$ft" != no_failure ] && jobs_list+=("$wl $ft mccl_reopt mccl-$ft.txt")
@@ -196,7 +206,7 @@ run_mccl() {
     read -r wl ft alg sys <<< "$j"
     topo="$topo_base"; [ "$ft" != no_failure ] && topo="$topo_base-$ft"
     throttle
-    run_sim "$out/$wl/$ft/$alg" "$wl_dir/$wl" "$topo" "$BASE/inputs/system/$sys" "e3_${wl}_${ft}_${alg}" &
+    run_sim "$out/$wl/$ft/$alg" "$wl_dir/$wl" "$topo" "$sysdir/$sys" "e3_${wl}_${ft}_${alg}" &
   done
   wait
   local csv="$out/results.csv"

@@ -1,0 +1,397 @@
+# MCCL tutorial — student guide
+
+This guide walks through the MCCL story from the original NCCL algorithms to
+static optimization, gray failures, re-optimization, and the training reference
+results. Run every command from the repository root.
+
+The tutorial uses only the **16-GPU 1x2x8 topology** for drawings and packet
+animations. The 128-GPU 1x16x8 topology is used only by the training experiment,
+and that experiment is shown from reference results.
+
+---
+
+## 0. Setup
+
+```bash
+sudo apt-get install -y build-essential cmake libxml2-dev python3 python3-matplotlib python3-pandas
+bash scripts/build.sh -c ns3
+ls -l bin/SimAI_simulator
+```
+
+If a previous build is broken, or you changed compiler/toolchain, clean and
+rebuild:
+
+```bash
+bash scripts/build.sh -lc ns3
+```
+
+Docker alternative:
+
+```bash
+docker build -f artifact/Dockerfile -t mccl-simai .
+docker run --rm -it -v "$PWD/artifact/results:/workspace/SimAI/artifact/results" mccl-simai
+```
+
+### Smoke test
+
+Run this first. It catches most build, path and simulator problems before the
+longer experiments.
+
+```bash
+rm -rf artifact/results/00_setup
+artifact/run.sh smoke -o artifact/results/00_setup
+```
+
+Expected:
+
+```text
+PASS: 2/2 pairs identical.
+```
+
+If it fails, try:
+
+```bash
+bash scripts/build.sh -lc ns3
+artifact/run.sh smoke
+```
+
+---
+
+## 1. Original NCCL algorithms: Ring/Tree and PAT
+
+NCCL 2.20 chooses between **Ring** and **Tree** depending on the collective, the
+message size and the topology:
+
+- **Ring** sends chunks around a logical ring. It is bandwidth-optimal for large
+  messages, but the number of steps grows with the number of GPUs.
+- **Tree** has logarithmic depth and lower latency for small messages. NCCL uses
+  it mainly for reduction-heavy collectives such as AllReduce.
+- In 2.20, AllGather and AllToAll have no PAT.
+
+NCCL 2.30 adds **PAT** (Parallel Aggregated Trees) for AllGather and ReduceScatter:
+
+- eligible when there is more than one node and one GPU per node;
+- selected only inside a size window (default **512 KiB to 1 MiB**);
+- uses the Simple protocol;
+- outside the window, or on an ineligible topology, NCCL falls back to Ring.
+
+Compile each version with a clean build:
+
+```bash
+bash scripts/build.sh -lc ns3 --nccl-version 2.20
+bash scripts/build.sh -lc ns3 --nccl-version 2.30
+```
+
+The XML schedules are version-independent. Use the NCCL-style XML schedules to see
+the ring traffic pattern on the 16-GPU topology:
+
+```bash
+python3 artifact/visualize_flows.py \
+  --topology astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8 \
+  --schedule astra-sim-alibabacloud/inputs/msccl/nccl/priority-1/NCCL_AllGather_16gpus_2nodes.xml \
+  --size 268435456 \
+  --workload astra-sim-alibabacloud/inputs/workloads/single_collective/16_gpus/ag-268435456_bytes \
+  --run-sim --out artifact/results/01_nccl_algorithms/nccl_ring_ag.gif
+
+python3 artifact/visualize_flows.py \
+  --topology astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8 \
+  --schedule astra-sim-alibabacloud/inputs/msccl/nccl/priority-1/NCCL_AllToAll_P2P_16gpus.xml \
+  --size 268435456 \
+  --workload astra-sim-alibabacloud/inputs/workloads/single_collective/16_gpus/a2a-268435456_bytes \
+  --run-sim --out artifact/results/01_nccl_algorithms/nccl_ring_a2a.gif
+```
+
+In the 16-GPU 2x8 topology there are eight GPUs per node, so PAT is not eligible;
+NCCL 2.30 uses Ring here. PAT matters for multi-node topologies with one GPU per
+node.
+
+---
+
+## 2. Static optimization on the healthy fabric
+
+The first optimization step is still open-loop: synthesize a schedule once for the
+healthy topology and keep it. The MCCL schedules for the healthy fabric are in:
+
+```text
+astra-sim-alibabacloud/inputs/msccl/mccl/no_failure/priority-9/1x2x8_MCCL_AG.xml
+astra-sim-alibabacloud/inputs/msccl/mccl/no_failure/priority-9/MCCL_1x2x8.xml
+```
+
+On the healthy 16-GPU topology, this static schedule is slightly better than NCCL
+for AllGather: **5.062 ms vs 5.772 ms**, or **1.14x** bus bandwidth. AllToAll is
+equal to NCCL: **21.733 ms vs 21.720 ms**, or **1.00x**. The bottleneck cut is on
+the inter-node ToR links in both cases.
+
+Show the static AllGather schedule with the simulator's original timestamps:
+
+```bash
+python3 artifact/visualize_flows.py \
+  --topology astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8 \
+  --schedule astra-sim-alibabacloud/inputs/msccl/mccl/no_failure/priority-9/1x2x8_MCCL_AG.xml \
+  --size 2147483648 \
+  --workload astra-sim-alibabacloud/inputs/workloads/single_collective/16_gpus/ag-2147483648_bytes \
+  --run-sim --out artifact/results/02_static_optimization/mccl_static_ag.gif
+```
+
+Show the static AllToAll schedule as well, even though it is 1.00x NCCL:
+
+```bash
+python3 artifact/visualize_flows.py \
+  --topology astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8 \
+  --schedule astra-sim-alibabacloud/inputs/msccl/mccl/no_failure/priority-9/MCCL_1x2x8.xml \
+  --size 2147483648 \
+  --workload astra-sim-alibabacloud/inputs/workloads/single_collective/16_gpus/a2a-2147483648_bytes \
+  --run-sim --out artifact/results/02_static_optimization/mccl_static_a2a.gif
+```
+
+These are the schedules that will be kept when the first failure appears.
+
+---
+
+## 3. Draw the topologies
+
+The main topology is **1 segment x 2 hosts x 8 GPUs = 16 GPUs**:
+
+- 8 GPUs per host, connected by an **NVSwitch** at **2880 Gbps**, 25 ns delay;
+- each GPU has one **400 Gbps** NIC connected to a **ToR / leaf switch**, 0.5 µs delay;
+- it is **rail-optimized**: GPU `i` on every host connects to the same rail. ToR 18
+  connects GPU 0 and GPU 8, ToR 19 connects GPU 1 and GPU 9, and so on.
+
+```text
+Host 0:  GPU0  GPU1  GPU2  GPU3  GPU4  GPU5  GPU6  GPU7
+            \    |     |     |     |     |     |    /
+             +---+-----+-----+-----+-----+-----+---+
+                       NVSwitch 16
+                    (2880 Gbps, 25 ns)
+
+Host 1:  GPU8  GPU9  GPU10 GPU11 GPU12 GPU13 GPU14 GPU15
+            \    |     |     |     |     |     |    /
+             +---+-----+-----+-----+-----+-----+---+
+                       NVSwitch 17
+                    (2880 Gbps, 25 ns)
+
+Rail 0:  GPU0 + GPU8   -> ToR18      Rail 4:  GPU4 + GPU12  -> ToR22
+Rail 1:  GPU1 + GPU9   -> ToR19      Rail 5:  GPU5 + GPU13  -> ToR23
+Rail 2:  GPU2 + GPU10  -> ToR20      Rail 6:  GPU6 + GPU14  -> ToR24
+Rail 3:  GPU3 + GPU11  -> ToR21      Rail 7:  GPU7 + GPU15  -> ToR25
+                    each ToR link: 400 Gbps, 0.5 us
+```
+
+Topology files:
+
+```text
+astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8
+astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8-failure_1
+astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8-failure_2
+astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8-failure_3
+```
+
+### Draw the four panels
+
+```bash
+python3 artifact/draw_topologies.py --outdir artifact/results/03_topologies
+```
+
+Output:
+
+```text
+artifact/results/03_topologies/topology_1x2x8.png
+```
+
+The four panels are healthy, Fail1, Fail2 and Fail3. Degraded links are red.
+
+### Failure profiles
+
+| Profile | What changes |
+|---|---|
+| **Fail1** | GPU 0 ↔ NVSwitch: **2880 → 800 Gbps** (13 of 18 NVSwitch lanes fail) |
+| **Fail2** | GPU 0 ↔ ToR: **400 → 50 Gbps** |
+| **Fail3** | GPU 0 ↔ NVSwitch: **50 Gbps**; GPU 0 ↔ ToR: **100 Gbps**; ToR latency **0.5 → 1.5 µs** |
+
+All other links stay at peak capacity. The failure is local, so a re-optimized
+schedule can route around GPU 0.
+
+---
+
+## 4. Experiment 1 — static schedules under gray failures
+
+Keep the schedule synthesized for the healthy fabric and run it under each
+failure. The schedule does not know that GPU 0 is degraded, so it keeps sending
+traffic through it.
+
+```bash
+rm -rf artifact/results/04_static_failures
+artifact/run.sh single -o artifact/results/04_static_failures
+```
+
+This runs the NCCL-equivalent schedules with 512 KiB pipelining, PXN enabled, and
+3 µs send latency.
+
+Expected slowdowns versus no failure (exact, deterministic):
+
+| Collective | Size | Fail1 | Fail2 | Fail3 |
+|---|---|---:|---:|---:|
+| AllGather | 256 MB | 3.35x | 6.76x | 53.92x |
+| AllGather | 1 GB | 3.46x | 6.99x | 55.89x |
+| AllToAll | 256 MB | 1.00x | 7.99x | 14.09x |
+| AllToAll | 1 GB | 1.00x | 8.00x | 14.03x |
+
+The two rows per collective are the two workload sizes, not run-to-run variation.
+The simulator is deterministic.
+
+AllToAll Fail1 is unchanged because the NVLink hop to the PXN proxy overlaps with
+the NIC transfer. With chunking off, Fail1 does cost AllToAll about 1.56x.
+
+Summarize and plot E2 immediately:
+
+```bash
+python3 artifact/summarize.py artifact/results/04_static_failures --plots
+```
+
+---
+
+## 5. Experiment 2 — MCCL no-reopt vs reopt
+
+Run this experiment into a fixed directory. The MCCL run enables collective graphs,
+so the visualization commands can reuse them instead of running the simulator
+again.
+
+```bash
+rm -rf artifact/results/05_reoptimization
+artifact/run.sh mccl -o artifact/results/05_reoptimization
+```
+
+This runs 2 GB AllGather and AllToAll (128 MB per source) on the 2x8 topology, for
+each failure, with three schedule sets:
+
+| Run | Meaning |
+|---|---|
+| `nccl` | NCCL-equivalent baseline |
+| `mccl_noreopt` | MCCL schedule for the healthy fabric, kept under the failure |
+| `mccl_reopt` | MCCL schedule re-synthesized for that failure |
+
+Expected results (time and BusBW ratio against NCCL):
+
+| | | NCCL | MCCL no reopt | MCCL reopt |
+|---|---|---|---|---|
+| AllGather | no failure | 5.772 ms | 5.062 ms (1.14x) | — |
+| | Fail1 | 20.152 ms | 17.747 ms (1.14x) | 13.720 ms (1.47x) |
+| | Fail2 | 40.768 ms | 39.145 ms (1.04x) | 5.525 ms (7.38x) |
+| | Fail3 | 326.025 ms | 287.346 ms (1.13x) | 108.352 ms (3.01x) |
+| AllToAll | no failure | 21.720 ms | 21.733 ms (1.00x) | — |
+| | Fail1 | 21.720 ms | 28.240 ms (0.77x) | 21.720 ms (1.00x) |
+| | Fail2 | 173.859 ms | 173.861 ms (1.00x) | 24.445 ms (7.11x) |
+| | Fail3 | 304.527 ms | 456.513 ms (0.67x) | 109.318 ms (2.79x) |
+
+Headline: AllGather Fail2 goes from **39.145 ms** to **5.525 ms**, a **7.08x**
+speedup over no-reopt and **7.38x** NCCL bus bandwidth. AllToAll Fail2 goes from
+**173.861 ms** to **24.445 ms**, a **7.11x** improvement.
+
+Without re-optimization, MCCL's schedule stays close to NCCL, or falls below it
+for AllToAll under Fail1/Fail3. The gain comes from re-optimizing.
+
+Summarize and plot E3 immediately:
+
+```bash
+python3 artifact/summarize.py artifact/results/05_reoptimization --plots
+```
+
+---
+
+## 6. Watch the packets flow
+
+These commands reuse the collective graphs from the MCCL run. The simulator is not
+executed again.
+
+```bash
+python3 artifact/visualize_flows.py --demo ag-failure_1  --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/ag_failure1.gif
+python3 artifact/visualize_flows.py --demo ag-failure_2  --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/ag_failure2.gif
+python3 artifact/visualize_flows.py --demo ag-failure_3  --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/ag_failure3.gif
+python3 artifact/visualize_flows.py --demo a2a-failure_1 --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/a2a_failure1.gif
+python3 artifact/visualize_flows.py --demo a2a-failure_2 --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/a2a_failure2.gif
+python3 artifact/visualize_flows.py --demo a2a-failure_3 --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/a2a_failure3.gif
+```
+
+What to look for:
+
+- left panel: healthy-fabric schedule kept under the failure (no reopt);
+- right panel: schedule re-synthesized for the failure (reopt);
+- red links: the bottleneck cut (all links tied for the longest drain time);
+- the clock stops at the last ACK for each schedule;
+- each panel freezes at its own completion, so the reoptimized panel stops at
+  **5.525 ms** while no-reopt continues to **39.145 ms**;
+- the GIF holds the final frame for 1.5 s before looping (`--hold-ms`).
+
+Each run writes:
+
+```text
+<name>.gif
+<name>_summary.md
+<name>_summary.csv
+```
+
+The Markdown summary contains only completion time, AlgBW (GB/s) and speedup. Add
+`--timeline` if you also want a bottleneck timeline PNG.
+
+---
+
+## 7. Experiment 3 — DeepSeek-671B training (reference only)
+
+Do not run this in the 30-minute tutorial. It takes about **37.5 minutes** in our
+environment. The reference results are in `artifact/expected/E4-e2e.csv`; show this
+table instead.
+
+| Failure | transformer (ms) | gradient (ms) | batch (s) | vs no failure |
+|---|---:|---:|---:|---:|
+| no failure | 48.448 | 59.443 | 18.66 | 1.00x |
+| Fail1 | 48.454 | 86.942 | 18.69 | 1.00x |
+| Fail2 | 266.874 | 339.680 | 102.82 | 5.51x |
+| Fail3 | 257.022 | 756.403 | 99.45 | 5.33x |
+
+Fail1 barely matters for training: the gradient phase slows down, but the
+transformer phase dominates the batch time and is unchanged. Fail2 and Fail3 are
+severe: the batch time grows by about 5.5x and 5.3x.
+
+---
+
+## 8. Summarize results
+
+Summarize the E2 run:
+
+```bash
+python3 artifact/summarize.py artifact/results/04_static_failures --plots
+```
+
+Summarize the E3 run:
+
+```bash
+python3 artifact/summarize.py artifact/results/05_reoptimization --plots
+```
+
+Missing experiments are skipped, so this works with only E2 and E3 (no E1
+comparison and no E4 training run). The summarizer checks every simulated time
+against `artifact/expected/` and reports `N/N runs identical`.
+
+---
+
+## 9. Useful options
+
+```text
+-j N                         parallel simulations
+-f no_failure,failure_2      restrict failure profiles
+-o DIR                       choose the output directory
+-t LABEL                     run label (native / docker)
+-b PATH                      simulator binary
+```
+
+Typical timings on a 104-CPU machine with the build already done:
+
+| Step | Time |
+|---|---:|
+| Draw 1x2x8 topologies | 3.4 s |
+| Smoke test | 15.6 s |
+| E2 single collectives | 73.0 s |
+| E3 MCCL + graphs | 271.7 s |
+| All tutorial animations (ring, static, six failures) | 187.0 s |
+| Summarize E2 + E3 | 2.8 s |
+| **Total without E4** | **≈ 9.2 min** |
