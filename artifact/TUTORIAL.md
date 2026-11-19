@@ -57,7 +57,96 @@ artifact/run.sh smoke
 
 ---
 
-## 1. Original NCCL algorithms: Ring/Tree and PAT
+## 1. How SimAI runs a collective
+
+SimAI is an ns-3-based network simulator. For one collective it takes four
+inputs:
+
+- a **workload** file: which collective, which message size, how many GPUs;
+- a **topology** file: nodes and links, each with bandwidth and latency;
+- an **ns-3 config** (`inputs/config/SimAI.conf`): packet, congestion-control and
+  PFC settings;
+- a **system config**: which implementation to use and where the schedule XMLs
+  live.
+
+The simulator is a single binary:
+
+```bash
+bin/SimAI_simulator \
+  -t 1 \
+  -w astra-sim-alibabacloud/inputs/workloads/single_collective/16_gpus/ag-2147483648_bytes \
+  -n astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8 \
+  -c astra-sim-alibabacloud/inputs/config/SimAI.conf \
+  -s astra-sim-alibabacloud/inputs/system/nccl.txt \
+  -r demo_ag
+```
+
+Parameters used throughout the tutorial:
+
+| Flag | Meaning |
+|---|---|
+| `-t` | number of simulator threads (1 here) |
+| `-w` | workload file (collective, size, GPU group) |
+| `-n` | topology file |
+| `-c` | ns-3 network config |
+| `-s` | system config (implementation + schedule directory) |
+| `-r` | run name (used for logs and output files) |
+
+`artifact/run.sh` and `artifact/visualize_flows.py` build exactly this command
+for you; the runner executes it inside the run's output directory.
+
+### The workload file
+
+The workload is a short text description. Its header sets the GPU group
+(`model_parallel_NPU_group: 16`); the collective line for the 2 GB AllGather is:
+
+```text
+allgather	-1	1	ALLGATHER	2147483648	1		NONE	0	1	NONE	0	1
+```
+
+The fields that matter here are the collective type (`ALLGATHER`) and the message
+size (`2147483648` bytes = 2 GB).
+
+### The system config: which schedule is simulated
+
+The system config is where the schedule is selected. The relevant fields are:
+
+```text
+all-gather-implementation: mscclCustomFlow
+all-to-all-implementation: mscclCustomFlow
+reduce-scatter-implementation: mscclCustomFlow
+msccl-path: astra-sim-alibabacloud/inputs/msccl/nccl/
+collective-optimization: baseline
+collective-graph: 0
+collective-graph-ranks: 0
+```
+
+- `*-implementation: mscclCustomFlow` tells SimAI to execute an XML schedule
+  instead of the analytic flow model.
+- `msccl-path` is the directory SimAI searches for the XML. **Changing this one
+  line changes the simulated schedule.**
+- `collective-graph: 1` dumps the realized per-flow graph to CSV (the packet
+  animations reuse it); `collective-graph-ranks` optionally restricts the dump to
+  groups containing the listed rank ids, and `0` keeps the group that contains
+  rank 0.
+
+The tutorial switches schedules only by changing `msccl-path`:
+
+| System config | `msccl-path` | Schedule simulated |
+|---|---|---|
+| `inputs/system/nccl.txt` | `inputs/msccl/nccl/` | NCCL ring / P2P baseline |
+| `inputs/system/mccl-no_failure.txt` | `inputs/msccl/mccl/no_failure/` | static MCCL, healthy fabric |
+| `inputs/system/mccl-failure_2.txt` | `inputs/msccl/mccl/failure_2/` | MCCL re-synthesized for Fail2 |
+
+SimAI picks the XML in that directory that matches the collective, the message
+size and the topology (for example `1x2x8_MCCL_AG_Fail2.xml`) and logs
+`Found matching MSCCL XML algorithm: ...`. For a single visualization,
+`artifact/visualize_flows.py --schedule <xml>` writes a temporary system file
+with `msccl-path` pointing at that XML's directory.
+
+---
+
+## 2. Original NCCL algorithms: Ring/Tree and PAT
 
 NCCL 2.20 chooses between **Ring** and **Tree** depending on the collective, the
 message size and the topology:
@@ -118,7 +207,7 @@ node.
 
 ---
 
-## 2. Static optimization on the healthy fabric
+## 3. Static optimization on the healthy fabric
 
 The first optimization step is still open-loop: synthesize a schedule once for the
 healthy topology and keep it. The MCCL schedules for the healthy fabric are in:
@@ -161,7 +250,7 @@ These are the schedules that will be kept when the first failure appears.
 
 ---
 
-## 3. Draw the topologies and its failures
+## 4. Draw the topologies and its failures
 
 The main topology is **1 segment x 2 hosts x 8 GPUs = 16 GPUs**:
 
@@ -226,7 +315,7 @@ schedule can route around GPU 0.
 
 ---
 
-## 4. Experiment 1 — static schedules under gray failures
+## 5. Experiment 1 — static schedules under gray failures
 
 Keep the schedule synthesized for the healthy fabric and run it under each
 failure. The schedule does not know that GPU 0 is degraded, so it keeps sending
@@ -263,7 +352,7 @@ python3 artifact/summarize.py artifact/results/04_static_failures --plots
 
 ---
 
-## 5. Experiment 2 — MCCL no-reopt vs reopt
+## 6. Experiment 2 — MCCL no-reopt vs reopt
 
 Run this experiment into a fixed directory. The MCCL run enables collective graphs,
 so the visualization commands can reuse them instead of running the simulator
@@ -311,7 +400,7 @@ python3 artifact/summarize.py artifact/results/05_reoptimization --plots
 
 ---
 
-## 6. Watch the packets flow
+## 7. Watch the packets flow
 
 These commands reuse the collective graphs from the MCCL run. The simulator is not
 executed again, so all six animations can run in parallel:
@@ -350,7 +439,7 @@ The Markdown summary contains only completion time, AlgBW (GB/s) and speedup. Ad
 
 ---
 
-## 7. Experiment 3 — DeepSeek-671B training (reference only)
+## 8. Experiment 3 — DeepSeek-671B training (reference only)
 
 Do not run this in the 30-minute tutorial. It takes about **37.5 minutes** in our
 environment. The reference results are in `artifact/expected/E4-e2e.csv`; show this
@@ -369,7 +458,7 @@ severe: the batch time grows by about 5.5x and 5.3x.
 
 ---
 
-## 8. Useful options
+## 9. Useful options
 
 ```text
 -j N                         parallel simulations
