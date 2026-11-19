@@ -87,20 +87,24 @@ the ring traffic pattern on the 16-GPU topology. **All visualizations in this
 tutorial use the same 2 GB collective**, so the ring, static and re-optimized
 schedules can be compared directly:
 
+The two animations are independent, so run them in parallel:
+
 ```bash
 python3 artifact/visualize_flows.py \
   --topology astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8 \
   --schedule astra-sim-alibabacloud/inputs/msccl/nccl/priority-1/NCCL_AllGather_16gpus_2nodes.xml \
   --size 2147483648 \
   --workload astra-sim-alibabacloud/inputs/workloads/single_collective/16_gpus/ag-2147483648_bytes \
-  --run-sim --out artifact/results/01_nccl_algorithms/nccl_ring_ag.gif
+  --run-sim --out artifact/results/01_nccl_algorithms/nccl_ring_ag.gif &
 
 python3 artifact/visualize_flows.py \
   --topology astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8 \
   --schedule astra-sim-alibabacloud/inputs/msccl/nccl/priority-1/NCCL_AllToAll_P2P_16gpus.xml \
   --size 2147483648 \
   --workload astra-sim-alibabacloud/inputs/workloads/single_collective/16_gpus/a2a-2147483648_bytes \
-  --run-sim --out artifact/results/01_nccl_algorithms/nccl_ring_a2a.gif
+  --run-sim --out artifact/results/01_nccl_algorithms/nccl_ring_a2a.gif &
+
+wait
 ```
 
 At 2 GB the ring baseline is **5.772 ms** for AllGather (372.0 GB/s) and
@@ -129,7 +133,8 @@ equal to NCCL: **21.733 ms vs 21.720 ms**, or **1.00x**. The bottleneck cut is o
 the inter-node ToR links for AllGather and on the intra-node NVSwitch links for
 AllToAll.
 
-Show the static AllGather schedule with the simulator's original timestamps:
+Show the static AllGather and AllToAll schedules with the simulator's original
+timestamps. They are independent, so run them in parallel:
 
 ```bash
 python3 artifact/visualize_flows.py \
@@ -137,19 +142,19 @@ python3 artifact/visualize_flows.py \
   --schedule astra-sim-alibabacloud/inputs/msccl/mccl/no_failure/priority-9/1x2x8_MCCL_AG.xml \
   --size 2147483648 \
   --workload astra-sim-alibabacloud/inputs/workloads/single_collective/16_gpus/ag-2147483648_bytes \
-  --run-sim --out artifact/results/02_static_optimization/mccl_static_ag.gif
-```
+  --run-sim --out artifact/results/02_static_optimization/mccl_static_ag.gif &
 
-Show the static AllToAll schedule as well, even though it is 1.00x NCCL:
-
-```bash
 python3 artifact/visualize_flows.py \
   --topology astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8 \
   --schedule astra-sim-alibabacloud/inputs/msccl/mccl/no_failure/priority-9/MCCL_1x2x8.xml \
   --size 2147483648 \
   --workload astra-sim-alibabacloud/inputs/workloads/single_collective/16_gpus/a2a-2147483648_bytes \
-  --run-sim --out artifact/results/02_static_optimization/mccl_static_a2a.gif
+  --run-sim --out artifact/results/02_static_optimization/mccl_static_a2a.gif &
+
+wait
 ```
+
+The AllToAll schedule is shown as well, even though it is 1.00x NCCL.
 
 These are the schedules that will be kept when the first failure appears.
 
@@ -308,15 +313,17 @@ python3 artifact/summarize.py artifact/results/05_reoptimization --plots
 ## 6. Watch the packets flow
 
 These commands reuse the collective graphs from the MCCL run. The simulator is not
-executed again.
+executed again, so all six animations can run in parallel:
 
 ```bash
-python3 artifact/visualize_flows.py --demo ag-failure_1  --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/ag_failure_1.gif
-python3 artifact/visualize_flows.py --demo ag-failure_2  --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/ag_failure_2.gif
-python3 artifact/visualize_flows.py --demo ag-failure_3  --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/ag_failure_3.gif
-python3 artifact/visualize_flows.py --demo a2a-failure_1 --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/a2a_failure_1.gif
-python3 artifact/visualize_flows.py --demo a2a-failure_2 --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/a2a_failure_2.gif
-python3 artifact/visualize_flows.py --demo a2a-failure_3 --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/a2a_failure_3.gif
+python3 artifact/visualize_flows.py --demo ag-failure_1  --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/ag_failure_1.gif &
+python3 artifact/visualize_flows.py --demo ag-failure_2  --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/ag_failure_2.gif &
+python3 artifact/visualize_flows.py --demo ag-failure_3  --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/ag_failure_3.gif &
+python3 artifact/visualize_flows.py --demo a2a-failure_1 --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/a2a_failure_1.gif &
+python3 artifact/visualize_flows.py --demo a2a-failure_2 --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/a2a_failure_2.gif &
+python3 artifact/visualize_flows.py --demo a2a-failure_3 --results-dir artifact/results/05_reoptimization/E3-mccl --out artifact/results/06_packet_animations/a2a_failure_3.gif &
+
+wait
 ```
 
 What to look for:
@@ -397,10 +404,10 @@ Typical timings on a 104-CPU machine with the build already done:
 |---|---:|
 | Draw 1x2x8 topologies | 3.4 s |
 | Smoke test | 15.6 s |
-| Ring animations (2 GB) | 238 s |
-| Static animations (2 GB) | 231 s |
+| Ring animations (2 GB, in parallel) | 136 s |
+| Static animations (2 GB, in parallel) | 137 s |
 | E2 single collectives | 73.6 s |
 | E3 MCCL + graphs | 270.7 s |
-| Six failure animations | 59 s |
+| Six failure animations (in parallel) | 12 s |
 | Summarize E2 + E3 | 2.8 s |
-| **Total without E4** | **≈ 15 min** |
+| **Total without E4** | **≈ 11 min** |
