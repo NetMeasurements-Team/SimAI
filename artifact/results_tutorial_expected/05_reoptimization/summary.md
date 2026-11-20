@@ -2,7 +2,7 @@
 
 ## E3 - MCCL schedules vs NCCL under gray failures (2 GB, 128 MB per source, 16 GPUs)
 
-Per topology: NCCL; MCCL *no reopt* = the schedule synthesized for the healthy fabric, kept under the failure; MCCL *reopt* = the schedule re-synthesized for that failure. In parentheses: BusBW ratio against NCCL (= T_NCCL / T), as in Fig. 1 and Fig. 8.
+Per topology: NCCL; MCCL *no reopt* = the schedule synthesized for the healthy fabric, kept under the failure; MCCL *reopt* = the schedule re-synthesized for that failure. In parentheses: AlgBW ratio against NCCL (= T_NCCL / T), as in Fig. 1 and Fig. 8.
 
 | coll | topology | NCCL | MCCL no reopt | MCCL reopt |
 |---|---|---|---|---|

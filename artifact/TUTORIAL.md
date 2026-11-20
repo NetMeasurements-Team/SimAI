@@ -218,7 +218,7 @@ astra-sim-alibabacloud/inputs/msccl/mccl/no_failure/priority-9/MCCL_1x2x8.xml
 ```
 
 On the healthy 16-GPU topology, this static schedule is slightly better than NCCL
-for AllGather: **5.062 ms vs 5.772 ms**, or **1.14x** bus bandwidth. AllToAll is
+for AllGather: **5.062 ms vs 5.772 ms**, or **1.14x** algorithm bandwidth. AllToAll is
 equal to NCCL: **21.733 ms vs 21.720 ms**, or **1.00x**. The bottleneck cut is on
 the inter-node ToR links for AllGather and on the intra-node NVSwitch links for
 AllToAll.
@@ -372,7 +372,7 @@ each failure, with three schedule sets:
 | `mccl_noreopt` | MCCL schedule for the healthy fabric, kept under the failure |
 | `mccl_reopt` | MCCL schedule re-synthesized for that failure |
 
-Expected results (time and BusBW ratio against NCCL):
+Expected results (time and AlgBW ratio against NCCL):
 
 | | | NCCL | MCCL no reopt | MCCL reopt |
 |---|---|---|---|---|
@@ -386,7 +386,7 @@ Expected results (time and BusBW ratio against NCCL):
 | | Fail3 | 304.527 ms | 456.513 ms (0.67x) | 109.318 ms (2.79x) |
 
 Headline: AllGather Fail2 goes from **39.145 ms** to **5.525 ms**, a **7.08x**
-speedup over no-reopt and **7.38x** NCCL bus bandwidth. AllToAll Fail2 goes from
+speedup over no-reopt and **7.38x** NCCL algorithm bandwidth. AllToAll Fail2 goes from
 **173.861 ms** to **24.445 ms**, a **7.11x** improvement.
 
 Without re-optimization, MCCL's schedule stays close to NCCL, or falls below it

@@ -43,7 +43,7 @@ What we added on top of upstream SimAI (ns-3 backend):
 |---|---|---|---|
 | C1 | The custom-schedule path preserves SimAI's accuracy: an NCCL ring/P2P schedule fed through it reproduces SimAI's native NCCL completion times (Sec. 2.3). | **E1** | Identical simulated end time (to the ns) for every workload × topology pair; `PASS 16/16`. |
 | C2 | Under the three gray-failure profiles, static schedules collapse to the speed of the degraded link (Sec. 2.3, 6.1; "Orig"/"No reopt" in Fig. 1 and 8). | **E2** | Static schedules slow down to the degraded link: AllGather ≈ 3.4× (Fail1), ≈ 7× (Fail2), ≈ 55× (Fail3); AllToAll unchanged (Fail1, degraded NVLink not on its bottleneck), ≈ 8× (Fail2), ≈ 14× (Fail3). |
-| C3 | Under gray failures, keeping the schedule synthesized for the healthy fabric ("no reopt") performs about like NCCL, while re-synthesizing it for the failure ("reopt") gives a multiple of NCCL's bus bandwidth (Sec. 6.1, Fig. 8, 1x2x8 points; MCCL schedules included, synthesizers not). | **E3** | All 22 simulations `SUCCESS`, each with its intended schedule. BusBW ratio vs NCCL, no reopt → reopt: AllGather 1.14× (no failure), 1.14 → 1.47× (Fail1), 1.04 → 7.38× (Fail2), 1.13 → 3.01× (Fail3); AllToAll 1.00× (no failure), 0.77 → 1.00× (Fail1), 1.00 → 7.11× (Fail2), 0.67 → 2.79× (Fail3). |
+| C3 | Under gray failures, keeping the schedule synthesized for the healthy fabric ("no reopt") performs about like NCCL, while re-synthesizing it for the failure ("reopt") gives a multiple of NCCL's algorithm bandwidth (Sec. 6.1, Fig. 8, 1x2x8 points; MCCL schedules included, synthesizers not). | **E3** | All 22 simulations `SUCCESS`, each with its intended schedule. AlgBW ratio vs NCCL, no reopt → reopt: AllGather 1.14× (no failure), 1.14 → 1.47× (Fail1), 1.04 → 7.38× (Fail2), 1.13 → 3.01× (Fail3); AllToAll 1.00× (no failure), 0.77 → 1.00× (Fail1), 1.00 → 7.11× (Fail2), 0.67 → 2.79× (Fail3). |
 | C4 | Full LLM training (DeepSeek-671B, one of 16 pipeline stages on 128 GPUs, i.e. a 2048-GPU job) runs through the custom-schedule path under every failure profile, and the training time on one batch is reconstructed from the simulated phases as in the paper (Sec. 6.3; NCCL bars of Fig. 11c,d and Fig. 17). | **E4** | All 8 simulations `SUCCESS` with the MSCCL schedules in use; reconstructed training time on one batch 18.66 s with no failure; unchanged under Fail1 (1.00×), ≈ 5.5× under Fail2 and ≈ 5.3× under Fail3. |
 
 ### Not in this artifact (out of scope)
@@ -221,7 +221,7 @@ of E2, for each topology (no failure and Fail1–3) and three schedule sets:
 
 That is 22 simulations. `results.csv` records the schedule file each run actually loaded and
 `summarize.py` fails if it is not the intended one. It reports, per topology, the three times and
-the BusBW ratio against NCCL (= T_NCCL / T, the paper's metric in Fig. 1 and 8) and, with
+the AlgBW ratio against NCCL (= T_NCCL / T, the paper's metric in Fig. 1 and 8) and, with
 `--plots`, draws them like Fig. 8 (hatched: no reopt; solid: reopt; dashed line: NCCL).
 Expected (reference values, `artifact/expected/E3-mccl.csv`):
 
@@ -238,7 +238,7 @@ Expected (reference values, `artifact/expected/E3-mccl.csv`):
 
 Without re-optimization MCCL's schedules stay close to NCCL under a failure (or fall below it for
 AllToAll under Fail1/Fail3); re-optimized for the failure they reach up to 7.38× (AllGather) and
-7.11× (AllToAll) NCCL's bus bandwidth under Fail2. The AllGather ratios correspond to the 1x2x8
+7.11× (AllToAll) NCCL's algorithm bandwidth under Fail2. The AllGather ratios correspond to the 1x2x8
 group of Fig. 8(a).
 
 ### E4 – DeepSeek-671B training under gray failures (claim C4)

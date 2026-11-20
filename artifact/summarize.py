@@ -133,7 +133,7 @@ FAIL_SHORT = {"no_failure": "No Fail", "failure_1": "Fail 1", "failure_2": "Fail
 
 def summarize_e3(path, plots, outdir):
     """MCCL vs NCCL: per collective and topology, NCCL, MCCL without re-optimization (schedule
-    synthesized for the healthy fabric) and MCCL re-optimized for the failure. BusBW ratio
+    synthesized for the healthy fabric) and MCCL re-optimized for the failure. AlgBW ratio
     against NCCL = T_nccl / T (same collective size, so the busBW factor cancels)."""
     rows = read_csv(path)
     by = defaultdict(dict)
@@ -166,7 +166,7 @@ def summarize_e3(path, plots, outdir):
             "",
             "Per topology: NCCL; MCCL *no reopt* = the schedule synthesized for the healthy fabric, "
             "kept under the failure; MCCL *reopt* = the schedule re-synthesized for that failure. "
-            "In parentheses: BusBW ratio against NCCL (= T_NCCL / T), as in Fig. 1 and Fig. 8.",
+            "In parentheses: AlgBW ratio against NCCL (= T_NCCL / T), as in Fig. 1 and Fig. 8.",
             "",
             md_table(["coll", "topology", "NCCL", "MCCL no reopt", "MCCL reopt"], table),
             ""]
@@ -197,7 +197,7 @@ def _plot_e3(ratios, outdir):
         ax.set_xticks(list(x))
         ax.set_xticklabels([FAIL_SHORT.get(f, f) for f in fails], rotation=30)
         ax.set_title(f"{wl.split('-')[0].upper()} 2 GB, 1x2x8")
-        ax.set_ylabel("BusBW ratio against NCCL")
+        ax.set_ylabel("AlgBW ratio against NCCL")
         ax.legend(fontsize=8)
         ax.grid(True, axis="y", alpha=0.3)
     fig.tight_layout()
