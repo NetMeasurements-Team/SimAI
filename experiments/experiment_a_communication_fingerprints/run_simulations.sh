@@ -11,7 +11,7 @@ if [[ ! -x "$BIN" ]]; then
   exit 1
 fi
 
-python3 "${EXP_DIR}/generate_workloads.py"
+python3 "${EXP_DIR}/generate_workloads.py" >/dev/null
 mkdir -p "${EXP_DIR}/raw_outputs" "${EXP_DIR}/results"
 
 for scenario in dp tp pp; do

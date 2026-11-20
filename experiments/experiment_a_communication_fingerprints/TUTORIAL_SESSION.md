@@ -6,25 +6,13 @@ Run every command from the SimAI repository root:
 cd /home/settimo/Documents/AIxNEXT/SimAI
 ```
 
-## 0. Before the session
-
-```bash
-test -x ./bin/SimAI_analytical || ./scripts/build.sh -c analytical
-
-python3 -m venv .venv-experiment-a
-source .venv-experiment-a/bin/activate
-python -m pip install plotly
-```
-
-No `sudo` is required.
-
 ## 1. Show the model and experiment parameters
 
 Regenerate the experiment metadata/workloads, then print the presentation view:
 
 ```bash
-python experiments/experiment_a_communication_fingerprints/generate_workloads.py
-python experiments/experiment_a_communication_fingerprints/show_parameters.py
+python3 experiments/experiment_a_communication_fingerprints/generate_workloads.py
+python3 experiments/experiment_a_communication_fingerprints/show_parameters.py
 ```
 
 `metadata.json` remains the machine-readable source used by the scripts; there is no need to display its raw JSON during the tutorial.
@@ -72,7 +60,7 @@ The PP visual uses a 1F1B schedule with four microbatches. SimAI Analytical does
 ## 3. Show the network configuration
 
 ```bash
-python experiments/experiment_a_communication_fingerprints/show_network.py
+python3 experiments/experiment_a_communication_fingerprints/show_network.py
 ```
 
 This prints only the settings used by the experiment:
@@ -114,7 +102,7 @@ Inspect the parsed events and validation report:
 
 ```bash
 sed -n '1,12p' experiments/experiment_a_communication_fingerprints/parsed/events.csv
-python -m json.tool experiments/experiment_a_communication_fingerprints/parsed/validation.json
+python3 -m json.tool experiments/experiment_a_communication_fingerprints/parsed/validation.json
 ```
 
 Expected headline values for the current configuration:
@@ -128,8 +116,8 @@ Expected headline values for the current configuration:
 ## 5. Generate and open the interactive visualizations
 
 ```bash
-python experiments/experiment_a_communication_fingerprints/interactive_plot.py
-python experiments/experiment_a_communication_fingerprints/collective_vs_p2p.py
+python3 experiments/experiment_a_communication_fingerprints/interactive_plot.py
+python3 experiments/experiment_a_communication_fingerprints/collective_vs_p2p.py
 
 xdg-open experiments/experiment_a_communication_fingerprints/plots/communication_fingerprints_interactive.html
 ```

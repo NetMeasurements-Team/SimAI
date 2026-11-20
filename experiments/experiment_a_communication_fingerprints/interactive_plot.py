@@ -74,7 +74,6 @@ HTML = r"""<!doctype html>
 <body>
 <h1>Communication fingerprints of DP, TP, and PP</h1>
 <div class="subtitle">Explore message count, payload, phase ordering, and pipeline scheduling.</div>
-<div class="drill-hint">Click any message marker to inspect how that operation is implemented on the network.</div>
 
 <section class="controls">
   <div class="control">
@@ -120,7 +119,6 @@ HTML = r"""<!doctype html>
 </section>
 
 <div id="plot"></div>
-<div class="note"><b>Interpretation:</b> PP=4 creates three communication boundaries, shown as S1↔S2, S2↔S3, and S3↔S4. Purple right-pointing markers are forward activations; pink left-pointing markers are backward gradients. In 1F1B, identical horizontal positions indicate concurrent schedule slots. Horizontal position is normalized schedule progress, not a SimAI timestamp. The bandwidth/latency result is a sum of isolated message serialization costs; it is not pipeline step time and does not model contention or overlap.</div>
 
 <script>
 const baseEvents = __EVENTS_JSON__;
@@ -257,14 +255,9 @@ function update() {
   Plotly.react('plot',traces,{
     margin:{l:90,r:25,t:42,b:75},paper_bgcolor:'white',plot_bgcolor:'#fbfcfe',
     hovermode:'closest',legend:{orientation:'h',y:1.1,x:0},
-    xaxis:{title:'Normalized schematic step progress (not simulated time)',range:[-0.025,1.025],tickvals:[0,.5,1],ticktext:['forward start','backward / steady state','step end'],gridcolor:'#e5e9f0'},
-    yaxis:{range:[0.70,3.28],tickvals:[0.88,1,1.12,2,3],ticktext:['PP S1↔S2','PP S2↔S3','PP S3↔S4','TP=4','DP=4'],gridcolor:'#e5e9f0',fixedrange:true},
-    shapes:[{type:'line',x0:.5,x1:.5,y0:.75,y1:3.25,line:{color:'#b8c0cc',dash:'dash'}}],
-    annotations:[
-      {x:1,y:3.18,text:'DP: 1 × 248.88 MB',showarrow:false,xanchor:'right'},
-      {x:1,y:2.18,text:'TP: 48 × 50.33 MB',showarrow:false,xanchor:'right'},
-      {x:1,y:1.22,text:`PP: ${2*(STAGES-1)*(+microbatches.value)} × 12.58 MB`,showarrow:false,xanchor:'right'}
-    ]
+    xaxis:{range:[-0.025,1.025],showticklabels:false,gridcolor:'#e5e9f0'},
+    yaxis:{range:[0.70,3.28],showticklabels:false,gridcolor:'#e5e9f0',fixedrange:true},
+    shapes:[{type:'line',x0:.5,x1:.5,y0:.75,y1:3.25,line:{color:'#b8c0cc',dash:'dash'}}]
   },{responsive:true,displaylogo:false});
   const payloads=full.map(e=>e.payload_bytes).sort((a,b)=>a-b);
   const median=payloads.length?(payloads.length%2?payloads[(payloads.length-1)/2]:(payloads[payloads.length/2-1]+payloads[payloads.length/2])/2):0;

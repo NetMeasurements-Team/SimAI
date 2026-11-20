@@ -3644,7 +3644,6 @@ h1{margin:0 0 4px;font-size:29px}.subtitle{color:var(--muted);margin-bottom:18px
 <body>
 <div class="topnav"><a id="backLink" class="backlink" href="communication_fingerprints_interactive.html">← Back to fingerprints</a><div id="selectionContext" class="context"></div></div>
 <h1>What happens inside each communication operation?</h1>
-<div class="subtitle">A logical AllReduce expands into many point-to-point chunk transfers; a PP message remains one adjacent-stage transfer.</div>
 <div class="tabs"><button class="tab active" data-s="DP">DP AllReduce</button><button class="tab" data-s="TP">TP AllReduce</button><button class="tab" data-s="PP">PP point-to-point</button></div>
 <div class="explore">
   <label>Model profile<select id="modelProfile"><option value="gpt2">GPT-2-like 124M</option><option value="oneb">Llama-like theoretical 1B</option></select></label>
@@ -3835,7 +3834,7 @@ function drawPlots(){
   {type:'bar',name:'One complete operation, all GPUs',x:names,y:oneOperation,marker:{color:'#ed8b23'},text:oneOperation.map(label),textposition:'outside',hovertemplate:'%{x}<br>one complete operation: %{text}<extra></extra>'},
   {type:'bar',name:'Whole iteration',x:names,y:wholeIteration,marker:{color:['#d62828','#277da1','#6a4c93']},text:wholeIteration.map(label),textposition:'outside',hovertemplate:'%{x}<br>whole iteration: %{text}<extra></extra>'}
  ],{title:`${profiles[el('modelProfile').value].label}: logical payload → one operation → whole iteration`,barmode:'group',
-   yaxis:{title:'Data transmitted (MB, decimal; logarithmic scale)',type:'log'},margin:{l:85,r:25,t:80,b:60},legend:{orientation:'h',y:1.16,x:0}},
+   yaxis:{title:'Data transmitted (MB, decimal; logarithmic scale)',type:'log'},margin:{l:85,r:25,t:80,b:105},legend:{orientation:'h',x:0.5,xanchor:'center',y:-0.18,yanchor:'top'}},
    {responsive:true,displaylogo:false});
 }
 function stop(){if(timer){clearInterval(timer);timer=null}el('play').textContent='▶ Play'}
