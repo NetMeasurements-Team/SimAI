@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
 """Draw the MCCL artifact topologies, including the three gray-failure profiles.
 
-The figures are meant to be used at the start of the tutorial: they show the
-healthy rail-optimized fabric and then the same fabric after Fail1, Fail2 and
-Fail3, with the degraded links highlighted and labelled.
+One large PNG is written per profile (healthy, Fail1, Fail2, Fail3) so each can
+be shown full-screen during the tutorial.  The panels use the same visual
+language as the packet animations: green intra-node NVLink, dark inter-node ToR
+links, magenta dashed degraded links with a FAIL badge, and readable white
+labels.
 
 Usage:
     python3 artifact/draw_topologies.py
     python3 artifact/draw_topologies.py --outdir artifact/results
+    python3 artifact/draw_topologies.py --family all
 """
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import List, Tuple
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
+from PIL import Image, ImageDraw
 
 import visualize_flows as vf
 
@@ -32,8 +31,15 @@ PROFILES = [
     ("no_failure", "Healthy fabric", "all links at peak capacity"),
     ("failure_1", "Fail1: NVSwitch lanes", "GPU0 <-> NVSwitch 2880 -> 800 Gbps"),
     ("failure_2", "Fail2: NIC / ToR link", "GPU0 <-> ToR 400 -> 50 Gbps"),
-    ("failure_3", "Fail3: GPU replacement", "GPU0 <-> NVSwitch 50 Gbps; GPU0 <-> ToR 100 Gbps; +1 us ToR latency"),
+    ("failure_3", "Fail3: GPU replacement",
+     "GPU0 <-> NVSwitch 50 Gbps; GPU0 <-> ToR 100 Gbps; +1 us ToR latency"),
 ]
+
+PANEL_W = 1400
+PANEL_H = 1100
+# Larger than the animation panels so the same relative font size reads bigger
+# on a full-screen topology slide.
+DPI = 150
 
 
 def topology_paths(family: str) -> List[Tuple[str, str, str, Path]]:
@@ -46,90 +52,79 @@ def topology_paths(family: str) -> List[Tuple[str, str, str, Path]]:
             for key, title, subtitle in PROFILES]
 
 
-def draw_panel(ax, topo: vf.Topology, title: str, subtitle: str) -> None:
-    pos = topo.layout()
-    max_bw = vf._max_bw_by_kind(topo)
-    degraded: List[Tuple[Tuple[int, int], float, float]] = []
-
-    for key, link in topo.links.items():
-        x1, y1 = pos[link.u]
-        x2, y2 = pos[link.v]
-        kind = vf._link_kind(topo, key)
-        cap = link.bw_gbps
-        max_kind = max_bw.get(kind, cap) or cap
-        is_degraded = cap < 0.5 * max_kind
-        if is_degraded:
-            color = "#d62728"
-            width = 4.0
-            degraded.append((key, cap, max_kind))
-        elif kind == "nvlink":
-            color = "#2e7d32"
-            width = 2.8
-        else:
-            color = "#111111"
-            width = 2.4
-        ax.plot([x1, x2], [y1, y2], color=color, lw=width, alpha=0.92 if is_degraded else 0.75, zorder=1)
-
-    for key, cap, max_kind in degraded:
-        link = topo.links[key]
-        x1, y1 = pos[link.u]
-        x2, y2 = pos[link.v]
-        mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-        ax.text(mx, my, f"{cap:g} Gbps\n(was {max_kind:g})", ha="center", va="center",
-                fontsize=6.0, color="#8b0000", fontweight="bold",
-                bbox=dict(boxstyle="round,pad=0.16", fc="white", ec="#c0392b", alpha=0.95), zorder=8)
-
-    for gid in topo.gpu_ids:
-        x, y = pos[gid]
-        ax.scatter([x], [y], s=300, c="#4c72b0", edgecolors="black", linewidths=0.6, zorder=4)
-        ax.text(x, y, str(gid), ha="center", va="center", fontsize=7, color="white", zorder=5)
-    for sid in topo.nvswitch_ids:
-        x, y = pos[sid]
-        ax.scatter([x], [y], s=210, marker="s", c="#55a868", edgecolors="black", linewidths=0.6, zorder=4)
-        ax.text(x, y - 0.25, f"NVSwitch{sid}", ha="center", va="top", fontsize=6, color="#2e6b3a")
-    for sid in topo.switch_ids:
-        x, y = pos[sid]
-        ax.scatter([x], [y], s=170, marker="D", c="#c44e52", edgecolors="black", linewidths=0.6, zorder=4)
-        ax.text(x, y - 0.25, f"ToR{sid}", ha="center", va="top", fontsize=6, color="#7b2d2f")
-
-    ax.set_aspect("equal", adjustable="datalim")
-    ax.axis("off")
-    ax.set_title(f"{title}\n{subtitle}", fontsize=9, fontweight="bold")
-
-
-def draw_family(family: str, outdir: Path) -> Path:
-    rows = topology_paths(family)
-    fig, axes = plt.subplots(2, 2, figsize=(18, 13) if family == "1x2x8" else (22, 22))
-    axes = axes.ravel()
-    for ax, (_, title, subtitle, path) in zip(axes, rows):
-        if not path.exists():
-            ax.axis("off")
-            ax.set_title(f"missing: {path.name}")
-            continue
-        draw_panel(ax, vf.Topology.parse(path), title, subtitle)
-
-    legend = [
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="#4c72b0", markeredgecolor="black",
-               markersize=10, label="GPU"),
-        Line2D([0], [0], marker="s", color="w", markerfacecolor="#55a868", markeredgecolor="black",
-               markersize=10, label="NVSwitch"),
-        Line2D([0], [0], marker="D", color="w", markerfacecolor="#c44e52", markeredgecolor="black",
-               markersize=9, label="ToR / leaf switch"),
-        Line2D([0], [0], color="#2e7d32", lw=3.0, label="intra-node / NVLink (2880 Gbps)"),
-        Line2D([0], [0], color="#111111", lw=3.0, label="inter-node / Ethernet to ToR (400 Gbps)"),
-        Line2D([0], [0], color="#d62728", lw=3.5, label="degraded link (Fail1 / Fail2 / Fail3)"),
+def draw_legend(draw: ImageDraw.ImageDraw, x: float, y: float, font_scale: float) -> None:
+    small = vf._font(int(12 * font_scale))
+    rows = [
+        ("dot", "#4c72b0", "GPU"),
+        ("square", "#55a868", "NVSwitch"),
+        ("diamond", "#c44e52", "ToR / leaf switch"),
+        ("line", vf.COLOR_INTRA, "intra-node / NVLink"),
+        ("line", vf.COLOR_INTER, "inter-node / to ToR"),
+        ("dash", vf.COLOR_FAIL, "degraded link"),
     ]
-    fig.legend(handles=legend, loc="lower center", ncol=4, fontsize=8, frameon=False)
-    fig.suptitle(
-        f"MCCL rail-optimized topology: {family}  (healthy fabric and the three gray-failure profiles)",
-        fontsize=13, fontweight="bold",
+    per_col = 3
+    row_h = int(20 * font_scale)
+    col_w = int(250 * font_scale)
+    width = col_w * 2
+    height = row_h * per_col + int(12 * font_scale)
+    draw.rectangle([x, y, x + width, y + height], fill="#ffffff", outline="#b0bec5")
+    for i, (kind, color, label) in enumerate(rows):
+        col, row = divmod(i, per_col)
+        cx0 = x + col * col_w + int(12 * font_scale)
+        cy = y + int(10 * font_scale) + row * row_h + row_h // 2
+        sx0, sx1 = cx0, cx0 + int(34 * font_scale)
+        if kind == "line":
+            draw.line([(sx0, cy), (sx1, cy)], fill=vf._rgb(color), width=max(2, int(4 * font_scale)))
+        elif kind == "dash":
+            vf._draw_dashed(draw, (sx0, cy), (sx1, cy), vf._rgb(color),
+                            max(2, int(4 * font_scale)),
+                            dash=max(5, int(8 * font_scale)), gap=max(3, int(5 * font_scale)))
+        elif kind == "dot":
+            r = int(7 * font_scale)
+            draw.ellipse([sx0, cy - r, sx0 + 2 * r, cy + r], fill=vf._rgb(color),
+                         outline="white", width=2)
+        elif kind == "square":
+            r = int(6 * font_scale)
+            draw.rectangle([sx0, cy - r, sx0 + 2 * r, cy + r], fill=vf._rgb(color),
+                           outline="white", width=2)
+        elif kind == "diamond":
+            r = int(7 * font_scale)
+            mx = sx0 + r
+            draw.polygon([(mx, cy - r), (mx + r, cy), (mx, cy + r), (mx - r, cy)],
+                         fill=vf._rgb(color), outline="white")
+        draw.text((sx1 + int(10 * font_scale), cy - int(7 * font_scale)), label,
+                  fill=vf._rgb(vf.COLOR_TEXT), font=small)
+
+
+def render_panel(topo: vf.Topology, title: str, subtitle: str,
+                 width: int = PANEL_W, height: int = PANEL_H, dpi: int = DPI) -> Image.Image:
+    scenario = vf.Scenario(name=title, topology=topo, flows=[], pos=topo.layout(), size=0)
+    img, _, _ = vf._render_base_panel(
+        scenario, width, height, dpi,
+        draw_legend=False, draw_progress=False, subtitle=subtitle,
+        top_pad=110, bottom_pad=230, margin=60, margin_x=170,
+        clamp_badges=True,
     )
-    fig.tight_layout(rect=(0, 0.04, 1, 0.96))
+    draw = ImageDraw.Draw(img)
+    base_scale = dpi / 100.0
+    font_scale = max(1.0, base_scale) * 1.7
+    legend_h = int(20 * font_scale) * 3 + int(12 * font_scale)
+    draw_legend(draw, 50, height - legend_h - int(30 * base_scale), font_scale)
+    return img
+
+
+def draw_family(family: str, outdir: Path) -> List[Path]:
     outdir.mkdir(parents=True, exist_ok=True)
-    out = outdir / f"topology_{family}.png"
-    fig.savefig(out, dpi=170)
-    plt.close(fig)
-    return out
+    written: List[Path] = []
+    for key, title, subtitle, path in topology_paths(family):
+        if not path.exists():
+            print(f"skip (missing): {path}")
+            continue
+        img = render_panel(vf.Topology.parse(path), title, subtitle)
+        out = outdir / f"topology_{family}_{key}.png"
+        img.save(out)
+        written.append(out)
+    return written
 
 
 def main() -> int:
@@ -142,8 +137,8 @@ def main() -> int:
 
     families = ["1x2x8", "1x16x8"] if args.family == "all" else [args.family]
     for family in families:
-        out = draw_family(family, args.outdir)
-        print(f"Wrote {out}")
+        for out in draw_family(family, args.outdir):
+            print(f"Wrote {out}")
     return 0
 
 

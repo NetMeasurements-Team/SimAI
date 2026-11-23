@@ -871,7 +871,9 @@ def _rgb(color: str) -> Tuple[int, int, int]:
 
 
 def _panel_transform(pos: Dict[int, Tuple[float, float]], width: int, height: int,
-                     top_pad: int, bottom_pad: int, margin: int):
+                     top_pad: int, bottom_pad: int, margin: int,
+                     margin_x: Optional[int] = None):
+    margin_x = margin if margin_x is None else margin_x
     xs = [p[0] for p in pos.values()]
     ys = [p[1] for p in pos.values()]
     min_x, max_x = min(xs), max(xs)
@@ -879,7 +881,7 @@ def _panel_transform(pos: Dict[int, Tuple[float, float]], width: int, height: in
     data_w = max(1e-6, max_x - min_x)
     data_h = max(1e-6, max_y - min_y)
     usable_h = height - top_pad - bottom_pad - 2 * margin
-    scale = min((width - 2 * margin) / data_w, usable_h / data_h)
+    scale = min((width - 2 * margin_x) / data_w, usable_h / data_h)
     ox = (width - data_w * scale) / 2.0
     oy = top_pad + margin + (usable_h - data_h * scale) / 2.0
 
@@ -961,13 +963,18 @@ def _text_badge(draw, cx: float, cy: float, text: str, font, fg: str,
     return tw, th
 
 
-def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int):
+def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int, *,
+                       draw_legend: bool = True, draw_progress: bool = True,
+                       subtitle: Optional[str] = None,
+                       top_pad: int = 140, bottom_pad: int = 250,
+                       margin: int = 40, margin_x: Optional[int] = None,
+                       clamp_badges: bool = False):
     img = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(img)
     topo = scenario.topology
     pos = scenario.pos
-    top_pad, bottom_pad, margin = 140, 250, 40
-    to_px, scale = _panel_transform(pos, width, height, top_pad, bottom_pad, margin)
+    to_px, scale = _panel_transform(pos, width, height, top_pad, bottom_pad,
+                                    margin, margin_x)
     max_bw = _max_bw_by_kind(topo)
     base_scale = dpi / 100.0
     font_scale = max(1.0, base_scale) * 1.7
@@ -990,11 +997,25 @@ def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int):
             dx, dy = x2 - x1, y2 - y1
             length = math.hypot(dx, dy) or 1.0
             nx, ny = -dy / length, dx / length
-            # Put the badge on the side of the link that faces away from the graph.
-            if (mx - width / 2.0) * nx + (my - height / 2.0) * ny < 0:
-                nx, ny = -nx, -ny
             off = tw / 2.0 + int(20 * base_scale)
-            lx, ly = mx + nx * off, my + ny * off
+            if clamp_badges:
+                candidates = [(mx + nx * off, my + ny * off),
+                              (mx - nx * off, my - ny * off)]
+
+                def room(point: Tuple[float, float]) -> float:
+                    return min(point[0], width - point[0],
+                               point[1], height - point[1])
+
+                lx, ly = max(candidates, key=room)
+                pad = tw / 2.0 + int(8 * base_scale)
+                lx = min(max(lx, pad), width - pad)
+                ly = min(max(ly, int(24 * base_scale)), height - int(24 * base_scale))
+            else:
+                # Original behaviour: put the badge on the side of the link that
+                # faces away from the graph.
+                if (mx - width / 2.0) * nx + (my - height / 2.0) * ny < 0:
+                    nx, ny = -nx, -ny
+                lx, ly = mx + nx * off, my + ny * off
             draw.line([(mx, my), (lx, ly)], fill=_rgb(COLOR_FAIL),
                       width=max(1, int(2 * base_scale)))
             _text_badge(draw, lx, ly, text, font, COLOR_FAIL, border=_rgb(COLOR_FAIL))
@@ -1033,15 +1054,24 @@ def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int):
 
     title_font = _font(int(18 * font_scale))
     bbox = draw.textbbox((0, 0), scenario.name, font=title_font)
-    draw.text(((width - (bbox[2] - bbox[0])) / 2, 12), scenario.name,
+    title_y = 12
+    draw.text(((width - (bbox[2] - bbox[0])) / 2, title_y), scenario.name,
               fill=_rgb(COLOR_TEXT), font=title_font)
+    if subtitle:
+        sub_font = _font(int(13 * font_scale))
+        sub_bbox = draw.textbbox((0, 0), subtitle, font=sub_font)
+        sub_y = title_y + (bbox[3] - bbox[1]) + int(10 * base_scale)
+        draw.text(((width - (sub_bbox[2] - sub_bbox[0])) / 2, sub_y), subtitle,
+                  fill=_rgb(COLOR_MUTED), font=sub_font)
 
-    _draw_legend(draw, margin, height - bottom_pad + int(14 * base_scale), font_scale)
+    if draw_legend:
+        _draw_legend(draw, margin, height - bottom_pad + int(14 * base_scale), font_scale)
 
-    bar_x0, bar_x1 = int(width * 0.48), width - margin
-    bar_y = height - int(34 * base_scale)
-    draw.rectangle([bar_x0, bar_y, bar_x1, bar_y + int(12 * base_scale)],
-                   fill="#eceff1", outline="#90a4ae")
+    if draw_progress:
+        bar_x0, bar_x1 = int(width * 0.48), width - margin
+        bar_y = height - int(34 * base_scale)
+        draw.rectangle([bar_x0, bar_y, bar_x1, bar_y + int(12 * base_scale)],
+                       fill="#eceff1", outline="#90a4ae")
     draw.rectangle([0, 0, width - 1, height - 1], outline="#cfd8dc", width=2)
     return img, to_px, scale
 

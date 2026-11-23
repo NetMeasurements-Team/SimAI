@@ -290,7 +290,9 @@ astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8-failure_2
 astra-sim-alibabacloud/inputs/topo/single_collective/1x2x8-failure_3
 ```
 
-### Draw the four panels
+### Draw the four topologies
+
+Each profile is written as its own large PNG so it can be shown full-screen:
 
 ```bash
 python3 artifact/draw_topologies.py --outdir artifact/results/03_topologies
@@ -299,10 +301,14 @@ python3 artifact/draw_topologies.py --outdir artifact/results/03_topologies
 Output:
 
 ```text
-artifact/results/03_topologies/topology_1x2x8.png
+artifact/results/03_topologies/topology_1x2x8_no_failure.png
+artifact/results/03_topologies/topology_1x2x8_failure_1.png
+artifact/results/03_topologies/topology_1x2x8_failure_2.png
+artifact/results/03_topologies/topology_1x2x8_failure_3.png
 ```
 
-The four panels are healthy, Fail1, Fail2 and Fail3. Degraded links are red.
+Green lines are intra-node NVLink, dark lines are inter-node ToR links, and
+degraded links are magenta dashed with a `FAIL <rate>` badge.
 
 ### Failure profiles
 
