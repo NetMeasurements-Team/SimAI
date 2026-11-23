@@ -968,7 +968,9 @@ def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int, *,
                        subtitle: Optional[str] = None,
                        top_pad: int = 140, bottom_pad: int = 250,
                        margin: int = 40, margin_x: Optional[int] = None,
-                       clamp_badges: bool = False):
+                       clamp_badges: bool = False,
+                       switch_labels_outside: bool = False,
+                       failure_labels_outside: bool = False):
     img = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(img)
     topo = scenario.topology
@@ -979,6 +981,7 @@ def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int, *,
     base_scale = dpi / 100.0
     font_scale = max(1.0, base_scale) * 1.7
 
+    pending_failures: List[Tuple[float, Tuple[float, float], Tuple[float, float]]] = []
     for key, link in topo.links.items():
         x1, y1 = to_px(*pos[link.u])
         x2, y2 = to_px(*pos[link.v])
@@ -989,6 +992,9 @@ def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int, *,
             lw = max(2, int(6.0 * base_scale))
             _draw_dashed(draw, (x1, y1), (x2, y2), _rgb(COLOR_FAIL), lw,
                          dash=max(6, int(10 * base_scale)), gap=max(4, int(6 * base_scale)))
+            if failure_labels_outside:
+                pending_failures.append((cap, (x1, y1), (x2, y2)))
+                continue
             mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
             text = f"FAIL {cap:g} Gbps"
             font = _font(int(12 * font_scale))
@@ -1040,8 +1046,15 @@ def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int, *,
         x, y = to_px(*pos[sid])
         draw.rectangle([x - nv_r, y - nv_r, x + nv_r, y + nv_r], fill=_rgb("#55a868"),
                        outline="white", width=max(1, int(1.5 * base_scale)))
-        _text_badge(draw, x - nv_r - int(6 * base_scale), y, f"NVSwitch{sid}",
-                    nv_font, "#2e6b3a", anchor="right")
+        if switch_labels_outside:
+            # Put the label above/below the switch, outside the fan-out links.
+            gap = nv_r + int(20 * base_scale)
+            ly = y - gap if y < height / 2.0 else y + gap
+            _text_badge(draw, x, ly, f"NVSwitch{sid}", nv_font, "#2e6b3a",
+                        anchor="center")
+        else:
+            _text_badge(draw, x - nv_r - int(6 * base_scale), y, f"NVSwitch{sid}",
+                        nv_font, "#2e6b3a", anchor="right")
 
     tor_r = max(9, int(12 * base_scale))
     tor_font = _font(int(11 * font_scale))
@@ -1051,6 +1064,32 @@ def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int, *,
                      fill=_rgb("#c44e52"), outline="white")
         _text_badge(draw, x + tor_r + int(6 * base_scale), y, f"ToR{sid}",
                     tor_font, "#7b2d2f", anchor="left")
+
+    if pending_failures:
+        # Put the failure-rate badges in the left margin, outside the graph,
+        # with a short leader line to the degraded link's leftmost endpoint.
+        left_edge = min(to_px(*p)[0] for p in pos.values())
+        font = _font(int(12 * font_scale))
+        badge_h = int(34 * base_scale)
+        gap = int(12 * base_scale)
+        pending_failures.sort(key=lambda item: min(item[1][1], item[2][1]))
+        placed: List[float] = []
+        for cap, p1, p2 in pending_failures:
+            text = f"FAIL {cap:g} Gbps"
+            bbox = draw.textbbox((0, 0), text, font=font)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            cx = max(tw / 2.0 + int(12 * base_scale),
+                     min(left_edge - tw / 2.0 - int(12 * base_scale), left_edge / 2.0))
+            # Point at the middle of the degraded link, not at its endpoint.
+            anchor = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+            cy = anchor[1]
+            for prev in placed:
+                if abs(cy - prev) < badge_h + gap:
+                    cy = prev + badge_h + gap
+            placed.append(cy)
+            draw.line([(anchor[0], anchor[1]), (cx + tw / 2.0 + int(6 * base_scale), cy)],
+                      fill=_rgb(COLOR_FAIL), width=max(1, int(2 * base_scale)))
+            _text_badge(draw, cx, cy, text, font, COLOR_FAIL, border=_rgb(COLOR_FAIL))
 
     title_font = _font(int(18 * font_scale))
     bbox = draw.textbbox((0, 0), scenario.name, font=title_font)
@@ -1235,13 +1274,29 @@ def _animate_pillow(scenarios: Sequence[Scenario], out_path: Path, fps: int, fra
         summarize_scenario(scenario, cut_edges, collective, scenario.size, source_side)
 
     scale = dpi / 100.0
-    panel_w = int(1000 * scale)
-    panel_h = int(850 * scale)
+    # Match the topology drawing's graph area (1600x1150 at dpi 150) and add
+    # room for the demo-only header (title + stats box) and footer (legend +
+    # progress bar).  Everything scales with dpi, so the relative label
+    # positions are identical to draw_topologies.py.
+    panel_w = int(1066 * scale)
+    panel_h = int(847 * scale)
+    top_pad = int(120 * scale)
+    bottom_pad = int(200 * scale)
+    margin = int(53 * scale)
+    margin_x = int(227 * scale)
     total_w = panel_w * len(scenarios)
     total_h = panel_h
     max_bw = [_max_bw_by_kind(s.topology) for s in scenarios]
     rngs = [random.Random(1234 + i) for i in range(len(scenarios))]
-    bases = [_render_base_panel(s, panel_w, panel_h, dpi) for s in scenarios]
+    bases = [
+        _render_base_panel(
+            s, panel_w, panel_h, dpi,
+            top_pad=top_pad, bottom_pad=bottom_pad,
+            margin=margin, margin_x=margin_x,
+            switch_labels_outside=True, failure_labels_outside=True,
+        )
+        for s in scenarios
+    ]
 
     def render(frame_index: int):
         frame = Image.new("RGB", (total_w, total_h), "white")
@@ -1458,24 +1513,6 @@ def demo_paths(demo: str) -> Tuple[str, Path, Path, Path, Path, int]:
     workload = info["workload"]
     system = info["system"]
     return collective, topology, baseline, reopt, workload, system
-
-
-def _collective_kind(args) -> str:
-    """Infer AllGather vs AllToAll from the workload/schedule names."""
-    texts = []
-    if args.workload:
-        texts.append(args.workload.name)
-    if args.schedule:
-        texts.append(args.schedule.name)
-    if args.baseline:
-        texts.append(args.baseline.name)
-    for text in texts:
-        low = text.lower()
-        if "alltoall" in low or "a2a" in low:
-            return "a2a"
-        if "allgather" in low or "ag-" in low or low.startswith("ag"):
-            return "ag"
-    return "ag"
 
 
 def _collective_kind(args) -> str:

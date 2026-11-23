@@ -35,8 +35,8 @@ PROFILES = [
      "GPU0 <-> NVSwitch 50 Gbps; GPU0 <-> ToR 100 Gbps; +1 us ToR latency"),
 ]
 
-PANEL_W = 1400
-PANEL_H = 1100
+PANEL_W = 1600
+PANEL_H = 1150
 # Larger than the animation panels so the same relative font size reads bigger
 # on a full-screen topology slide.
 DPI = 150
@@ -102,8 +102,9 @@ def render_panel(topo: vf.Topology, title: str, subtitle: str,
     img, _, _ = vf._render_base_panel(
         scenario, width, height, dpi,
         draw_legend=False, draw_progress=False, subtitle=subtitle,
-        top_pad=110, bottom_pad=230, margin=60, margin_x=170,
-        clamp_badges=True,
+        top_pad=120, bottom_pad=240, margin=80, margin_x=340,
+        clamp_badges=True, switch_labels_outside=True,
+        failure_labels_outside=True,
     )
     draw = ImageDraw.Draw(img)
     base_scale = dpi / 100.0
