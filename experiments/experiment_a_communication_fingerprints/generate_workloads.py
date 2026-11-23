@@ -117,6 +117,7 @@ def main() -> None:
         },
     }
     (ROOT / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    print("Workload generation complete: DP, TP, and PP inputs are ready.")
 
 
 if __name__ == "__main__":
