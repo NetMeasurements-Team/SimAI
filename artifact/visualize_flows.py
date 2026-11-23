@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Animate how an MSCCL/MCCL schedule moves packets over a SimAI topology.
 
-The script is a tutorial: it draws the GPU/NVSwitch/ToR graph, moves one dot per
-scheduled chunk along its physical path, colours every link by its current load,
-and makes the bottleneck link pulse/explode.  A side-by-side mode compares a
-schedule synthesized for the healthy fabric ("no reopt") with the schedule
-re-synthesized for the failure ("reopt"), using the exact MCCL artifact files.
+The script is a tutorial: it draws the GPU/NVSwitch/ToR graph and moves one dot
+per scheduled chunk along its physical path, with a trail and an arrowhead so the
+direction is clear.  Link type is colour-coded (green intra-node, dark inter-node),
+the degraded link is magenta dashed, congestion is an inner heat line (blue ->
+amber -> orange), and the bottleneck cut is a red cross/star marker.  Red is used
+only for the cut, so a congested link is never confused with a failure.  A
+side-by-side mode compares a schedule synthesized for the healthy fabric
+("no reopt") with the schedule re-synthesized for the failure ("reopt"), using
+the exact MCCL artifact files.
 
 Examples
 --------
@@ -93,6 +97,15 @@ FLOW_COLORS = [
     "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5",
     "#c49c94", "#f7b6d2", "#c7c7c7", "#dbdb8d", "#9edae5",
 ]
+
+# Distinct semantic colours: link type, failure, congestion and bottleneck cut
+# must never share a colour, otherwise a congested link looks like a failure.
+COLOR_INTRA = "#2e7d32"        # intra-node NVLink
+COLOR_INTER = "#37474f"        # inter-node ToR
+COLOR_FAIL = "#c2185b"         # degraded/failed link (magenta)
+COLOR_BOTTLENECK = "#e53935"   # bottleneck cut marker (red, only here)
+COLOR_TEXT = "#111111"
+COLOR_MUTED = "#555555"
 
 
 def parse_rate(text: str) -> float:
@@ -269,6 +282,7 @@ class Flow:
     end: float
     path: Optional[List[int]] = None
     link_keys: List[Tuple[int, int]] = field(default_factory=list)
+    dir_keys: List[Tuple[int, int]] = field(default_factory=list)
     color: str = "#1f77b4"
     _points: List[Tuple[float, float]] = field(default_factory=list, repr=False)
     _cum: List[float] = field(default_factory=list, repr=False)
@@ -313,6 +327,7 @@ class Scenario:
     loads: Dict[Tuple[int, int], List[float]] = field(default_factory=dict)
     bottleneck: Optional[Tuple[int, int]] = None
     bottlenecks: List[Tuple[int, int]] = field(default_factory=list)
+    cut_directed: List[Tuple[int, int]] = field(default_factory=list)
     summary: Dict[str, object] = field(default_factory=dict)
     _completion: Optional[float] = None
 
@@ -338,14 +353,27 @@ class Scenario:
         return self.topology.links[key].bw_gbps
 
     def load_at(self, key: Tuple[int, int], frame_index: int) -> float:
-        series = self.loads.get(key)
-        if not series:
-            return 0.0
-        return series[min(frame_index, len(series) - 1)]
+        """Load on an undirected link = the busier of its two directions.
+
+        A physical link is full duplex: each direction has its own capacity, so
+        the two directions must not be summed (that would double the load)."""
+        a, b = key
+        best = 0.0
+        for directed in ((a, b), (b, a)):
+            series = self.loads.get(directed)
+            if series:
+                best = max(best, series[min(frame_index, len(series) - 1)])
+        return best
 
     def utilization_at(self, key: Tuple[int, int], frame_index: int) -> float:
         cap = self.link_capacity(key)
         return self.load_at(key, frame_index) / cap if cap else 0.0
+
+    def directed_load_at(self, directed: Tuple[int, int], frame_index: int) -> float:
+        series = self.loads.get(directed)
+        if not series:
+            return 0.0
+        return series[min(frame_index, len(series) - 1)]
 
     def active_flows(self, t: float) -> List[Flow]:
         return [f for f in self.flows if f.start <= t < f.end]
@@ -545,135 +573,258 @@ def build_link_loads(
     topology: Topology,
     frame_times: Sequence[float],
 ) -> Dict[Tuple[int, int], List[float]]:
+    """Achieved throughput per link (Gbps) over a sliding window.
+
+    A flow transfers ``size`` bytes across every link on its path between its
+    start and ACK.  We accumulate the bytes that have crossed each link and take
+    the derivative over a short window.  This is the physical rate the link
+    actually carries, so it is bounded by the link capacity by construction --
+    unlike summing ``size*8/duration`` of every overlapping flow, which counts
+    queued chunks as if they were all transmitting at once.
+    """
     starts: Dict[Tuple[int, int], List[float]] = defaultdict(list)
     ends: Dict[Tuple[int, int], List[float]] = defaultdict(list)
-    rates: Dict[Tuple[int, int], List[float]] = defaultdict(list)
+    sizes: Dict[Tuple[int, int], List[float]] = defaultdict(list)
     for flow in flows:
-        if not flow.link_keys:
+        directed = flow.dir_keys or flow.link_keys
+        if not directed:
             continue
-        rate = flow.rate_gbps
-        for key in flow.link_keys:
+        for key in directed:
             starts[key].append(flow.start)
             ends[key].append(flow.end)
-            rates[key].append(rate)
+            sizes[key].append(float(flow.size))
 
     times = np.asarray(frame_times, dtype=float)
+    span = float(times[-1] - times[0]) if len(times) >= 2 else 1.0
+    window = max(1.0, span / 20.0)
     loads: Dict[Tuple[int, int], List[float]] = {}
     for key in starts:
         st = np.asarray(starts[key], dtype=float)
         en = np.asarray(ends[key], dtype=float)
-        rt = np.asarray(rates[key], dtype=float)
-        ev = np.concatenate([st, en])
-        de = np.concatenate([rt, -rt])
-        order = np.argsort(ev, kind="stable")
-        ev = ev[order]
-        prefix = np.cumsum(de[order])
-        idx = np.searchsorted(ev, times, side="right") - 1
-        series = np.where(idx >= 0, prefix[np.clip(idx, 0, len(prefix) - 1)], 0.0)
-        loads[key] = np.maximum(series, 0.0).tolist()
+        sz = np.asarray(sizes[key], dtype=float)
+        dur = np.maximum(1.0, en - st)
+
+        def cumulative(tt: "np.ndarray") -> "np.ndarray":
+            frac = np.clip((tt[:, None] - st[None, :]) / dur[None, :], 0.0, 1.0)
+            return (frac * sz[None, :]).sum(axis=1)
+
+        rate = (cumulative(times) - cumulative(times - window)) * 8.0 / window
+        loads[key] = np.maximum(rate, 0.0).tolist()
     return loads
 
 def assign_paths(flows: Iterable[Flow], topology: Topology) -> None:
-    cache: Dict[Tuple[int, int], Tuple[Optional[List[int]], List[Tuple[int, int]]]] = {}
+    cache: Dict[Tuple[int, int], Tuple[Optional[List[int]], List[Tuple[int, int]],
+                                       List[Tuple[int, int]]]] = {}
     colors = {gid: FLOW_COLORS[gid % len(FLOW_COLORS)] for gid in topology.gpu_ids}
     for flow in flows:
         key = (flow.src, flow.dst)
         if key not in cache:
             route = topology.route(flow.src, flow.dst)
-            cache[key] = (route, topology.path_links(route) if route else [])
-        flow.path, flow.link_keys = cache[key]
+            links = topology.path_links(route) if route else []
+            directed = list(zip(route, route[1:])) if route else []
+            cache[key] = (route, links, directed)
+        flow.path, flow.link_keys, flow.dir_keys = cache[key]
         flow.color = colors.get(flow.src, "#1f77b4")
         flow._points = []
         flow._cum = []
         flow._total_len = 0.0
 
 
-def summarize_scenario(scenario: Scenario) -> Dict[str, object]:
-    bytes_by_link: Dict[Tuple[int, int], int] = defaultdict(int)
-    events: Dict[Tuple[int, int], List[Tuple[float, float]]] = defaultdict(list)
-    for flow in scenario.flows:
-        rate = flow.rate_gbps
-        for key in flow.link_keys:
-            bytes_by_link[key] += flow.size
-            events[key].append((flow.start, rate))
-            events[key].append((flow.end, -rate))
+_CUT_CACHE: Dict[Tuple[str, str], Tuple[List[Tuple[int, int]], float, int, float, frozenset]] = {}
 
-    drain_by_link: Dict[Tuple[int, int], float] = {}
-    peak_load_by_link: Dict[Tuple[int, int], float] = {}
-    for key, evs in events.items():
-        cap = scenario.link_capacity(key)
-        if cap <= 0:
+
+def optimal_bottleneck_cut(
+    topology: Topology, collective: str, size: int
+) -> Tuple[List[Tuple[int, int]], float, int, float, frozenset]:
+    """Bottleneck cut of a collective on a topology (ForestColl-style).
+
+    The cut is a partition (S, T) of the graph chosen to maximise the data the
+    collective must push across it per unit of cut bandwidth:
+
+        AllGather:  max_S |S∩Vc| / B+(S)
+        AllToAll:   max_S |S∩Vc|·|T∩Vc| / B+(S)
+
+    where B+(S) is the total capacity of the links leaving S.  The result
+    depends only on the topology (including failures) and the collective, never
+    on the schedule, so the no-reopt and reopt panels share exactly the same
+    cut.  The partition is found with a small MILP (scipy/HiGHS).
+
+    Returns (cut_links, capacity_gbps, k, optimal_ms, source_side) where
+    source_side is the set of nodes on the S side of the cut.  A schedule moves
+    each commodity from S to T exactly once, so the required crossing data is
+    fixed and the optimal schedule achieves it at the cut capacity.
+    """
+    cache_key = (str(topology.path), collective)
+    cached = _CUT_CACHE.get(cache_key)
+    if cached is not None:
+        cut, capacity, k, optimal_ms, source_side = cached
+        return list(cut), capacity, k, optimal_ms, source_side
+
+    try:
+        import numpy as _np
+        from scipy.optimize import Bounds, LinearConstraint, milp
+        from scipy.sparse import lil_matrix
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("scipy is required to compute the bottleneck cut") from exc
+
+    nodes = sorted(topology.adj)
+    index = {node: i for i, node in enumerate(nodes)}
+    n_nodes = len(nodes)
+    arcs: List[Tuple[int, int, float]] = []
+    for (u, v), link in topology.links.items():
+        arcs.append((u, v, link.bw_gbps))
+        arcs.append((v, u, link.bw_gbps))
+    n_arcs = len(arcs)
+    n_var = n_nodes + n_arcs
+
+    cost = _np.zeros(n_var)
+    for j, (_, _, cap) in enumerate(arcs):
+        cost[n_nodes + j] = cap
+    # Tiny tie-breaker: among cuts of equal capacity, keep the ToR switches on
+    # the S side.  This yields the canonical "ingress of the excluded GPU" cut
+    # for AllGather and a clean one-sided ToR cut for AllToAll, instead of an
+    # arbitrary mix of the two sides.
+    for tor in topology.switch_ids:
+        cost[index[tor]] = -1e-3
+
+    matrix = lil_matrix((n_arcs, n_var))
+    for j, (u, v, _) in enumerate(arcs):
+        matrix[j, index[u]] = 1.0
+        matrix[j, index[v]] = -1.0
+        matrix[j, n_nodes + j] = -1.0
+    arc_constraints = LinearConstraint(
+        matrix.tocsr(), _np.full(n_arcs, -_np.inf), _np.zeros(n_arcs)
+    )
+
+    gpus = list(topology.gpu_ids)
+    n_gpus = len(gpus)
+    integrality = _np.zeros(n_var)
+    integrality[:n_nodes] = 1
+    bounds = Bounds(_np.zeros(n_var), _np.ones(n_var))
+
+    best: Optional[Tuple[float, int, float, "_np.ndarray"]] = None
+    for k in range(1, n_gpus):
+        row = lil_matrix((1, n_var))
+        for gpu in gpus:
+            row[0, index[gpu]] = 1.0
+        constraints = [arc_constraints, LinearConstraint(row.tocsr(), k, k)]
+        result = milp(cost, constraints=constraints, integrality=integrality,
+                      bounds=bounds, options={"time_limit": 30, "mip_rel_gap": 0.0})
+        if not result.success:
             continue
-        evs.sort(key=lambda item: (item[0], item[1]))
-        running = 0.0
-        peak = 0.0
-        for _, delta in evs:
-            running += delta
-            peak = max(peak, running)
-        peak_load_by_link[key] = max(0.0, peak)
-        drain_by_link[key] = bytes_by_link.get(key, 0) * 8.0 / cap / 1e6
+        cut_bw = float(result.fun)
+        if cut_bw <= 0:
+            continue
+        demand = float(k) if collective == "ag" else float(k * (n_gpus - k))
+        ratio = demand / cut_bw
+        if best is None or ratio > best[0]:
+            best = (ratio, k, cut_bw, _np.round(result.x[:n_nodes]).astype(int))
+    if best is None:
+        raise RuntimeError(f"could not compute a bottleneck cut for {topology.path}")
 
-    max_util = max((peak_load_by_link[k] / scenario.link_capacity(k)
-                    for k in peak_load_by_link), default=0.0)
-    # The bottleneck is the set of links with the highest fraction of their
-    # capacity in use. 1% keeps only true ties at the top.
-    bottlenecks = [key for key in peak_load_by_link
-                   if max_util > 0 and peak_load_by_link[key] / scenario.link_capacity(key) >= 0.99 * max_util]
-    bottlenecks.sort(key=lambda k: (-peak_load_by_link[k] / scenario.link_capacity(k),
-                                    -drain_by_link[k]))
-    scenario.bottlenecks = bottlenecks
-    scenario.bottleneck = bottlenecks[0] if bottlenecks else None
+    _, k, cut_bw, side = best
+    in_s = {nodes[i] for i in range(n_nodes) if side[i] == 1}
+    cut_links: List[Tuple[int, int]] = []
+    for (u, v), link in topology.links.items():
+        if (u in in_s) != (v in in_s):
+            cut_links.append(link.key)
+    cut_links.sort(key=lambda key: (-topology.links[key].bw_gbps, key))
+    capacity = sum(topology.links[key].bw_gbps for key in cut_links)
 
-    total_cap = sum(scenario.link_capacity(k) for k in bottlenecks)
-    total_bytes = sum(bytes_by_link.get(k, 0) for k in bottlenecks)
-    peak_load = sum(peak_load_by_link[k] for k in bottlenecks)
-    selected_drain = max((drain_by_link[k] for k in bottlenecks), default=0.0)
+    side_set = frozenset(in_s)
+    demand = float(k) if collective == "ag" else float(k * (n_gpus - k))
+    crossing_bits = demand * (size / n_gpus) * 8.0
+    optimal_ms = crossing_bits / capacity / 1e6 if capacity else 0.0
+    _CUT_CACHE[cache_key] = (tuple(cut_links), capacity, k, optimal_ms, side_set)
+    return list(cut_links), capacity, k, optimal_ms, side_set
+
+
+def summarize_scenario(
+    scenario: Scenario,
+    cut_edges: Sequence[Tuple[int, int]],
+    collective: str,
+    size: int,
+    source_side: frozenset,
+) -> Dict[str, object]:
+    """Summarise a schedule against the shared topology/collective cut.
+
+    The cut is fixed by the topology (including failures) and the collective, so
+    both schedules are measured on the same links.  The optimal schedule moves
+    every commodity from S to T exactly once; we therefore count the required
+    S->T data once per commodity (not both directions, and not repeated
+    crossings, which only a suboptimal schedule would add).  The achieved
+    bandwidth is that required data divided by the completion time, so it is
+    bounded by the cut capacity by construction and never by clamping.
+    """
+    cut_set = set(cut_edges)
+    scenario.bottlenecks = list(cut_edges)
+    scenario.bottleneck = cut_edges[0] if cut_edges else None
+    scenario.cut_directed = [
+        (a, b) if a in source_side else (b, a) for a, b in cut_edges
+    ]
+
+    capacity = sum(scenario.link_capacity(key) for key in cut_edges)
+    crossing_bytes = 0
+    for flow in scenario.flows:
+        if flow.src in source_side and flow.dst not in source_side:
+            crossing_bytes += flow.size
+
+    completion = scenario.completion
+    achieved = crossing_bytes * 8.0 / completion if completion > 0 else 0.0
+    utilization = achieved / capacity if capacity else 0.0
     scenario.summary = {
         "name": scenario.name,
-        "completion_ms": scenario.completion / 1e6,
-        "bottleneck_cut": " ; ".join(scenario.link_label(k) for k in bottlenecks) or "-",
-        "bottleneck_count": len(bottlenecks),
-        "capacity_gbps": total_cap,
-        "drain_ms": selected_drain,
-        "peak_load_gbps": peak_load,
-        "peak_offered_util": peak_load / total_cap if total_cap else 0.0,
-        "bytes_on_bottleneck": total_bytes,
+        "completion_ms": completion / 1e6,
+        "algbw_gbps": size / completion if completion > 0 else 0.0,
+        "bottleneck_cut": " ; ".join(scenario.link_label(k) for k in cut_edges) or "-",
+        "bottleneck_count": len(cut_edges),
+        "cut_capacity_gbps": capacity,
+        "cut_achieved_gbps": achieved,
+        "cut_utilization": utilization,
+        "crossing_bytes": crossing_bytes,
         "flows": len(scenario.flows),
     }
     return scenario.summary
+
+def _heat_color(util: float) -> Optional[str]:
+    """Congestion heat, deliberately avoiding red (reserved for the cut)."""
+    if util < 0.25:
+        return None
+    if util < 0.50:
+        return "#90caf9"   # light blue
+    if util < 0.75:
+        return "#ffd54f"   # amber
+    if util < 1.00:
+        return "#fb8c00"   # orange
+    return "#ef6c00"       # dark orange: oversubscribed
+
+
+def _blend(color: str, target: str, alpha: float) -> Tuple[int, int, int]:
+    c = _rgb(color)
+    t = _rgb(target)
+    return tuple(int(c[i] + (t[i] - c[i]) * alpha) for i in range(3))
+
 
 def _link_style(
     scenario: Scenario,
     key: Tuple[int, int],
     frame_index: int,
     max_bw_by_kind: Dict[str, float],
-) -> Tuple[str, float, float]:
+) -> Tuple[str, float, float, Optional[str]]:
+    """Return (base colour, base width, utilization, heat colour).
+
+    The base colour encodes the link type (or the failure); the heat colour is a
+    thinner inner line that encodes load. Red is never used here."""
     cap = scenario.link_capacity(key)
-    util = min(1.0, scenario.utilization_at(key, frame_index))
+    util = scenario.utilization_at(key, frame_index)
     kind = _link_kind(scenario.topology, key)
     max_bw = max_bw_by_kind.get(kind, cap) or cap
     degraded = cap < 0.5 * max_bw
-    if key in scenario.bottlenecks and util > 0.45:
-        color = "#d62728"
-        width = 3.0 + 5.5 * min(1.0, util)
-    elif util > 0.85:
-        color = "#ff7f0e"
-        width = 2.6 + 4.0 * min(1.0, util)
-    elif util > 0.55:
-        color = "#f1c40f"
-        width = 2.2 + 3.0 * min(1.0, util)
-    elif util > 0.15:
-        color = "#7fb3d5"
-        width = 2.0 + 2.0 * min(1.0, util)
-    else:
-        if degraded:
-            color = "#d62728"
-        elif kind == "nvlink":
-            color = "#2e7d32"
-        else:
-            color = "#111111"
-        width = 4.0 if degraded else 2.8 if kind == "nvlink" else 2.4
-    return color, width, util
+    if degraded:
+        return COLOR_FAIL, 6.0, util, None
+    if kind == "nvlink":
+        return COLOR_INTRA, 6.0, util, _heat_color(util)
+    return COLOR_INTER, 5.0, util, _heat_color(util)
 
 
 def _link_kind(topology: Topology, key: Tuple[int, int]) -> str:
@@ -720,16 +871,17 @@ def _rgb(color: str) -> Tuple[int, int, int]:
 
 
 def _panel_transform(pos: Dict[int, Tuple[float, float]], width: int, height: int,
-                     top_pad: int, margin: int):
+                     top_pad: int, bottom_pad: int, margin: int):
     xs = [p[0] for p in pos.values()]
     ys = [p[1] for p in pos.values()]
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
     data_w = max(1e-6, max_x - min_x)
     data_h = max(1e-6, max_y - min_y)
-    scale = min((width - 2 * margin) / data_w, (height - top_pad - 2 * margin) / data_h)
+    usable_h = height - top_pad - bottom_pad - 2 * margin
+    scale = min((width - 2 * margin) / data_w, usable_h / data_h)
     ox = (width - data_w * scale) / 2.0
-    oy = top_pad + (height - top_pad - data_h * scale) / 2.0
+    oy = top_pad + margin + (usable_h - data_h * scale) / 2.0
 
     def to_px(x: float, y: float) -> Tuple[float, float]:
         return ox + (x - min_x) * scale, oy + (max_y - y) * scale
@@ -752,15 +904,73 @@ def _draw_dashed(draw, p1, p2, color, width: int, dash: int = 10, gap: int = 6) 
         d += dash + gap
 
 
+def _draw_legend(draw, x: float, y: float, font_scale: float) -> None:
+    small = _font(int(12 * font_scale))
+    rows = [
+        ("line", COLOR_INTRA, "intra-node"),
+        ("line", COLOR_INTER, "inter-node"),
+        ("dash", COLOR_FAIL, "degraded"),
+        ("line", "#fb8c00", "congested"),
+        ("cross", COLOR_BOTTLENECK, "bottleneck cut"),
+        ("dot", "#4c72b0", "packet (src GPU)"),
+    ]
+    per_col = 3
+    row_h = int(19 * font_scale)
+    col_w = int(210 * font_scale)
+    width = col_w * 2
+    height = row_h * per_col + int(12 * font_scale)
+    draw.rectangle([x, y, x + width, y + height], fill="#ffffff", outline="#b0bec5")
+    for i, (kind, color, label) in enumerate(rows):
+        col, row = divmod(i, per_col)
+        cx0 = x + col * col_w + int(10 * font_scale)
+        cy = y + int(8 * font_scale) + row * row_h + row_h // 2
+        sx0, sx1 = cx0, cx0 + int(30 * font_scale)
+        if kind == "line":
+            draw.line([(sx0, cy), (sx1, cy)], fill=_rgb(color), width=max(2, int(3 * font_scale)))
+        elif kind == "dash":
+            _draw_dashed(draw, (sx0, cy), (sx1, cy), _rgb(color), max(2, int(3 * font_scale)),
+                         dash=max(4, int(6 * font_scale)), gap=max(3, int(4 * font_scale)))
+        elif kind == "cross":
+            mx = (sx0 + sx1) / 2.0
+            draw.line([(mx, cy - 6 * font_scale), (mx, cy + 6 * font_scale)],
+                      fill=_rgb(color), width=max(2, int(3 * font_scale)))
+            draw.ellipse([mx - 4 * font_scale, cy - 4 * font_scale,
+                          mx + 4 * font_scale, cy + 4 * font_scale], fill=_rgb(color))
+        elif kind == "dot":
+            r = 4 * font_scale
+            draw.ellipse([sx1 - r, cy - r, sx1 + r, cy + r], fill=_rgb(color), outline="white")
+        draw.text((sx1 + int(8 * font_scale), cy - int(7 * font_scale)), label,
+                  fill=_rgb(COLOR_TEXT), font=small)
+
+
+def _text_badge(draw, cx: float, cy: float, text: str, font, fg: str,
+                anchor: str = "center", border: Optional[str] = None, pad: int = 4):
+    """Draw text on a white badge so it stays readable over a link."""
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    if anchor == "left":
+        x0 = cx
+    elif anchor == "right":
+        x0 = cx - tw
+    else:
+        x0 = cx - tw / 2.0
+    y0 = cy - th / 2.0
+    draw.rectangle([x0 - pad, y0 - pad, x0 + tw + pad, y0 + th + pad],
+                   fill="white", outline=border or "#b0bec5")
+    draw.text((x0, y0 - 1), text, fill=_rgb(fg), font=font)
+    return tw, th
+
+
 def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int):
     img = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(img)
     topo = scenario.topology
     pos = scenario.pos
-    to_px, scale = _panel_transform(pos, width, height, top_pad=42, margin=34)
+    top_pad, bottom_pad, margin = 140, 250, 40
+    to_px, scale = _panel_transform(pos, width, height, top_pad, bottom_pad, margin)
     max_bw = _max_bw_by_kind(topo)
     base_scale = dpi / 100.0
-    font_scale = max(1.0, base_scale)
+    font_scale = max(1.0, base_scale) * 1.7
 
     for key, link in topo.links.items():
         x1, y1 = to_px(*pos[link.u])
@@ -769,55 +979,70 @@ def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int):
         cap = link.bw_gbps
         degraded = cap < 0.5 * max_bw.get(kind, cap)
         if degraded:
-            color = "#d62728"
-            lw = max(2, int(4.0 * base_scale))
-        elif kind == "nvlink":
-            color = "#2e7d32"
-            lw = max(2, int(2.8 * base_scale))
-        else:
-            color = "#111111"
-            lw = max(1, int(2.4 * base_scale))
-        draw.line([(x1, y1), (x2, y2)], fill=_rgb(color), width=lw)
-        if degraded:
+            lw = max(2, int(6.0 * base_scale))
+            _draw_dashed(draw, (x1, y1), (x2, y2), _rgb(COLOR_FAIL), lw,
+                         dash=max(6, int(10 * base_scale)), gap=max(4, int(6 * base_scale)))
             mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-            text = f"{cap:g}G"
-            font = _font(8 * font_scale)
+            text = f"FAIL {cap:g} Gbps"
+            font = _font(int(12 * font_scale))
             bbox = draw.textbbox((0, 0), text, font=font)
-            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            draw.rectangle([mx - tw / 2 - 3, my - th / 2 - 2, mx + tw / 2 + 3, my + th / 2 + 2],
-                           fill="white")
-            draw.text((mx - tw / 2, my - th / 2 - 1), text, fill=_rgb(color), font=font)
+            tw = bbox[2] - bbox[0]
+            dx, dy = x2 - x1, y2 - y1
+            length = math.hypot(dx, dy) or 1.0
+            nx, ny = -dy / length, dx / length
+            # Put the badge on the side of the link that faces away from the graph.
+            if (mx - width / 2.0) * nx + (my - height / 2.0) * ny < 0:
+                nx, ny = -nx, -ny
+            off = tw / 2.0 + int(20 * base_scale)
+            lx, ly = mx + nx * off, my + ny * off
+            draw.line([(mx, my), (lx, ly)], fill=_rgb(COLOR_FAIL),
+                      width=max(1, int(2 * base_scale)))
+            _text_badge(draw, lx, ly, text, font, COLOR_FAIL, border=_rgb(COLOR_FAIL))
+        else:
+            color = COLOR_INTRA if kind == "nvlink" else COLOR_INTER
+            lw = max(2, int((6.0 if kind == "nvlink" else 5.0) * base_scale))
+            draw.line([(x1, y1), (x2, y2)], fill=_rgb(color), width=lw)
 
-    gpu_r = max(6, int(9 * base_scale))
+    gpu_r = max(10, int(16 * base_scale))
     for gid in topo.gpu_ids:
         x, y = to_px(*pos[gid])
         draw.ellipse([x - gpu_r, y - gpu_r, x + gpu_r, y + gpu_r], fill=_rgb("#4c72b0"),
-                     outline="black", width=1)
-        font = _font(8 * font_scale)
+                     outline="white", width=max(1, int(1.5 * base_scale)))
+        font = _font(int(11 * font_scale))
         bbox = draw.textbbox((0, 0), str(gid), font=font)
         draw.text((x - (bbox[2] - bbox[0]) / 2, y - (bbox[3] - bbox[1]) / 2 - 1),
                   str(gid), fill="white", font=font)
 
-    nv_r = max(5, int(8 * base_scale))
+    nv_r = max(9, int(13 * base_scale))
+    nv_font = _font(int(11 * font_scale))
     for sid in topo.nvswitch_ids:
         x, y = to_px(*pos[sid])
         draw.rectangle([x - nv_r, y - nv_r, x + nv_r, y + nv_r], fill=_rgb("#55a868"),
-                       outline="black", width=1)
-        font = _font(7 * font_scale)
-        draw.text((x - nv_r, y + nv_r + 1), f"NVSwitch{sid}", fill=_rgb("#2e6b3a"), font=font)
+                       outline="white", width=max(1, int(1.5 * base_scale)))
+        _text_badge(draw, x - nv_r - int(6 * base_scale), y, f"NVSwitch{sid}",
+                    nv_font, "#2e6b3a", anchor="right")
 
-    tor_r = max(5, int(7 * base_scale))
+    tor_r = max(9, int(12 * base_scale))
+    tor_font = _font(int(11 * font_scale))
     for sid in topo.switch_ids:
         x, y = to_px(*pos[sid])
         draw.polygon([(x, y - tor_r), (x + tor_r, y), (x, y + tor_r), (x - tor_r, y)],
-                     fill=_rgb("#c44e52"), outline="black")
-        font = _font(7 * font_scale)
-        draw.text((x - tor_r, y + tor_r + 1), f"ToR{sid}", fill=_rgb("#7b2d2f"), font=font)
+                     fill=_rgb("#c44e52"), outline="white")
+        _text_badge(draw, x + tor_r + int(6 * base_scale), y, f"ToR{sid}",
+                    tor_font, "#7b2d2f", anchor="left")
 
-    title_font = _font(12 * font_scale)
+    title_font = _font(int(18 * font_scale))
     bbox = draw.textbbox((0, 0), scenario.name, font=title_font)
-    draw.text(((width - (bbox[2] - bbox[0])) / 2, 10), scenario.name,
-              fill="black", font=title_font)
+    draw.text(((width - (bbox[2] - bbox[0])) / 2, 12), scenario.name,
+              fill=_rgb(COLOR_TEXT), font=title_font)
+
+    _draw_legend(draw, margin, height - bottom_pad + int(14 * base_scale), font_scale)
+
+    bar_x0, bar_x1 = int(width * 0.48), width - margin
+    bar_y = height - int(34 * base_scale)
+    draw.rectangle([bar_x0, bar_y, bar_x1, bar_y + int(12 * base_scale)],
+                   fill="#eceff1", outline="#90a4ae")
+    draw.rectangle([0, 0, width - 1, height - 1], outline="#cfd8dc", width=2)
     return img, to_px, scale
 
 
@@ -828,21 +1053,27 @@ def _render_frame_panel(base_img, scenario: Scenario, to_px, scale: float, frame
     draw = ImageDraw.Draw(img)
     topo = scenario.topology
     pos = scenario.pos
+    width, height = img.size
     global_t = frame_times[frame_index]
     t = min(global_t, scenario.completion)
     done = global_t > scenario.completion + 1e-9
     base_scale = dpi / 100.0
-    font_scale = max(1.0, base_scale)
+    font_scale = max(1.0, base_scale) * 1.7
 
+    # Congestion is an inner heat line on top of the static link, so the link
+    # type (green/black) and the failure (magenta dashed) stay readable.
     for key, link in topo.links.items():
-        color, width, util = _link_style(scenario, key, frame_index, max_bw)
+        _, base_w, util, heat = _link_style(scenario, key, frame_index, max_bw)
+        if heat is None:
+            continue
         x1, y1 = to_px(*pos[link.u])
         x2, y2 = to_px(*pos[link.v])
-        lw = max(1, int(width * base_scale))
-        draw.line([(x1, y1), (x2, y2)], fill=_rgb(color), width=lw)
+        lw = max(1, int(min(base_w * 0.7, 1.5 + 2.5 * min(util, 1.5)) * base_scale))
+        draw.line([(x1, y1), (x2, y2)], fill=_rgb(heat), width=lw)
 
-    active = scenario.active_flows(t)
-    active_count = len(active)
+    all_active = scenario.active_flows(t)
+    active = all_active
+    active_count = len(all_active)
     if active_count > max_dots:
         bn_set = set(scenario.bottlenecks)
         on_bottleneck = [f for f in active if any(k in bn_set for k in f.link_keys)]
@@ -854,18 +1085,40 @@ def _render_frame_panel(base_img, scenario: Scenario, to_px, scale: float, frame
             keep += rng.sample(rest, min(remaining, len(rest)))
         active = keep
 
-    dot_r = max(1, int(2.5 * base_scale))
+    dot_r = max(3, int(5.5 * base_scale))
     for flow in active:
         frac = (t - flow.start) / flow.duration
-        for offset in (0.0, 0.10, 0.20):
+        if frac < 0:
+            continue
+        for k, offset in enumerate((0.20, 0.14, 0.08, 0.03)):
             f = frac - offset
             if f < 0:
                 continue
             x, y = flow.point_at(f, pos)
             px, py = to_px(x, y)
-            draw.ellipse([px - dot_r, py - dot_r, px + dot_r, py + dot_r], fill=_rgb(flow.color))
+            r = max(1, int(dot_r * (0.40 + 0.11 * k)))
+            col = _blend(flow.color, "#ffffff", 0.62 - 0.10 * k)
+            draw.ellipse([px - r, py - r, px + r, py + r], fill=col)
+        x, y = flow.point_at(frac, pos)
+        px, py = to_px(x, y)
+        draw.ellipse([px - dot_r, py - dot_r, px + dot_r, py + dot_r],
+                     fill=_rgb(flow.color), outline="white",
+                     width=max(1, int(1.3 * base_scale)))
+        f2 = min(1.0, frac + 0.02)
+        if f2 > frac:
+            x2, y2 = flow.point_at(f2, pos)
+            qx, qy = to_px(x2, y2)
+            dx, dy = qx - px, qy - py
+            length = math.hypot(dx, dy)
+            if length > 0.5:
+                ux, uy = dx / length, dy / length
+                nx, ny = -uy, ux
+                ah = dot_r * 2.0
+                tip = (px + ux * ah, py + uy * ah)
+                b1 = (px + ux * ah * 0.35 + nx * ah * 0.75, py + uy * ah * 0.35 + ny * ah * 0.75)
+                b2 = (px + ux * ah * 0.35 - nx * ah * 0.75, py + uy * ah * 0.35 - ny * ah * 0.75)
+                draw.polygon([tip, b1, b2], fill=_rgb(flow.color), outline="white")
 
-    show_bn = False
     bn_positions = []
     if scenario.bottlenecks:
         phase = (frame_index % 18) / 18.0
@@ -874,79 +1127,86 @@ def _render_frame_panel(base_img, scenario: Scenario, to_px, scale: float, frame
             x1, y1 = to_px(*pos[link.u])
             x2, y2 = to_px(*pos[link.v])
             mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-            util = min(1.0, scenario.utilization_at(key, frame_index))
+            util = scenario.utilization_at(key, frame_index)
             if util <= 0.45:
                 continue
-            show_bn = True
             bn_positions.append((mx, my))
             dx, dy = x2 - x1, y2 - y1
             length = math.hypot(dx, dy) or 1.0
             nx, ny = -dy / length, dx / length
-            cut = 22 * base_scale
+            cut = 26 * base_scale
             _draw_dashed(draw, (mx - nx * cut, my - ny * cut), (mx + nx * cut, my + ny * cut),
-                         _rgb("#d62728"), max(2, int(3 * base_scale)))
+                         _rgb(COLOR_BOTTLENECK), max(2, int(3.5 * base_scale)),
+                         dash=max(4, int(6 * base_scale)), gap=max(2, int(4 * base_scale)))
             for k in range(3):
-                radius = (0.12 + 0.30 * ((phase + k / 3.0) % 1.0)) * scale
+                radius = (0.10 + 0.30 * ((phase + k / 3.0) % 1.0)) * scale
                 alpha = 0.65 * (1.0 - ((phase + k / 3.0) % 1.0))
                 if radius > 1:
-                    col = tuple(int(255 - (255 - c) * alpha) for c in _rgb("#d62728"))
+                    col = _blend(COLOR_BOTTLENECK, "#ffffff", 1.0 - alpha)
                     draw.ellipse([mx - radius, my - radius, mx + radius, my + radius],
                                  outline=col, width=max(1, int(2 * base_scale)))
-            star_r = (12 + 10 * util) * base_scale
+            star_r = (14 + 10 * min(util, 1.5)) * base_scale
             points = []
             for i in range(10):
                 ang = -math.pi / 2 + i * math.pi / 5
                 rr = star_r if i % 2 == 0 else star_r * 0.45
                 points.append((mx + math.cos(ang) * rr, my + math.sin(ang) * rr))
-            draw.polygon(points, fill=_rgb("#d62728"), outline="white")
+            draw.polygon(points, fill=_rgb(COLOR_BOTTLENECK), outline="white")
 
-    if show_bn and bn_positions:
-        cx = sum(p[0] for p in bn_positions) / len(bn_positions)
-        cy = sum(p[1] for p in bn_positions) / len(bn_positions)
-        font = _font(9 * font_scale)
-        text = f"BOTTLENECK CUT ({len(bn_positions)} links)"
-        bbox = draw.textbbox((0, 0), text, font=font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        ty = cy - 22 * base_scale - th
-        draw.rectangle([cx - tw / 2 - 4, ty - 3, cx + tw / 2 + 4, ty + th + 3],
-                       fill="white", outline=_rgb("#d62728"))
-        draw.text((cx - tw / 2, ty), text, fill=_rgb("#a00000"), font=font)
-
-    stats = (
-        f"t = {t / 1e6:7.2f} ms\n"
-        f"active chunks: {active_count}\n"
-        f"completion: {scenario.completion / 1e6:.2f} ms\n"
-        f"status: {'DONE' if done else 'running'}"
-    )
+    stats = [
+        f"t = {t / 1e6:7.2f} / {scenario.completion / 1e6:.2f} ms  "
+        f"({'DONE' if done else 'running'}, {active_count} packets)",
+    ]
+    cut_line = None
     if scenario.bottlenecks:
-        load = sum(scenario.load_at(k, frame_index) for k in scenario.bottlenecks)
-        cap = sum(scenario.link_capacity(k) for k in scenario.bottlenecks)
-        offered = load / cap * 100.0 if cap else 0.0
-        state = "SATURATED" if load > cap else "flowing"
-        stats += (
-            f"\nbottleneck cut: {len(scenario.bottlenecks)} links\n"
-            f"aggregate: {load:6.1f} / {cap:.0f} Gbps ({state}, {offered:5.1f}% offered)"
+        cap = float(scenario.summary.get("cut_capacity_gbps", 0.0))
+        load = sum(scenario.directed_load_at(d, frame_index)
+                   for d in scenario.cut_directed)
+        util = load / cap if cap else 0.0
+        cut_line = (
+            f"cut: {len(scenario.bottlenecks)} links, "
+            f"{load:.0f}/{cap:.0f} Gbps ({util * 100:.0f}%)"
         )
-    font = _font(9 * font_scale)
-    bbox = draw.multiline_textbbox((0, 0), stats, font=font, spacing=2)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    draw.rectangle([8, 8, 8 + tw + 10, 8 + th + 10], fill="white", outline=_rgb("#999999"))
-    draw.multiline_text((13, 11), stats, fill="black", font=font, spacing=2)
+        stats.append(cut_line)
+    font = _font(int(13 * font_scale))
+    line_h = int(19 * font_scale)
+    box_w = max(draw.textbbox((0, 0), s, font=font)[2] for s in stats) + int(20 * base_scale)
+    box_h = line_h * len(stats) + int(12 * base_scale)
+    box_y = int(50 * base_scale)
+    draw.rectangle([12, box_y, 12 + box_w, box_y + box_h], fill="#fafafa", outline="#b0bec5")
+    for i, text in enumerate(stats):
+        color = COLOR_BOTTLENECK if text is cut_line else COLOR_TEXT
+        draw.text((20, box_y + 6 + i * line_h), text, fill=_rgb(color), font=font)
+
+    bar_x0, bar_x1 = int(width * 0.48), width - int(40 * base_scale)
+    bar_y = height - int(34 * base_scale)
+    bar_h = max(8, int(12 * base_scale))
+    frac = min(1.0, t / scenario.completion) if scenario.completion > 0 else 0.0
+    draw.rectangle([bar_x0, bar_y, bar_x1, bar_y + bar_h], fill="#eceff1", outline="#90a4ae")
+    if frac > 0:
+        draw.rectangle([bar_x0, bar_y, bar_x0 + (bar_x1 - bar_x0) * frac, bar_y + bar_h],
+                       fill="#1e88e5")
+    small = _font(int(11 * font_scale))
+    draw.text((bar_x0, bar_y - int(16 * font_scale)), f"progress {frac * 100:5.1f}%",
+              fill=_rgb(COLOR_MUTED), font=small)
     return img
 
 
 def _animate_pillow(scenarios: Sequence[Scenario], out_path: Path, fps: int, frames: int,
-                    dpi: int, max_dots: int, hold_ms: int = 1500) -> None:
+                    dpi: int, max_dots: int, hold_ms: int = 1500,
+                    cut_edges: Sequence[Tuple[int, int]] = (),
+                    collective: str = "ag",
+                    source_side: frozenset = frozenset()) -> None:
     duration = max((s.completion for s in scenarios), default=1.0)
     frame_times = [duration * i / max(1, frames - 1) for i in range(frames)]
     for scenario in scenarios:
         scenario.frame_times = frame_times
         scenario.loads = build_link_loads(scenario.flows, scenario.topology, frame_times)
-        summarize_scenario(scenario)
+        summarize_scenario(scenario, cut_edges, collective, scenario.size, source_side)
 
     scale = dpi / 100.0
-    panel_w = int(1100 * scale)
-    panel_h = int(800 * scale)
+    panel_w = int(1000 * scale)
+    panel_h = int(850 * scale)
     total_w = panel_w * len(scenarios)
     total_h = panel_h
     max_bw = [_max_bw_by_kind(s.topology) for s in scenarios]
@@ -979,8 +1239,12 @@ def _animate_pillow(scenarios: Sequence[Scenario], out_path: Path, fps: int, fra
 
 
 def animate(scenarios: Sequence[Scenario], out_path: Path, fps: int, frames: int, dpi: int,
-            max_dots: int = 110, hold_ms: int = 1500) -> None:
-    _animate_pillow(scenarios, out_path, fps, frames, dpi, max_dots, hold_ms)
+            max_dots: int = 110, hold_ms: int = 1500,
+            cut_edges: Sequence[Tuple[int, int]] = (),
+            collective: str = "ag",
+            source_side: frozenset = frozenset()) -> None:
+    _animate_pillow(scenarios, out_path, fps, frames, dpi, max_dots, hold_ms,
+                    cut_edges, collective, source_side)
 
 def write_summary(scenarios: Sequence[Scenario], out_path: Path) -> None:
     rows = []
@@ -997,16 +1261,26 @@ def write_summary(scenarios: Sequence[Scenario], out_path: Path) -> None:
     lines = [
         "# MCCL schedule visualisation summary",
         "",
-        "| scenario | completion (ms) | AlgBW (GB/s) | speedup |",
-        "|---|---:|---:|---:|",
+        "| scenario | completion (ms) | AlgBW (GB/s) | cut (Gbps) | cut util | speedup |",
+        "|---|---:|---:|---:|---:|---:|",
     ]
     for row, scenario in zip(rows, scenarios):
         completion_ms = float(row["completion_ms"])
         algbw = scenario.size / scenario.completion if scenario.completion > 0 else 0.0
         speedup = f"{base_ms / completion_ms:.2f}x" if base_ms else "-"
         lines.append(
-            f"| {row['name']} | {completion_ms:.3f} | {algbw:.1f} | {speedup} |"
+            f"| {row['name']} | {completion_ms:.3f} | {algbw:.1f} | "
+            f"{float(row['cut_achieved_gbps']):.0f} | "
+            f"{float(row['cut_utilization']) * 100:.0f}% | {speedup} |"
         )
+    if rows:
+        first = rows[0]
+        lines += [
+            "",
+            f"Bottleneck cut (fixed by topology, failure and collective, so both "
+            f"schedules share it): {first['bottleneck_cut']}.",
+            f"Cut capacity: {float(first['cut_capacity_gbps']):.0f} Gbps.",
+        ]
     if len(rows) >= 2 and base_ms:
         base, reopt = rows[0], rows[1]
         lines += [
@@ -1014,6 +1288,10 @@ def write_summary(scenarios: Sequence[Scenario], out_path: Path) -> None:
             f"Speedup of **{reopt['name']}** over **{base['name']}**: "
             f"**{base_ms / reopt['completion_ms']:.2f}x** "
             f"({base_ms:.3f} ms -> {reopt['completion_ms']:.3f} ms).",
+            f"Cut bandwidth: {float(base['cut_achieved_gbps']):.0f} -> "
+            f"{float(reopt['cut_achieved_gbps']):.0f} Gbps "
+            f"({float(base['cut_utilization']) * 100:.0f}% -> "
+            f"{float(reopt['cut_utilization']) * 100:.0f}% of the cut).",
         ]
     md_path = out_path.with_name(out_path.stem + "_summary.md")
     md_path.write_text("\n".join(lines) + "\n")
@@ -1152,6 +1430,42 @@ def demo_paths(demo: str) -> Tuple[str, Path, Path, Path, Path, int]:
     return collective, topology, baseline, reopt, workload, system
 
 
+def _collective_kind(args) -> str:
+    """Infer AllGather vs AllToAll from the workload/schedule names."""
+    texts = []
+    if args.workload:
+        texts.append(args.workload.name)
+    if args.schedule:
+        texts.append(args.schedule.name)
+    if args.baseline:
+        texts.append(args.baseline.name)
+    for text in texts:
+        low = text.lower()
+        if "alltoall" in low or "a2a" in low:
+            return "a2a"
+        if "allgather" in low or "ag-" in low or low.startswith("ag"):
+            return "ag"
+    return "ag"
+
+
+def _collective_kind(args) -> str:
+    """Infer AllGather vs AllToAll from the workload/schedule names."""
+    texts = []
+    if args.workload:
+        texts.append(args.workload.name)
+    if args.schedule:
+        texts.append(args.schedule.name)
+    if args.baseline:
+        texts.append(args.baseline.name)
+    for text in texts:
+        low = text.lower()
+        if "alltoall" in low or "a2a" in low:
+            return "a2a"
+        if "allgather" in low or "ag-" in low or low.startswith("ag"):
+            return "ag"
+    return "ag"
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Animate MSCCL/MCCL schedules over a SimAI topology and expose the bottleneck.",
@@ -1176,10 +1490,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="E3-mccl results directory; reuse its graph CSVs instead of running the simulator")
     parser.add_argument("--out", type=Path, default=ROOT / "artifact" / "results" / "schedule_flow.gif",
                         help="output GIF (default: artifact/results/schedule_flow.gif)")
-    parser.add_argument("--fps", type=int, default=10, help="animation frames per second (default: 10)")
-    parser.add_argument("--frames", type=int, default=40, help="number of animation frames (default: 40)")
-    parser.add_argument("--dpi", type=int, default=80, help="output resolution (default: 80)")
-    parser.add_argument("--max-dots", type=int, default=60, help="max packet dots per panel and frame")
+    parser.add_argument("--fps", type=int, default=12, help="animation frames per second (default: 12)")
+    parser.add_argument("--frames", type=int, default=50, help="number of animation frames (default: 50)")
+    parser.add_argument("--dpi", type=int, default=100, help="output resolution (default: 100)")
+    parser.add_argument("--max-dots", type=int, default=80, help="max packet dots per panel and frame")
     parser.add_argument("--timeline", action="store_true",
                         help="also write a bottleneck timeline PNG (imports matplotlib)")
     parser.add_argument("--hold-ms", type=int, default=1500,
@@ -1189,6 +1503,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.demo:
         collective, topology, baseline, reopt, workload, system = demo_paths(args.demo)
+        collective_kind = collective
         args.topology = topology
         args.schedule = reopt
         args.baseline = baseline
@@ -1215,6 +1530,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         elif not args.graph_csv and args.binary.exists():
             args.run_sim = True
     else:
+        collective_kind = _collective_kind(args)
         if not args.topology or not args.schedule:
             parser.error("give --topology and --schedule, or use --demo")
         if args.run_sim and not args.workload:
@@ -1273,8 +1589,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     out = args.out
     out.parent.mkdir(parents=True, exist_ok=True)
+    cut_edges, cut_capacity, cut_k, optimal_ms, source_side = optimal_bottleneck_cut(
+        scenarios[0].topology, collective_kind, scenarios[0].size)
+    print(f"[viz] bottleneck cut: {len(cut_edges)} links, {cut_capacity:.0f} Gbps "
+          f"(k={cut_k}, optimal {optimal_ms:.2f} ms)")
     animate(scenarios, out, fps=args.fps, frames=args.frames, dpi=args.dpi,
-            max_dots=args.max_dots, hold_ms=args.hold_ms)
+            max_dots=args.max_dots, hold_ms=args.hold_ms,
+            cut_edges=cut_edges, collective=collective_kind,
+            source_side=source_side)
     write_summary(scenarios, out)
     if args.timeline:
         write_timeline(scenarios, out)

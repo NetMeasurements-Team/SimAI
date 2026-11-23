@@ -13,7 +13,8 @@ and that experiment is shown from reference results.
 ## 0. Setup
 
 ```bash
-sudo apt-get install -y build-essential cmake libxml2-dev python3 python3-matplotlib python3-pandas
+sudo apt-get install -y build-essential cmake libxml2-dev python3 \
+  python3-numpy python3-scipy python3-pil python3-matplotlib python3-pandas
 bash scripts/build.sh -c ns3
 ls -l bin/SimAI_simulator
 ```
@@ -219,9 +220,10 @@ astra-sim-alibabacloud/inputs/msccl/mccl/no_failure/priority-9/MCCL_1x2x8.xml
 
 On the healthy 16-GPU topology, this static schedule is slightly better than NCCL
 for AllGather: **5.062 ms vs 5.772 ms**, or **1.14x** algorithm bandwidth. AllToAll is
-equal to NCCL: **21.733 ms vs 21.720 ms**, or **1.00x**. The bottleneck cut is on
-the inter-node ToR links for AllGather and on the intra-node NVSwitch links for
-AllToAll.
+equal to NCCL: **21.733 ms vs 21.720 ms**, or **1.00x**. The bottleneck cut is the
+ingress of a single GPU for AllGather (every chunk has to reach that last GPU) and
+the eight inter-node ToR links for AllToAll (the two servers exchange all their
+data).
 
 Show the static AllGather and AllToAll schedules with the simulator's original
 timestamps. They are independent, so run them in parallel:
@@ -420,7 +422,16 @@ What to look for:
 
 - left panel: healthy-fabric schedule kept under the failure (no reopt);
 - right panel: schedule re-synthesized for the failure (reopt);
-- red links: the bottleneck cut (all links tied for the highest peak utilization);
+- green lines are intra-node NVLink, dark lines are inter-node ToR;
+- magenta dashed line with a `FAIL <rate>` label is the degraded link;
+- orange inner line marks a congested link (blue → amber → orange as load grows);
+- red cross and star mark the bottleneck cut. The cut is fixed by the topology,
+  failure and collective (the minimum-ratio cut of the collective's traffic), so
+  **both panels show the same links**; each commodity crosses it once. Red is used
+  only for this marker, never for a link;
+- packets are coloured by source GPU and carry a short trail plus an arrowhead
+  showing their direction;
+- the bottom bar shows progress through the collective;
 - the clock stops at the last ACK for each schedule;
 - each panel freezes at its own completion, so the reoptimized panel stops at
   **5.525 ms** while no-reopt continues to **39.145 ms**;
@@ -434,8 +445,11 @@ Each run writes:
 <name>_summary.csv
 ```
 
-The Markdown summary contains only completion time, AlgBW (GB/s) and speedup. Add
-`--timeline` if you also want a bottleneck timeline PNG.
+The Markdown summary reports completion time, AlgBW (GB/s), the bandwidth each
+schedule actually pushes through the cut and the speedup. The reoptimized schedule
+reaches about **99% of the cut capacity**; the healthy-fabric schedule uses much
+less of the same cut, which is exactly why it takes longer. Add `--timeline` if you
+also want a bottleneck timeline PNG.
 
 ---
 
@@ -474,10 +488,10 @@ Typical timings on the VM machine with the build already done:
 |---|---:|
 | Draw 1x2x8 topologies | 3.4 s |
 | Smoke test | 15.6 s |
-| Ring animations (2 GB, in parallel) | 136 s |
-| Static animations (2 GB, in parallel) | 137 s |
+| Ring animations (2 GB, in parallel) | 142 s |
+| Static animations (2 GB, in parallel) | 142 s |
 | E2 single collectives | 73.6 s |
 | E3 MCCL + graphs | 270.7 s |
-| Six failure animations (in parallel) | 12 s |
+| Six failure animations (in parallel) | 15 s |
 | Summarize E2 + E3 | 2.8 s |
 | **Total without E4** | **≈ 11 min** |

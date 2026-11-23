@@ -1,3 +1,3 @@
-name,completion_ms,bottleneck_cut,bottleneck_count,capacity_gbps,drain_ms,peak_load_gbps,peak_offered_util,bytes_on_bottleneck,flows
-No reopt (healthy-fabric schedule),28.239617,GPU9 <-> NVSwitch17 ; GPU15 <-> NVSwitch17 ; GPU10 <-> NVSwitch17 ; GPU8 <-> NVSwitch17 ; GPU11 <-> NVSwitch17 ; GPU14 <-> NVSwitch17 ; GPU12 <-> NVSwitch17 ; GPU13 <-> NVSwitch17,8,23040.0,5.219578311111111,87078.03346511883,3.7794285358124493,15032385536,90112
-Reopt (failure-aware schedule),21.720398,GPU13 <-> NVSwitch17,1,2880.0,5.965232355555556,10118.818199145144,3.5134785413698415,2147483648,90112
+name,completion_ms,algbw_gbps,bottleneck_cut,bottleneck_count,cut_capacity_gbps,cut_achieved_gbps,cut_utilization,crossing_bytes,flows
+No reopt (healthy-fabric schedule),28.239617,76.04506987470829,GPU8 <-> ToR18 ; GPU9 <-> ToR19 ; GPU10 <-> ToR20 ; GPU11 <-> ToR21 ; GPU12 <-> ToR22 ; GPU13 <-> ToR23 ; GPU14 <-> ToR24 ; GPU15 <-> ToR25,8,3200.0,2433.4422359906653,0.7604506987470829,8589934592,90112
+Reopt (failure-aware schedule),21.720398,98.86944281591893,GPU8 <-> ToR18 ; GPU9 <-> ToR19 ; GPU10 <-> ToR20 ; GPU11 <-> ToR21 ; GPU12 <-> ToR22 ; GPU13 <-> ToR23 ; GPU14 <-> ToR24 ; GPU15 <-> ToR25,8,3200.0,3163.8221701094058,0.9886944281591893,8589934592,90112

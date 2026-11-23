@@ -1,2 +1,2 @@
-name,completion_ms,bottleneck_cut,bottleneck_count,capacity_gbps,drain_ms,peak_load_gbps,peak_offered_util,bytes_on_bottleneck,flows
-MCCL_1x2x8,21.73323,GPU9 <-> NVSwitch17 ; GPU15 <-> NVSwitch17 ; GPU10 <-> NVSwitch17 ; GPU8 <-> NVSwitch17 ; GPU11 <-> NVSwitch17 ; GPU14 <-> NVSwitch17 ; GPU12 <-> NVSwitch17 ; GPU13 <-> NVSwitch17,8,23040.0,5.219578311111111,87078.03346511883,3.7794285358124493,15032385536,90112
+name,completion_ms,algbw_gbps,bottleneck_cut,bottleneck_count,cut_capacity_gbps,cut_achieved_gbps,cut_utilization,crossing_bytes,flows
+MCCL_1x2x8,21.73323,98.8110671078344,GPU0 <-> ToR18 ; GPU1 <-> ToR19 ; GPU2 <-> ToR20 ; GPU3 <-> ToR21 ; GPU4 <-> ToR22 ; GPU5 <-> ToR23 ; GPU6 <-> ToR24 ; GPU7 <-> ToR25,8,3200.0,3161.954147450701,0.988110671078344,8589934592,90112

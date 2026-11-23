@@ -1,2 +1,2 @@
-name,completion_ms,bottleneck_cut,bottleneck_count,capacity_gbps,drain_ms,peak_load_gbps,peak_offered_util,bytes_on_bottleneck,flows
-NCCL_AllToAll_P2P_16gpus,21.720127,GPU1 <-> ToR19 ; GPU9 <-> ToR19 ; GPU6 <-> ToR24 ; GPU14 <-> ToR24 ; GPU5 <-> ToR23 ; GPU13 <-> ToR23 ; GPU2 <-> ToR20 ; GPU10 <-> ToR20 ; GPU0 <-> ToR18 ; GPU8 <-> ToR18 ; GPU3 <-> ToR21 ; GPU11 <-> ToR21 ; GPU4 <-> ToR22 ; GPU12 <-> ToR22 ; GPU7 <-> ToR25 ; GPU15 <-> ToR25,16,6400.0,42.94967296,23121.19528997394,3.612686764058428,34359738368,90112
+name,completion_ms,algbw_gbps,bottleneck_cut,bottleneck_count,cut_capacity_gbps,cut_achieved_gbps,cut_utilization,crossing_bytes,flows
+NCCL_AllToAll_P2P_16gpus,21.720127,98.87067640074112,GPU0 <-> ToR18 ; GPU1 <-> ToR19 ; GPU2 <-> ToR20 ; GPU3 <-> ToR21 ; GPU4 <-> ToR22 ; GPU5 <-> ToR23 ; GPU6 <-> ToR24 ; GPU7 <-> ToR25,8,3200.0,3163.861644823716,0.9887067640074112,8589934592,90112
