@@ -103,6 +103,7 @@ FLOW_COLORS = [
 COLOR_INTRA = "#2e7d32"        # intra-node NVLink
 COLOR_INTER = "#37474f"        # inter-node ToR
 COLOR_FAIL = "#c2185b"         # degraded/failed link (magenta)
+COLOR_INTRA_NET = "#6a1b9a"    # separate intra-node network (not NVLink)
 COLOR_BOTTLENECK = "#e53935"   # bottleneck cut marker (red, only here)
 COLOR_TEXT = "#111111"
 COLOR_MUTED = "#555555"
@@ -836,6 +837,63 @@ def _link_kind(topology: Topology, key: Tuple[int, int]) -> str:
     return "switch"
 
 
+# Virtual node used to draw the dedicated intra-node network switch.  It is not
+# part of the SimAI topology; it only exists in the picture.
+HEX_NODE = 1000
+
+
+def _two_network_info(topology: Topology):
+    """Return (two_network, degraded_gpu, nvswitch_id, intra_gpus)."""
+    max_bw = _max_bw_by_kind(topology)
+    degraded_kinds = {
+        _link_kind(topology, key) for key, link in topology.links.items()
+        if link.bw_gbps < 0.5 * max_bw.get(_link_kind(topology, key), link.bw_gbps)
+    }
+    if "nvlink" not in degraded_kinds or "nic" not in degraded_kinds:
+        return False, None, None, []
+    degraded_gpu = None
+    nv_id = None
+    for key, link in topology.links.items():
+        if _link_kind(topology, key) != "nvlink":
+            continue
+        if link.bw_gbps < 0.5 * max_bw.get("nvlink", link.bw_gbps):
+            degraded_gpu = link.u if link.u in topology.gpu_ids else link.v
+            nv_id = link.v if link.u == degraded_gpu else link.u
+            break
+    if degraded_gpu is None:
+        return False, None, None, []
+    gps = topology.gpus_per_server or len(topology.gpu_ids)
+    ordered = sorted(topology.gpu_ids)
+    server = ordered.index(degraded_gpu) // gps
+    intra_gpus = [g for g in ordered if ordered.index(g) // gps == server]
+    return True, degraded_gpu, nv_id, intra_gpus
+
+
+def _apply_remote_layout(scenario: "Scenario") -> None:
+    """Draw the degraded GPU as a remote server next to the intra-node switch.
+
+    The NVLink is gone (the GPU is in another server), so the GPU sits below
+    the local row, next to the dedicated intra-node switch, and reaches the
+    fabric through the switch and through its inter-node ToR.  Flow paths are
+    rerouted through the virtual switch so the packet animation matches.
+    """
+    two_network, degraded_gpu, nv_id, intra_gpus = _two_network_info(scenario.topology)
+    if not two_network or degraded_gpu is None or nv_id is None:
+        return
+    pos = scenario.pos
+    row_y = pos[degraded_gpu][1]
+    xs = [pos[g][0] for g in intra_gpus]
+    x0, x1 = min(xs), max(xs)
+    pos[degraded_gpu] = (x0, row_y - 0.55)
+    pos[HEX_NODE] = (x0 + 0.9, row_y + 0.55)
+    for flow in scenario.flows:
+        if flow.path and nv_id in flow.path:
+            flow.path = [HEX_NODE if n == nv_id else n for n in flow.path]
+            flow._points = []
+            flow._cum = []
+            flow._total_len = 0.0
+
+
 def _max_bw_by_kind(topology: Topology) -> Dict[str, float]:
     result: Dict[str, float] = defaultdict(float)
     for key, link in topology.links.items():
@@ -906,17 +964,27 @@ def _draw_dashed(draw, p1, p2, color, width: int, dash: int = 10, gap: int = 6) 
         d += dash + gap
 
 
-def _draw_legend(draw, x: float, y: float, font_scale: float) -> None:
+def _draw_legend(draw, x: float, y: float, font_scale: float,
+                 two_network: bool = False) -> None:
     small = _font(int(12 * font_scale))
     rows = [
         ("line", COLOR_INTRA, "intra-node"),
         ("line", COLOR_INTER, "inter-node"),
-        ("dash", COLOR_FAIL, "degraded"),
+    ]
+    if two_network:
+        rows += [
+            ("hex", COLOR_INTRA_NET, "intra-node network switch"),
+            ("line", COLOR_INTRA_NET, "dedicated intra-node fabric"),
+            ("dash", COLOR_FAIL, "inter-node network"),
+        ]
+    else:
+        rows += [("dash", COLOR_FAIL, "degraded")]
+    rows += [
         ("line", "#fb8c00", "congested"),
         ("cross", COLOR_BOTTLENECK, "bottleneck cut"),
         ("dot", "#4c72b0", "packet (src GPU)"),
     ]
-    per_col = 3
+    per_col = 4 if two_network else 3
     row_h = int(19 * font_scale)
     col_w = int(210 * font_scale)
     width = col_w * 2
@@ -941,6 +1009,12 @@ def _draw_legend(draw, x: float, y: float, font_scale: float) -> None:
         elif kind == "dot":
             r = 4 * font_scale
             draw.ellipse([sx1 - r, cy - r, sx1 + r, cy + r], fill=_rgb(color), outline="white")
+        elif kind == "hex":
+            r = 6 * font_scale
+            hx = (sx0 + sx1) / 2.0
+            pts = [(hx + r, cy), (hx + r * 0.5, cy - r), (hx - r * 0.5, cy - r),
+                   (hx - r, cy), (hx - r * 0.5, cy + r), (hx + r * 0.5, cy + r)]
+            draw.polygon(pts, fill="#f3e5f5", outline=_rgb(color))
         draw.text((sx1 + int(8 * font_scale), cy - int(7 * font_scale)), label,
                   fill=_rgb(COLOR_TEXT), font=small)
 
@@ -981,22 +1055,39 @@ def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int, *,
     base_scale = dpi / 100.0
     font_scale = max(1.0, base_scale) * 1.7
 
-    pending_failures: List[Tuple[float, Tuple[float, float], Tuple[float, float]]] = []
+    # Fail3 degrades both the intra-node and the inter-node path.  In reality
+    # GPU0 is a remote backup in another server: it has no NVLink, reaches the
+    # local GPUs through a dedicated intra-node switch, and reaches the fabric
+    # through its inter-node ToR.  SimAI cannot express that, so the picture
+    # diverges from the simulated topology.
+    two_network, degraded_gpu, nv_id, intra_gpus = _two_network_info(topo)
+
+    pending_failures: List[Tuple[float, Tuple[float, float], Tuple[float, float],
+                                str, str]] = []
     for key, link in topo.links.items():
+        if two_network and degraded_gpu is not None and \
+                _link_kind(topo, key) == "nvlink" and degraded_gpu in (link.u, link.v):
+            continue
         x1, y1 = to_px(*pos[link.u])
         x2, y2 = to_px(*pos[link.v])
         kind = _link_kind(topo, key)
         cap = link.bw_gbps
         degraded = cap < 0.5 * max_bw.get(kind, cap)
         if degraded:
+            if two_network and kind == "nic":
+                line_color = COLOR_FAIL
+                label = f"{cap:g} Gbps"
+            else:
+                line_color = COLOR_FAIL
+                label = f"FAIL {cap:g} Gbps"
             lw = max(2, int(6.0 * base_scale))
-            _draw_dashed(draw, (x1, y1), (x2, y2), _rgb(COLOR_FAIL), lw,
+            _draw_dashed(draw, (x1, y1), (x2, y2), _rgb(line_color), lw,
                          dash=max(6, int(10 * base_scale)), gap=max(4, int(6 * base_scale)))
             if failure_labels_outside:
-                pending_failures.append((cap, (x1, y1), (x2, y2)))
+                pending_failures.append((cap, (x1, y1), (x2, y2), line_color, label))
                 continue
             mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-            text = f"FAIL {cap:g} Gbps"
+            text = label
             font = _font(int(12 * font_scale))
             bbox = draw.textbbox((0, 0), text, font=font)
             tw = bbox[2] - bbox[0]
@@ -1022,15 +1113,48 @@ def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int, *,
                 if (mx - width / 2.0) * nx + (my - height / 2.0) * ny < 0:
                     nx, ny = -nx, -ny
                 lx, ly = mx + nx * off, my + ny * off
-            draw.line([(mx, my), (lx, ly)], fill=_rgb(COLOR_FAIL),
+            draw.line([(mx, my), (lx, ly)], fill=_rgb(line_color),
                       width=max(1, int(2 * base_scale)))
-            _text_badge(draw, lx, ly, text, font, COLOR_FAIL, border=_rgb(COLOR_FAIL))
+            _text_badge(draw, lx, ly, text, font, line_color, border=_rgb(line_color))
         else:
             color = COLOR_INTRA if kind == "nvlink" else COLOR_INTER
             lw = max(2, int((6.0 if kind == "nvlink" else 5.0) * base_scale))
             draw.line([(x1, y1), (x2, y2)], fill=_rgb(color), width=lw)
 
     gpu_r = max(10, int(16 * base_scale))
+    if two_network and degraded_gpu is not None and HEX_NODE in pos:
+        # Dedicated intra-node network: a separate switch next to the remote
+        # GPU, reaching every local GPU of the node.  GPU0 has no NVLink.
+        hx, hy = to_px(*pos[HEX_NODE])
+        lw = max(2, int(5.0 * base_scale))
+        for g in intra_gpus:
+            if g == degraded_gpu:
+                continue
+            gxp, gyp = to_px(*pos[g])
+            draw.line([(hx, hy), (gxp, gyp - gpu_r)],
+                      fill=_rgb(COLOR_INTRA_NET), width=lw)
+        gxp, gyp = to_px(*pos[degraded_gpu])
+        _draw_dashed(draw, (hx, hy), (gxp, gyp), _rgb(COLOR_INTRA_NET), lw,
+                     dash=max(6, int(10 * base_scale)),
+                     gap=max(4, int(6 * base_scale)))
+        sr = int(24 * base_scale)
+        hexagon = [(hx + sr, hy), (hx + sr * 0.5, hy - sr),
+                   (hx - sr * 0.5, hy - sr), (hx - sr, hy),
+                   (hx - sr * 0.5, hy + sr), (hx + sr * 0.5, hy + sr)]
+        draw.polygon(hexagon, fill="#f3e5f5", outline=_rgb(COLOR_INTRA_NET))
+        draw.line(hexagon + [hexagon[0]], fill=_rgb(COLOR_INTRA_NET),
+                  width=max(1, int(2 * base_scale)), joint="curve")
+        sw_font = _font(int(10 * font_scale))
+        sw_bbox = draw.textbbox((0, 0), "SW", font=sw_font)
+        draw.text((hx - (sw_bbox[2] - sw_bbox[0]) / 2,
+                   hy - (sw_bbox[3] - sw_bbox[1]) / 2 - 1),
+                  "SW", fill=_rgb(COLOR_INTRA_NET), font=sw_font)
+        small = _font(int(9 * font_scale))
+        node_text = "intra-node network (50 Gbps)"
+        nb = draw.textbbox((0, 0), node_text, font=small)
+        draw.text((hx - (nb[2] - nb[0]) / 2, hy - sr - (nb[3] - nb[1]) - 12),
+                  node_text, fill=_rgb(COLOR_INTRA_NET), font=small)
+
     for gid in topo.gpu_ids:
         x, y = to_px(*pos[gid])
         draw.ellipse([x - gpu_r, y - gpu_r, x + gpu_r, y + gpu_r], fill=_rgb("#4c72b0"),
@@ -1074,8 +1198,7 @@ def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int, *,
         gap = int(12 * base_scale)
         pending_failures.sort(key=lambda item: min(item[1][1], item[2][1]))
         placed: List[float] = []
-        for cap, p1, p2 in pending_failures:
-            text = f"FAIL {cap:g} Gbps"
+        for cap, p1, p2, line_color, text in pending_failures:
             bbox = draw.textbbox((0, 0), text, font=font)
             tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
             cx = max(tw / 2.0 + int(12 * base_scale),
@@ -1088,8 +1211,8 @@ def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int, *,
                     cy = prev + badge_h + gap
             placed.append(cy)
             draw.line([(anchor[0], anchor[1]), (cx + tw / 2.0 + int(6 * base_scale), cy)],
-                      fill=_rgb(COLOR_FAIL), width=max(1, int(2 * base_scale)))
-            _text_badge(draw, cx, cy, text, font, COLOR_FAIL, border=_rgb(COLOR_FAIL))
+                      fill=_rgb(line_color), width=max(1, int(2 * base_scale)))
+            _text_badge(draw, cx, cy, text, font, line_color, border=_rgb(line_color))
 
     title_font = _font(int(18 * font_scale))
     bbox = draw.textbbox((0, 0), scenario.name, font=title_font)
@@ -1104,7 +1227,8 @@ def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int, *,
                   fill=_rgb(COLOR_MUTED), font=sub_font)
 
     if draw_legend:
-        _draw_legend(draw, margin, height - bottom_pad + int(14 * base_scale), font_scale)
+        _draw_legend(draw, margin, height - bottom_pad + int(14 * base_scale),
+                     font_scale, two_network=two_network)
 
     if draw_progress:
         bar_x0, bar_x1 = int(width * 0.48), width - margin
@@ -1128,6 +1252,7 @@ def _render_frame_panel(base_img, scenario: Scenario, to_px, scale: float, frame
     done = global_t > scenario.completion + 1e-9
     base_scale = dpi / 100.0
     font_scale = max(1.0, base_scale) * 1.7
+    two_network, degraded_gpu, nv_id, _ = _two_network_info(topo)
 
     # Congestion is an inner heat line on top of the static link, so the link
     # type (green/black) and the failure (magenta dashed) stay readable.
@@ -1135,8 +1260,16 @@ def _render_frame_panel(base_img, scenario: Scenario, to_px, scale: float, frame
         _, base_w, util, heat = _link_style(scenario, key, frame_index, max_bw)
         if heat is None:
             continue
-        x1, y1 = to_px(*pos[link.u])
-        x2, y2 = to_px(*pos[link.v])
+        u, v = link.u, link.v
+        if two_network and nv_id is not None and nv_id in (u, v):
+            # The remote GPU's NVLink is not drawn; its traffic is shown on
+            # the dedicated intra-node switch link instead.
+            if degraded_gpu in (u, v):
+                v = HEX_NODE
+            else:
+                continue
+        x1, y1 = to_px(*pos[u])
+        x2, y2 = to_px(*pos[v])
         lw = max(1, int(min(base_w * 0.7, 1.5 + 2.5 * min(util, 1.5)) * base_scale))
         draw.line([(x1, y1), (x2, y2)], fill=_rgb(heat), width=lw)
 
@@ -1193,8 +1326,12 @@ def _render_frame_panel(base_img, scenario: Scenario, to_px, scale: float, frame
         phase = (frame_index % 18) / 18.0
         for key in scenario.bottlenecks:
             link = topo.links[key]
-            x1, y1 = to_px(*pos[link.u])
-            x2, y2 = to_px(*pos[link.v])
+            u, v = link.u, link.v
+            if two_network and nv_id is not None and degraded_gpu in (u, v) \
+                    and nv_id in (u, v):
+                v = HEX_NODE
+            x1, y1 = to_px(*pos[u])
+            x2, y2 = to_px(*pos[v])
             mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
             util = scenario.utilization_at(key, frame_index)
             if util <= 0.45:
@@ -1496,6 +1633,7 @@ def build_scenario(
         flows = parse_schedule_xml(schedule_path, size)
     assign_paths(flows, topology)
     scenario = Scenario(name=name, topology=topology, flows=flows, pos=topology.layout(), size=size)
+    _apply_remote_layout(scenario)
     return scenario
 
 

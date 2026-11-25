@@ -31,8 +31,8 @@ PROFILES = [
     ("no_failure", "Healthy fabric", "all links at peak capacity"),
     ("failure_1", "Fail1: NVSwitch lanes", "GPU0 <-> NVSwitch 2880 -> 800 Gbps"),
     ("failure_2", "Fail2: NIC / ToR link", "GPU0 <-> ToR 400 -> 50 Gbps"),
-    ("failure_3", "Fail3: GPU replacement",
-     "GPU0 <-> NVSwitch 50 Gbps; GPU0 <-> ToR 100 Gbps; +1 us ToR latency"),
+    ("failure_3", "Fail3: two degraded networks",
+     "GPU0: dedicated intra-node network 50 Gbps; shared inter-node network 100 Gbps (+1 us)"),
 ]
 
 PANEL_W = 1600
@@ -52,17 +52,27 @@ def topology_paths(family: str) -> List[Tuple[str, str, str, Path]]:
             for key, title, subtitle in PROFILES]
 
 
-def draw_legend(draw: ImageDraw.ImageDraw, x: float, y: float, font_scale: float) -> None:
+def draw_legend(draw: ImageDraw.ImageDraw, x: float, y: float, font_scale: float,
+                two_network: bool = False) -> None:
     small = vf._font(int(12 * font_scale))
     rows = [
         ("dot", "#4c72b0", "GPU"),
         ("square", "#55a868", "NVSwitch"),
         ("diamond", "#c44e52", "ToR / leaf switch"),
         ("line", vf.COLOR_INTRA, "intra-node / NVLink"),
-        ("line", vf.COLOR_INTER, "inter-node / to ToR"),
-        ("dash", vf.COLOR_FAIL, "degraded link"),
     ]
-    per_col = 3
+    if two_network:
+        rows += [
+            ("hex", vf.COLOR_INTRA_NET, "intra-node network switch"),
+            ("line", vf.COLOR_INTRA_NET, "dedicated intra-node fabric"),
+            ("dash", vf.COLOR_FAIL, "inter-node network"),
+        ]
+    else:
+        rows += [
+            ("line", vf.COLOR_INTER, "inter-node / to ToR"),
+            ("dash", vf.COLOR_FAIL, "degraded link"),
+        ]
+    per_col = 4 if two_network else 3
     row_h = int(20 * font_scale)
     col_w = int(250 * font_scale)
     width = col_w * 2
@@ -92,6 +102,12 @@ def draw_legend(draw: ImageDraw.ImageDraw, x: float, y: float, font_scale: float
             mx = sx0 + r
             draw.polygon([(mx, cy - r), (mx + r, cy), (mx, cy + r), (mx - r, cy)],
                          fill=vf._rgb(color), outline="white")
+        elif kind == "hex":
+            r = int(9 * font_scale)
+            mx = sx0 + r
+            pts = [(mx + r, cy), (mx + r * 0.5, cy - r), (mx - r * 0.5, cy - r),
+                   (mx - r, cy), (mx - r * 0.5, cy + r), (mx + r * 0.5, cy + r)]
+            draw.polygon(pts, fill="#f3e5f5", outline=vf._rgb(color))
         draw.text((sx1 + int(10 * font_scale), cy - int(7 * font_scale)), label,
                   fill=vf._rgb(vf.COLOR_TEXT), font=small)
 
@@ -99,6 +115,7 @@ def draw_legend(draw: ImageDraw.ImageDraw, x: float, y: float, font_scale: float
 def render_panel(topo: vf.Topology, title: str, subtitle: str,
                  width: int = PANEL_W, height: int = PANEL_H, dpi: int = DPI) -> Image.Image:
     scenario = vf.Scenario(name=title, topology=topo, flows=[], pos=topo.layout(), size=0)
+    vf._apply_remote_layout(scenario)
     img, _, _ = vf._render_base_panel(
         scenario, width, height, dpi,
         draw_legend=False, draw_progress=False, subtitle=subtitle,
@@ -109,8 +126,16 @@ def render_panel(topo: vf.Topology, title: str, subtitle: str,
     draw = ImageDraw.Draw(img)
     base_scale = dpi / 100.0
     font_scale = max(1.0, base_scale) * 1.7
-    legend_h = int(20 * font_scale) * 3 + int(12 * font_scale)
-    draw_legend(draw, 50, height - legend_h - int(30 * base_scale), font_scale)
+    max_bw = vf._max_bw_by_kind(topo)
+    degraded_kinds = {
+        vf._link_kind(topo, key) for key, link in topo.links.items()
+        if link.bw_gbps < 0.5 * max_bw.get(vf._link_kind(topo, key), link.bw_gbps)
+    }
+    two_network = "nvlink" in degraded_kinds and "nic" in degraded_kinds
+    rows = 4 if two_network else 3
+    legend_h = int(20 * font_scale) * rows + int(12 * font_scale)
+    draw_legend(draw, 50, height - legend_h - int(30 * base_scale), font_scale,
+                two_network=two_network)
     return img
 
 

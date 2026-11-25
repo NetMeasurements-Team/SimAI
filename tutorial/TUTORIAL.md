@@ -308,7 +308,12 @@ artifact/results/03_topologies/topology_1x2x8_failure_3.png
 ```
 
 Green lines are intra-node NVLink, dark lines are inter-node ToR links, and
-degraded links are magenta dashed with a `FAIL <rate>` badge.
+degraded links are magenta dashed with a `FAIL <rate>` badge. In Fail3, GPU 0
+is a remote backup in another server: it is drawn detached from the local row,
+has **no NVLink**, and reaches the node through a separate purple **intra-node
+network switch** (a hexagon marked `SW`, 50 Gbps) and the shared inter-node
+network (ToR18, 100 Gbps). The other GPUs keep their NVLink fabric and are
+attached to the same dedicated intra-node switch.
 
 ### Failure profiles
 
@@ -316,7 +321,7 @@ degraded links are magenta dashed with a `FAIL <rate>` badge.
 |---|---|
 | **Fail1** | GPU 0 ↔ NVSwitch: **2880 → 800 Gbps** (13 of 18 NVSwitch lanes fail) |
 | **Fail2** | GPU 0 ↔ ToR: **400 → 50 Gbps** |
-| **Fail3** | GPU 0 ↔ NVSwitch: **50 Gbps**; GPU 0 ↔ ToR: **100 Gbps**; ToR latency **0.5 → 1.5 µs** |
+| **Fail3** | GPU 0: dedicated **intra-node network 50 Gbps**; shared **inter-node network 100 Gbps**; +1 µs latency. SimAI models both as direct links (NVSwitch 50, ToR 100) because it requires every GPU on NVLink; the drawing shows the real separate intra-node network. |
 
 All other links stay at peak capacity. The failure is local, so a re-optimized
 schedule can route around GPU 0.
@@ -430,6 +435,10 @@ What to look for:
 - right panel: schedule re-synthesized for the failure (reopt);
 - green lines are intra-node NVLink, dark lines are inter-node ToR;
 - magenta dashed line with a `FAIL <rate>` label is the degraded link;
+- in Fail3, GPU 0 is drawn as a remote server detached from the local row, with
+  **no NVLink**: it reaches the node through the `SW` hexagon (dedicated 50 Gbps
+  intra-node network, dashed link) and through ToR18 (shared 100 Gbps inter-node
+  network); the other GPUs keep their NVLink and also attach to the hexagon;
 - orange inner line marks a congested link (blue → amber → orange as load grows);
 - red cross and star mark the bottleneck cut. The cut is fixed by the topology,
   failure and collective (the minimum-ratio cut of the collective's traffic), so
