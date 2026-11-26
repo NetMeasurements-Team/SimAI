@@ -72,6 +72,7 @@ private:
     thread = 1;
     gpus = {};
     workload = {};
+    system_conf = "astra-sim-alibabacloud/inputs/system/default.txt";
     comm_scale = 1;
     mode = ModeType::MOCKNCCL;
   }
@@ -80,6 +81,7 @@ public:
   int thread;
   std::vector<int> gpus;
   std::string workload;
+  std::string system_conf;
   std::string res = "None";
   std::string res_folder = "None";
   std::string lang = "en";
@@ -102,6 +104,7 @@ int parse(int argc, char *argv[]) {
         std::string arg = argv[i];
         if (arg == "-h" || arg == "--help") {
             std::cout << "-w,     --workload          Workloads, default none" << std::endl;
+            std::cout << "-s,     --system_conf       Collectives system configuration" << std::endl;
             std::cout << "-g,     --gpus              Number of GPUs, default 1" << std::endl;
             std::cout << "-g_p_s, --gpus-per-server   GPUs per server" << std::endl;
             std::cout << "-r,     --result            Output results path" << std::endl;
@@ -119,6 +122,8 @@ int parse(int argc, char *argv[]) {
             return 1;
         } else if (arg == "-w" || arg == "--workload") {
             if (++i < argc) this->workload = argv[i];
+        } else if (arg == "-s" || arg == "--system_conf") {
+            if (++i < argc) this->system_conf = argv[i];
         } else if (arg == "-g" || arg == "--gpus") {
             if (++i < argc) this->gpus.push_back(std::stoi(argv[i]));
         } else if (arg == "-r" || arg == "--result") {

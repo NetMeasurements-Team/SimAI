@@ -12,7 +12,7 @@ SimAI is a comprehensive large-scale AI training simulation toolkit that provide
 
     * *Scale-out Bandwidth Selection*: Research cost-effective bandwidth configurations for various GPU performances
 
-> 💡 *Currently supports manual busbw.yaml configuration. Automatic busbw inference based on parallel scenarios will be open-sourced soon. Stay tuned and feel free to contact us for more details. ✨*
+> 💡 *The current open-source binary computes busbw automatically from `-nv`/`-nic`/`-n_p_s` (the default; see the Analytical Simulation section below). The manual `busbw.yaml` path (`-busbw`) is not wired in the current open-source binary — refer to earlier SimAI versions for that workflow. Feel free to contact us for more details. ✨*
 
 2. **SimAI-Simulation(NS-3)** - A high-fidelity, full-stack simulation tool that can theoretically integrate with any pure network simulator. It provides fine-grained reproduction of communication behaviors during LLM training. Currently supports NS-3 as the network backend (we encourage integration of new network simulation tools). Key research areas include:
 
@@ -94,7 +94,13 @@ EP:
 
 ## 🖥️ Analytical Simulation
 
-To run the analytical simulation, use the following command:
+To run the analytical simulation, use the following command (automatic busbw — the default, supported by the current binary):
+
+```bash
+$ ./bin/SimAI_analytical -w ./example/workload_analytical.txt -g 9216 -nv 360 -nic 48.5 -n_p_s 8 -g_p_s 8 -r example-
+```
+
+> Note: The `-busbw example/busbw.yaml` form below (user-defined busbw) is **not supported** by the current open-source analytical binary — the `-busbw` flag is not parsed, so the command prints usage and exits. It is kept for reference; see earlier SimAI versions for the manual `busbw.yaml` workflow.
 
 ```bash
 $ ./bin/SimAI_analytical -w example/workload_analytical.txt -g 9216 -g_p_s 8 -r test- -busbw example/busbw.yaml
@@ -244,16 +250,16 @@ python3 ./astra-sim-alibabacloud/inputs/topo/gen_Topo_Template.py -g 32 -bw 200G
 ## 🖥️ SimAI-NS3 Simulation
 
 ```bash
-$ AS_SEND_LAT=3 AS_NVLS_ENABLE=1 ./bin/SimAI_simulator -t 16 -w ./example/microAllReduce.txt -n  ./Spectrum-X_8g_8gps_400Gbps_H100  -c astra-sim-alibabacloud/inputs/config/SimAI.conf
+$ AS_SEND_LAT=3000 AS_NVLS_ENABLE=1 ./bin/SimAI_simulator -t 16 -w ./example/microAllReduce.txt -n  ./Spectrum-X_8g_8gps_400Gbps_H100  -c astra-sim-alibabacloud/inputs/config/SimAI.conf
 ```
 
-| Environment Variable Name | Description                      | Default Value                             |
-|---------------------------|----------------------------------|-------------------------------------------|
-| `AS_LOG_LEVEL`            | Log level                        | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `UNKNOWN`; default is `INFO` |
-| `AS_PXN_ENABLE`           | Enable PXN                       | `0/1`; default is `false`                 |
-| `AS_NVLS_ENABLE`          | Enable NVLS                      | `0/1`; default is `false`                 |
-| `AS_SEND_LAT`             | Set packet sending latency       | Default is `6`, unit is `us`              |
-| `AS_NVLSTREE_ENABLE`      | Enable NVLSTREE                  | Default is `false`                        |
+| Environment Variable Name | Description                      | Default Value                                                                                                    |
+|---------------------------|----------------------------------|------------------------------------------------------------------------------------------------------------------|
+| `AS_LOG_LEVEL`            | Log level                        | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `UNKNOWN`; default is `INFO`                                                |
+| `AS_PXN_ENABLE`           | Enable PXN                       | `0/1`; default is `false`                                                                                        |
+| `AS_NVLS_ENABLE`          | Enable NVLS                      | `0/1`; default is `false`                                                                                        |
+| `AS_SEND_LAT`             | Override per-flow send latency   | Unit is `ns`. Unset: use the algorithm/protocol/link table, with a 6000 ns fallback. `0`: no added send latency. |
+| `AS_NVLSTREE_ENABLE`      | Enable NVLSTREE                  | Default is `false`                                                                                               |
 
 | Parameter                  | Description                              | Default Value                                                      |
 |----------------------------|------------------------------------------|--------------------------------------------------------------------|
@@ -279,12 +285,12 @@ embedding_layer     -1 556000  ALLREDUCE   536870912      1       NONE 0        
 cd SimAI
 ./scripts/build.sh -c ns3
 python3 ./astra-sim-alibabacloud/inputs/topo/gen_Topo_Template.py --ro -g 32 -gt H100 -bw 400Gbps -nvbw 1360Gbps 
-AS_SEND_LAT=12 AS_NVLS_ENABLE=1 ./bin/SimAI_simulator -t 8 -w ./example/microAllReduce.txt -n ./Rail_Opti_SingleToR_32g_8gps_400Gbps_H100 -c ./astra-sim-alibabacloud/inputs/config/SimAI.conf
+AS_SEND_LAT=12000 AS_NVLS_ENABLE=1 ./bin/SimAI_simulator -t 8 -w ./example/microAllReduce.txt -n ./Rail_Opti_SingleToR_32g_8gps_400Gbps_H100 -c ./astra-sim-alibabacloud/inputs/config/SimAI.conf
 ```
 ### RING topo file && RUN
 ```bash
 python3 ./astra-sim-alibabacloud/inputs/topo/gen_Topo_Template.py --ro -g 32 -gt H100 -bw 400Gbps -nvbw 1440Gbps
-AS_SEND_LAT=2 AS_PXN_ENABLE=1 ./bin/SimAI_simulator -t 8 -w ./example/microAllReduce.txt -n ./Rail_Opti_SingleToR_32g_8gps_400Gbps_H100 -c ./astra-sim-alibabacloud/inputs/config/SimAI.conf
+AS_SEND_LAT=2000 AS_PXN_ENABLE=1 ./bin/SimAI_simulator -t 8 -w ./example/microAllReduce.txt -n ./Rail_Opti_SingleToR_32g_8gps_400Gbps_H100 -c ./astra-sim-alibabacloud/inputs/config/SimAI.conf
 ```
 ### result
 | msg size | NVLS   | RING   |
@@ -314,9 +320,9 @@ python3 ./astra-sim-alibabacloud/inputs/topo/gen_Topo_Template.py -topo Spectrum
 ### RUN
 ```bash
 # DCN+ run command
-AS_SEND_LAT=2 ./bin/SimAI_simulator -t 8 -w ./example/microAllReduce.txt -n ./DCN+SingleToR_256g_8gps_400Gbps_H100 -c ./astra-sim-alibabacloud/inputs/config/SimAI.conf
+AS_SEND_LAT=2000 ./bin/SimAI_simulator -t 8 -w ./example/microAllReduce.txt -n ./DCN+SingleToR_256g_8gps_400Gbps_H100 -c ./astra-sim-alibabacloud/inputs/config/SimAI.conf
 # HPN7.0 run command
-AS_SEND_LAT=2 ./bin/SimAI_simulator -t 8 -w ./example/microAllReduce.txt -n ./Spectrum-X_256g_8gps_400Gbps_H100 -c ./astra-sim-alibabacloud/inputs/config/SimAI.conf
+AS_SEND_LAT=2000 ./bin/SimAI_simulator -t 8 -w ./example/microAllReduce.txt -n ./Spectrum-X_256g_8gps_400Gbps_H100 -c ./astra-sim-alibabacloud/inputs/config/SimAI.conf
 ```
 | msg size | Spectrum-X  | DCN-SingleToR|
 |----------|-------------|--------------|

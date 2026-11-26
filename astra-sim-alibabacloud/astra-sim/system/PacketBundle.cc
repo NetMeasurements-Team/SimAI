@@ -4,7 +4,7 @@ LICENSE file in the root directory of this source tree.
 *******************************************************************************/
 
 #include "PacketBundle.hh"
-#include "astra-sim/system/MockNcclLog.h"
+#include "SimCCL/mock/MockNcclLog.h"
 #include "phy-common/PhyMultiThread.hh"
 namespace AstraSim {
 PacketBundle::PacketBundle(

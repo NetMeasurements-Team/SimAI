@@ -13,8 +13,8 @@
 *limitations under the License.
 */
 
-#ifndef __NCCL_TREE_FLOW_MODEL_HH__
-#define __NCCL_TREE_FLOW_MODEL_HH__
+#ifndef __NCCL_FLOW_MODEL_HH__
+#define __NCCL_FLOW_MODEL_HH__
 
 #include <algorithm>
 #include <assert.h>
@@ -22,6 +22,8 @@
 #include <ctime>
 #include <list>
 #include <map>
+#include <set>
+#include <atomic>
 #include "Algorithm.hh"
 #include "astra-sim/system/Common.hh"
 #include "astra-sim/system/MemBus.hh"
@@ -29,7 +31,7 @@
 #include "astra-sim/system/topology/RingTopology.hh"
 
 namespace AstraSim {
-class NcclTreeFlowModel : public Algorithm {
+class NcclFlowModel : public Algorithm {
 public:
   std::chrono::time_point<std::chrono::high_resolution_clock> start_time;
   std::chrono::time_point<std::chrono::high_resolution_clock> end_time;
@@ -43,6 +45,8 @@ public:
   std::map<std::pair<int, int>, std::list<MyPacket>> packets;
   bool toggle;
   std::map<std::pair<int, int>, int> free_packets;
+  // Shared dependencies must register each incoming flow only once.
+  std::set<std::pair<int, int>> registered_receive_flows;
   bool processed;
   bool send_back;
   bool NPU_to_MA;
@@ -54,17 +58,16 @@ public:
   MockNccl::FlowModels _flow_models;
   uint32_t m_channels;
   uint32_t len_channel;
+  int m_algorithm = -1;   // NCCL algorithm (RING/TREE/NVLS/PAT)
+  int m_protocol = -1;    // NCCL protocol (LL/LL128/Simple)
 #if PHY_RDMA
-  // std::condition_variable judge_exit_cv;
-  // std::mutex judge_exit_mutex;
-  // std::mutex judge_mutex;
   std::atomic<bool> judge_exit_flag;
 #endif
 
-  NcclTreeFlowModel() {}
-  ~NcclTreeFlowModel() override {}
+  NcclFlowModel() {}
+  ~NcclFlowModel() override {}
 
-  NcclTreeFlowModel(
+  NcclFlowModel(
       ComType type,
       int id,
       int layer_num,
@@ -74,7 +77,9 @@ public:
       InjectionPolicy injection_policy,
       bool boost_mode,
       std::shared_ptr<MockNccl::FlowModels> ptr_flow_models,
-      int treechannels);
+      int treechannels,
+      int algorithm = -1,
+      int protocol = -1);
   void run(EventType event, CallData* data) override;
   void process_stream_count(int channel_id);
   void release_packets(int channel_id, int flow_id, uint64_t message_size) const;

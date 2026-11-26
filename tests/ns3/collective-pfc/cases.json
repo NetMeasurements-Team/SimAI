@@ -1,0 +1,14 @@
+{
+  "baseline": {
+    "bytes": 65536,
+    "trunk": "200Gbps",
+    "buffer_mb": 16,
+    "pfc": "absent"
+  },
+  "congested": {
+    "bytes": 16777216,
+    "trunk": "25Gbps",
+    "buffer_mb": 1,
+    "pfc": "present"
+  }
+}
