@@ -125,9 +125,7 @@ PASS: 2/2 pairs identical. Results: .../native-smoke-<timestamp>/E1-equivalence/
 
 ## 5. Experiments
 
-For a guided 30-minute walkthrough (topology drawings, the failure story, E1–E4,
-and the packet animation), see **[artifact/TUTORIAL.md](artifact/TUTORIAL.md)**.
-The topology figures used in that walkthrough are generated with
+The topology figures are generated with
 `python3 artifact/draw_topologies.py`.
 
 Each command writes to a fresh `artifact/results/<label>-<experiment>-<timestamp>/` directory
@@ -307,7 +305,7 @@ deeper sub-directories take priority, then lexicographic order (hence `priority-
 `msccl-channels` (default 128). Unmatched collectives fall back to SimAI's NCCL model and the log
 says so. Workloads and topologies for other models and cluster sizes are produced with AICB
 (`aicb/`) and `astra-sim-alibabacloud/inputs/topo/gen_Topo_Template.py`, as in upstream SimAI
-(see `docs/Tutorial.md`).
+(see the upstream documentation under `docs/`).
 
 ## 7. Contact
 

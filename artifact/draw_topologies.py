@@ -2,7 +2,7 @@
 """Draw the MCCL artifact topologies, including the three gray-failure profiles.
 
 One large PNG is written per profile (healthy, Fail1, Fail2, Fail3) so each can
-be shown full-screen during the tutorial.  The panels use the same visual
+be shown full-screen.  The panels use the same visual
 language as the packet animations: green intra-node NVLink, dark inter-node ToR
 links, magenta dashed degraded links with a FAIL badge, and readable white
 labels.

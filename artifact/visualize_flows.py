@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Animate how an MSCCL/MCCL schedule moves packets over a SimAI topology.
 
-The script is a tutorial: it draws the GPU/NVSwitch/ToR graph and moves one dot
+The script draws the GPU/NVSwitch/ToR graph and moves one dot
 per scheduled chunk along its physical path, with a trail and an arrowhead so the
 direction is clear.  Link type is colour-coded (green intra-node, dark inter-node),
 the degraded link is magenta dashed, congestion is an inner heat line (blue ->
