@@ -54,62 +54,31 @@ def topology_paths(family: str) -> List[Tuple[str, str, str, Path]]:
 
 def draw_legend(draw: ImageDraw.ImageDraw, x: float, y: float, font_scale: float,
                 two_network: bool = False) -> None:
-    small = vf._font(int(12 * font_scale))
-    rows = [
-        ("dot", "#4c72b0", "GPU"),
-        ("square", "#55a868", "NVSwitch"),
-        ("diamond", "#c44e52", "ToR / leaf switch"),
-        ("line", vf.COLOR_INTRA, "intra-node / NVLink"),
-    ]
+    # Same disposition as the animation legend: link rows first, then the
+    # node/marker rows, so the shared labels sit in the same place.
     if two_network:
-        rows += [
+        rows = [
+            ("line", vf.COLOR_INTRA, "intra-node / NVLink"),
+            ("line", vf.COLOR_INTER, "inter-node / to ToR"),
             ("hex", vf.COLOR_INTRA_NET, "intra-node network switch"),
             ("line", vf.COLOR_INTRA_NET, "dedicated intra-node fabric"),
             ("dash", vf.COLOR_FAIL, "inter-node network"),
+            ("dot", "#4c72b0", "GPU"),
+            ("square", "#55a868", "NVSwitch"),
+            ("diamond", "#c44e52", "ToR / leaf switch"),
         ]
+        per_col = 4
     else:
-        rows += [
+        rows = [
+            ("line", vf.COLOR_INTRA, "intra-node / NVLink"),
             ("line", vf.COLOR_INTER, "inter-node / to ToR"),
             ("dash", vf.COLOR_FAIL, "degraded link"),
+            ("dot", "#4c72b0", "GPU"),
+            ("square", "#55a868", "NVSwitch"),
+            ("diamond", "#c44e52", "ToR / leaf switch"),
         ]
-    per_col = 4 if two_network else 3
-    row_h = int(20 * font_scale)
-    col_w = int(250 * font_scale)
-    width = col_w * 2
-    height = row_h * per_col + int(12 * font_scale)
-    draw.rectangle([x, y, x + width, y + height], fill="#ffffff", outline="#b0bec5")
-    for i, (kind, color, label) in enumerate(rows):
-        col, row = divmod(i, per_col)
-        cx0 = x + col * col_w + int(12 * font_scale)
-        cy = y + int(10 * font_scale) + row * row_h + row_h // 2
-        sx0, sx1 = cx0, cx0 + int(34 * font_scale)
-        if kind == "line":
-            draw.line([(sx0, cy), (sx1, cy)], fill=vf._rgb(color), width=max(2, int(4 * font_scale)))
-        elif kind == "dash":
-            vf._draw_dashed(draw, (sx0, cy), (sx1, cy), vf._rgb(color),
-                            max(2, int(4 * font_scale)),
-                            dash=max(5, int(8 * font_scale)), gap=max(3, int(5 * font_scale)))
-        elif kind == "dot":
-            r = int(7 * font_scale)
-            draw.ellipse([sx0, cy - r, sx0 + 2 * r, cy + r], fill=vf._rgb(color),
-                         outline="white", width=2)
-        elif kind == "square":
-            r = int(6 * font_scale)
-            draw.rectangle([sx0, cy - r, sx0 + 2 * r, cy + r], fill=vf._rgb(color),
-                           outline="white", width=2)
-        elif kind == "diamond":
-            r = int(7 * font_scale)
-            mx = sx0 + r
-            draw.polygon([(mx, cy - r), (mx + r, cy), (mx, cy + r), (mx - r, cy)],
-                         fill=vf._rgb(color), outline="white")
-        elif kind == "hex":
-            r = int(9 * font_scale)
-            mx = sx0 + r
-            pts = [(mx + r, cy), (mx + r * 0.5, cy - r), (mx - r * 0.5, cy - r),
-                   (mx - r, cy), (mx - r * 0.5, cy + r), (mx + r * 0.5, cy + r)]
-            draw.polygon(pts, fill="#f3e5f5", outline=vf._rgb(color))
-        draw.text((sx1 + int(10 * font_scale), cy - int(7 * font_scale)), label,
-                  fill=vf._rgb(vf.COLOR_TEXT), font=small)
+        per_col = 3
+    vf._draw_legend_rows(draw, x, y, font_scale, rows, per_col)
 
 
 def render_panel(topo: vf.Topology, title: str, subtitle: str,
@@ -119,7 +88,7 @@ def render_panel(topo: vf.Topology, title: str, subtitle: str,
     img, _, _ = vf._render_base_panel(
         scenario, width, height, dpi,
         draw_legend=False, draw_progress=False, subtitle=subtitle,
-        top_pad=120, bottom_pad=240, margin=80, margin_x=340,
+        top_pad=120, bottom_pad=340, margin=80, margin_x=340,
         clamp_badges=True, switch_labels_outside=True,
         failure_labels_outside=True,
     )
@@ -132,10 +101,13 @@ def render_panel(topo: vf.Topology, title: str, subtitle: str,
         if link.bw_gbps < 0.5 * max_bw.get(vf._link_kind(topo, key), link.bw_gbps)
     }
     two_network = "nvlink" in degraded_kinds and "nic" in degraded_kinds
-    rows = 4 if two_network else 3
-    legend_h = int(20 * font_scale) * rows + int(12 * font_scale)
-    draw_legend(draw, 50, height - legend_h - int(30 * base_scale), font_scale,
-                two_network=two_network)
+    # The topology slide is viewed on its own, so give its legend the same
+    # disposition as the animations but a larger relative font.
+    legend_font_scale = font_scale * 1.3
+    per_col = 4 if two_network else 3
+    _, legend_h = vf._legend_size(legend_font_scale, per_col)
+    draw_legend(draw, 50, height - legend_h - int(30 * base_scale),
+                legend_font_scale, two_network=two_network)
     return img
 
 

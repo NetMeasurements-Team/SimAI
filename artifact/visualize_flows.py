@@ -964,31 +964,18 @@ def _draw_dashed(draw, p1, p2, color, width: int, dash: int = 10, gap: int = 6) 
         d += dash + gap
 
 
-def _draw_legend(draw, x: float, y: float, font_scale: float,
-                 two_network: bool = False) -> None:
-    small = _font(int(12 * font_scale))
-    rows = [
-        ("line", COLOR_INTRA, "intra-node"),
-        ("line", COLOR_INTER, "inter-node"),
-    ]
-    if two_network:
-        rows += [
-            ("hex", COLOR_INTRA_NET, "intra-node network switch"),
-            ("line", COLOR_INTRA_NET, "dedicated intra-node fabric"),
-            ("dash", COLOR_FAIL, "inter-node network"),
-        ]
-    else:
-        rows += [("dash", COLOR_FAIL, "degraded")]
-    rows += [
-        ("line", "#fb8c00", "congested"),
-        ("cross", COLOR_BOTTLENECK, "bottleneck cut"),
-        ("dot", "#4c72b0", "packet (src GPU)"),
-    ]
-    per_col = 4 if two_network else 3
+def _legend_size(font_scale: float, per_col: int) -> Tuple[int, int]:
     row_h = int(19 * font_scale)
     col_w = int(210 * font_scale)
-    width = col_w * 2
-    height = row_h * per_col + int(12 * font_scale)
+    return col_w * 2, row_h * per_col + int(12 * font_scale)
+
+
+def _draw_legend_rows(draw, x: float, y: float, font_scale: float,
+                      rows: List[Tuple[str, str, str]], per_col: int):
+    small = _font(int(12 * font_scale))
+    row_h = int(19 * font_scale)
+    col_w = int(210 * font_scale)
+    width, height = _legend_size(font_scale, per_col)
     draw.rectangle([x, y, x + width, y + height], fill="#ffffff", outline="#b0bec5")
     for i, (kind, color, label) in enumerate(rows):
         col, row = divmod(i, per_col)
@@ -1009,6 +996,15 @@ def _draw_legend(draw, x: float, y: float, font_scale: float,
         elif kind == "dot":
             r = 4 * font_scale
             draw.ellipse([sx1 - r, cy - r, sx1 + r, cy + r], fill=_rgb(color), outline="white")
+        elif kind == "square":
+            r = int(6 * font_scale)
+            draw.rectangle([sx0, cy - r, sx0 + 2 * r, cy + r], fill=_rgb(color),
+                           outline="white", width=max(1, int(2 * font_scale)))
+        elif kind == "diamond":
+            r = int(7 * font_scale)
+            mx = sx0 + r
+            draw.polygon([(mx, cy - r), (mx + r, cy), (mx, cy + r), (mx - r, cy)],
+                         fill=_rgb(color), outline="white")
         elif kind == "hex":
             r = 6 * font_scale
             hx = (sx0 + sx1) / 2.0
@@ -1017,6 +1013,30 @@ def _draw_legend(draw, x: float, y: float, font_scale: float,
             draw.polygon(pts, fill="#f3e5f5", outline=_rgb(color))
         draw.text((sx1 + int(8 * font_scale), cy - int(7 * font_scale)), label,
                   fill=_rgb(COLOR_TEXT), font=small)
+    return width, height
+
+
+def _draw_legend(draw, x: float, y: float, font_scale: float,
+                 two_network: bool = False) -> None:
+    rows = [
+        ("line", COLOR_INTRA, "intra-node"),
+        ("line", COLOR_INTER, "inter-node"),
+    ]
+    if two_network:
+        rows += [
+            ("hex", COLOR_INTRA_NET, "intra-node network switch"),
+            ("line", COLOR_INTRA_NET, "dedicated intra-node fabric"),
+            ("dash", COLOR_FAIL, "inter-node network"),
+        ]
+    else:
+        rows += [("dash", COLOR_FAIL, "degraded")]
+    rows += [
+        ("line", "#fb8c00", "congested"),
+        ("cross", COLOR_BOTTLENECK, "bottleneck cut"),
+        ("dot", "#4c72b0", "packet (src GPU)"),
+    ]
+    per_col = 4 if two_network else 3
+    _draw_legend_rows(draw, x, y, font_scale, rows, per_col)
 
 
 def _text_badge(draw, cx: float, cy: float, text: str, font, fg: str,
@@ -1149,11 +1169,18 @@ def _render_base_panel(scenario: Scenario, width: int, height: int, dpi: int, *,
         draw.text((hx - (sw_bbox[2] - sw_bbox[0]) / 2,
                    hy - (sw_bbox[3] - sw_bbox[1]) / 2 - 1),
                   "SW", fill=_rgb(COLOR_INTRA_NET), font=sw_font)
-        small = _font(int(9 * font_scale))
-        node_text = "intra-node network (50 Gbps)"
-        nb = draw.textbbox((0, 0), node_text, font=small)
-        draw.text((hx - (nb[2] - nb[0]) / 2, hy - sr - (nb[3] - nb[1]) - 12),
-                  node_text, fill=_rgb(COLOR_INTRA_NET), font=small)
+        label_font = _font(int(11 * font_scale))
+        line1 = "intra-node network"
+        line2 = "50 Gbps"
+        b1 = draw.textbbox((0, 0), line1, font=label_font)
+        b2 = draw.textbbox((0, 0), line2, font=label_font)
+        w1 = b1[2] - b1[0]
+        w2 = b2[2] - b2[0]
+        line_h = int(14 * font_scale)
+        y2 = hy - sr - 12 - b2[3]
+        y1 = y2 - line_h
+        draw.text((hx - w1 / 2, y1), line1, fill=_rgb(COLOR_INTRA_NET), font=label_font)
+        draw.text((hx - w2 / 2, y2), line2, fill=_rgb(COLOR_INTRA_NET), font=label_font)
 
     for gid in topo.gpu_ids:
         x, y = to_px(*pos[gid])
